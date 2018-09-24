@@ -1,0 +1,7 @@
+{
+    "server_port": "8080",
+    "log_level": "DEBUG",
+    "mongo_url": "mongodb://loacalhost",
+    "world_collection_name": "worlds",
+    "graph_collection_name": "graphs"
+}
