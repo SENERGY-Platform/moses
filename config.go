@@ -1,4 +1,4 @@
-package moses
+package main
 
 import (
 	"encoding/json"

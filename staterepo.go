@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package moses
+package main
 
 import (
 	"errors"
