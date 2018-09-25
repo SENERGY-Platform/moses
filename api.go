@@ -29,7 +29,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	})
 
 	router.GET("/world/:worldid", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-		world, ok := state.Worlds[ps.ByName("id")]
+		world, ok := state.Worlds[ps.ByName("worldid")]
 		if !ok {
 			log.Println("404")
 			http.Error(w, "not found", 404)

@@ -8,8 +8,8 @@ import (
 type PersistenceInterface interface {
 	PersistWorld(world World) (err error)
 	PersistGraph(graph Graph) (err error)
-	LoadWorlds() (map[string]World, error)
-	LoadGraphs() (map[string]Graph, error)
+	LoadWorlds() (map[string]*World, error)
+	LoadGraphs() (map[string]*Graph, error)
 }
 
 type MongoPersistence struct {
@@ -53,7 +53,7 @@ func (this MongoPersistence) PersistGraph(graph Graph) (err error) {
 	return
 }
 
-func (this MongoPersistence) LoadWorlds() (result map[string]World, err error) {
+func (this MongoPersistence) LoadWorlds() (result map[string]*World, err error) {
 	session, collection := this.getWorldCollection()
 	defer session.Close()
 	worlds := []World{}
@@ -61,14 +61,13 @@ func (this MongoPersistence) LoadWorlds() (result map[string]World, err error) {
 	if err != nil {
 		return result, err
 	}
-	result = map[string]World{}
 	for _, world := range worlds {
-		result[world.Id] = world
+		result[world.Id] = &world
 	}
 	return
 }
 
-func (this MongoPersistence) LoadGraphs() (result map[string]Graph, err error) {
+func (this MongoPersistence) LoadGraphs() (result map[string]*Graph, err error) {
 	session, collection := this.getGraphCollection()
 	defer session.Close()
 	graphs := []Graph{}
@@ -76,9 +75,8 @@ func (this MongoPersistence) LoadGraphs() (result map[string]Graph, err error) {
 	if err != nil {
 		return result, err
 	}
-	result = map[string]Graph{}
 	for _, graph := range graphs {
-		result[graph.Id] = graph
+		result[graph.Id] = &graph
 	}
 	return
 }

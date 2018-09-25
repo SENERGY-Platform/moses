@@ -16,13 +16,20 @@
 
 package main
 
-import "time"
+import (
+	"sync"
+	"time"
+)
 
 type StateRepo struct {
-	Worlds      map[string]World
-	Graphs      map[string]Graph
-	Persistence PersistenceInterface
-	Config      Config
+	Worlds                map[string]*World
+	Graphs                map[string]*Graph
+	Persistence           PersistenceInterface
+	Config                Config
+	deviceIndex           map[string]*Device
+	changeRoutinesTickers []*time.Ticker
+	stopChannels          []chan bool
+	mux                   sync.Mutex
 }
 
 type Point struct {
@@ -48,21 +55,22 @@ type ChangeRoutine struct {
 }
 
 type World struct {
-	Id             string          `json:"id" bson:"id"`
-	Name           string          `json:"name" bson:"name"`
-	Meta           Meta            `json:"meta" bson:"meta"`
-	States         States          `json:"states" bson:"states"`
-	Rooms          map[string]Room `json:"rooms" bson:"rooms"`
-	ChangeRoutines []ChangeRoutine `json:"change_routines" bson:"change_routines"`
+	Id             string           `json:"id" bson:"id"`
+	Name           string           `json:"name" bson:"name"`
+	Meta           Meta             `json:"meta" bson:"meta"`
+	States         States           `json:"states" bson:"states"`
+	Rooms          map[string]*Room `json:"rooms" bson:"rooms"`
+	ChangeRoutines []ChangeRoutine  `json:"change_routines" bson:"change_routines"`
+	mux            sync.Mutex
 }
 
 type Room struct {
-	Id             string            `json:"id" bson:"id"`
-	Name           string            `json:"name" bson:"name"`
-	Meta           Meta              `json:"meta" bson:"meta"`
-	States         States            `json:"states" bson:"states"`
-	Devices        map[string]Device `json:"devices" bson:"devices"`
-	ChangeRoutines []ChangeRoutine   `json:"change_routines" bson:"change_routines"`
+	Id             string             `json:"id" bson:"id"`
+	Name           string             `json:"name" bson:"name"`
+	Meta           Meta               `json:"meta" bson:"meta"`
+	States         States             `json:"states" bson:"states"`
+	Devices        map[string]*Device `json:"devices" bson:"devices"`
+	ChangeRoutines []ChangeRoutine    `json:"change_routines" bson:"change_routines"`
 }
 
 type Device struct {

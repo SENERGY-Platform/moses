@@ -23,7 +23,15 @@ import (
 	"github.com/google/uuid"
 )
 
+//Update for HTTP-API
+//Stops all change routines and redeploys new world
+//requests a mutex lock on the state repo
 func (this *StateRepo) UpdateWorld(world World) (err error) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	if this.Worlds == nil {
+		this.Worlds = map[string]*World{}
+	}
 	if world.Id == "" {
 		uuid, err := uuid.NewRandom()
 		if err != nil {
@@ -36,7 +44,7 @@ func (this *StateRepo) UpdateWorld(world World) (err error) {
 	if err != nil {
 		return err
 	}
-	this.Worlds[world.Id] = world
+	this.Worlds[world.Id] = &world
 	err = this.Start()
 	if err != nil {
 		log.Fatal("unable to restart state repo", err)
@@ -44,13 +52,24 @@ func (this *StateRepo) UpdateWorld(world World) (err error) {
 	return this.PersistWorld(world)
 }
 
+//Update for HTTP-API
+//Stops all change routines and redeploys new world with new room
+//requests a mutex lock on the state repo
 func (this *StateRepo) UpdateRoom(worldId string, room Room) (err error) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
 	if worldId == "" {
 		return errors.New("missing world id")
+	}
+	if this.Worlds == nil {
+		this.Worlds = map[string]*World{}
 	}
 	world, ok := this.Worlds[worldId]
 	if !ok {
 		return errors.New("unknown world id: " + worldId)
+	}
+	if world.Rooms == nil {
+		world.Rooms = map[string]*Room{}
 	}
 	if room.Id == "" {
 		uuid, err := uuid.NewRandom()
@@ -64,29 +83,46 @@ func (this *StateRepo) UpdateRoom(worldId string, room Room) (err error) {
 	if err != nil {
 		return err
 	}
-	world.Rooms[room.Id] = room
+	world.Rooms[room.Id] = &room
 	this.Worlds[world.Id] = world
 	err = this.Start()
 	if err != nil {
 		log.Fatal("unable to restart state repo", err)
 	}
-	return this.PersistWorld(world)
+	return this.PersistWorld(*world)
 }
 
+//Update for HTTP-API
+//Stops all change routines and redeploys new world with new room and device
+//requests a mutex lock on the state repo
 func (this *StateRepo) UpdateDevice(worldId string, roomId string, device Device) (err error) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
 	if worldId == "" {
 		return errors.New("missing world id")
+	}
+	if this.Worlds == nil {
+		this.Worlds = map[string]*World{}
 	}
 	world, ok := this.Worlds[worldId]
 	if !ok {
 		return errors.New("unknown world id: " + worldId)
 	}
+	if world.Rooms == nil {
+		world.Rooms = map[string]*Room{}
+	}
 	if roomId == "" {
 		return errors.New("missing room id")
+	}
+	if this.Worlds[worldId].Rooms == nil {
+		this.Worlds[worldId].Rooms = map[string]*Room{}
 	}
 	room, ok := this.Worlds[worldId].Rooms[roomId]
 	if !ok {
 		return errors.New("unknown world id: " + worldId)
+	}
+	if room.Devices == nil {
+		room.Devices = map[string]*Device{}
 	}
 	if device.Id == "" {
 		uuid, err := uuid.NewRandom()
@@ -100,32 +136,62 @@ func (this *StateRepo) UpdateDevice(worldId string, roomId string, device Device
 	if err != nil {
 		return err
 	}
-	room.Devices[device.Id] = device
+	room.Devices[device.Id] = &device
 	world.Rooms[room.Id] = room
 	this.Worlds[world.Id] = world
 	err = this.Start()
 	if err != nil {
 		log.Fatal("unable to restart state repo", err)
 	}
-	return this.PersistWorld(world)
+	return this.PersistWorld(*world)
 }
 
+//Stops all change routines if any are running and loads state repo from the database (no restart of change routines)
 func (this *StateRepo) Load() (err error) {
+	err = this.Stop()
+	if err != nil {
+		return err
+	}
 	this.Worlds, err = this.Persistence.LoadWorlds()
+	if err != nil {
+		return err
+	}
 	this.Graphs, err = this.Persistence.LoadGraphs()
-	return
+	return err
 }
 
+//stops all change routines; may be called repeatedly while already stopped ore not started
 func (this *StateRepo) Stop() (err error) {
-	log.Println("ERROR: staterepo.stop() not implemented")
+	for _, ticker := range this.changeRoutinesTickers {
+		ticker.Stop()
+	}
+	for _, stop := range this.stopChannels {
+		stop <- true
+	}
+	this.stopChannels = nil
+	this.changeRoutinesTickers = nil
 	return
 }
 
+//starts change routines; will first call stop() to prevent overpopulation of change routines
+//if error is returned, the state repo may be in a partially running state which can be stopped with Stop()
 func (this *StateRepo) Start() (err error) {
-	log.Println("ERROR: staterepo.start() not implemented")
+	err = this.Stop()
+	if err != nil {
+		return err
+	}
+	for _, world := range this.Worlds {
+		tickers, stops, err := world.Start()
+		if err != nil {
+			return err
+		}
+		this.changeRoutinesTickers = append(this.changeRoutinesTickers, tickers...)
+		this.stopChannels = append(this.stopChannels, stops...)
+	}
 	return
 }
 
+//persists given world; will not stop any change routines, nor will it request a lock on the world mutex
 func (this *StateRepo) PersistWorld(world World) (err error) {
 	return this.Persistence.PersistWorld(world)
 }
