@@ -33,7 +33,9 @@ func startChangeRoutine(routine ChangeRoutine, callbacks map[string]interface{},
 			select {
 			case <-ticker.C:
 				err := run(routine.Code, callbacks, timeout, mux)
-				log.Println("ERROR: ", err)
+				if err != nil {
+					log.Println("ERROR: ", err)
+				}
 			case <-stop:
 				return
 			}

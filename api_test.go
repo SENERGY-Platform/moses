@@ -26,6 +26,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 type PersistenceMock struct{}
@@ -50,7 +51,7 @@ var testserver *httptest.Server
 
 func TestMain(m *testing.M) {
 	persistencemock := PersistenceMock{}
-	staterepo := &StateRepo{Persistence: persistencemock, Config: Config{}}
+	staterepo := &StateRepo{Persistence: persistencemock, Config: Config{JsTimeout: 2 * time.Second}}
 	err := staterepo.Load()
 	if err != nil {
 		log.Fatal("unable to load state repo: ", err)

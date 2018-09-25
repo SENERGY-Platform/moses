@@ -17,7 +17,12 @@
 package main
 
 import (
+	"encoding/json"
+	"io/ioutil"
 	"log"
+	"net/http"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -73,4 +78,82 @@ func TestJsvmTimeout(t *testing.T) {
 		t.Fatal("missing error; should have thrown 'Some code took to long' after 100 ms")
 	}
 	done = true
+}
+
+func TestJsvmApi(t *testing.T) {
+	w := World{
+		Id:   "world_2",
+		Name: "World2",
+		Rooms: map[string]*Room{
+			"room_1": &Room{
+				Id:   "room_1",
+				Name: "Room1",
+				States: map[string]interface{}{
+					"answer":  float64(0),
+					"counter": float64(0),
+				},
+				Devices: map[string]*Device{
+					"device_2": &Device{
+						Id:   "device_2",
+						Name: "Device2",
+						States: map[string]interface{}{
+							"answer": float64(42),
+						},
+						ChangeRoutines: []ChangeRoutine{
+							{
+								Interval: 500 * time.Millisecond,
+								Code: `
+									var deviceAnswer = moses.device.state.get("answer");
+									moses.room.state.set("answer", deviceAnswer);
+									moses.world.state.set("answer", deviceAnswer);
+									var roomCounter = moses.room.state.get("counter");
+									roomCounter = roomCounter + 1;
+									moses.room.state.set("counter", roomCounter);
+								`,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	b, err := json.Marshal(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{}
+	req, err := http.NewRequest("PUT", testserver.URL+"/world", strings.NewReader(string(b)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 {
+		body, _ := ioutil.ReadAll(resp.Body)
+		t.Fatal(resp.Status, string(body))
+	}
+
+	time.Sleep(2 * time.Second)
+
+	resp, err = http.Get(testserver.URL + "/world/world_2")
+	if resp.StatusCode != 200 {
+		body, _ := ioutil.ReadAll(resp.Body)
+		t.Fatal(resp.Status, string(body))
+	}
+	w2 := World{}
+	err = json.NewDecoder(resp.Body).Decode(&w2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w.States = map[string]interface{}{}
+	w.States["answer"] = float64(42)
+	w.Rooms["room_1"].States["answer"] = float64(42)
+	w.Rooms["room_1"].States["counter"] = float64(3)
+	if !reflect.DeepEqual(w, w2) {
+		t.Fatal("unexpected result", w, w2)
+	}
 }
