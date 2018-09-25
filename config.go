@@ -25,14 +25,16 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Config struct {
-	ServerPort          string `json:"server_port"`
-	LogLevel            string `json:"log_level"`
-	WorldCollectionName string `json:"world_collection_name"`
-	GraphCollectionName string `json:"graph_collection_name"`
-	MongoUrl            string `json:"mongo_url"`
+	ServerPort          string        `json:"server_port"`
+	LogLevel            string        `json:"log_level"`
+	WorldCollectionName string        `json:"world_collection_name"`
+	GraphCollectionName string        `json:"graph_collection_name"`
+	MongoUrl            string        `json:"mongo_url"`
+	JsTimeout           time.Duration `json:"js_timeout"`
 }
 
 func LoadConfig() (result Config, err error) {

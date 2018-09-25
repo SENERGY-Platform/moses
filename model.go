@@ -43,50 +43,43 @@ type Graph struct {
 	Values []Point `json:"values"`
 }
 
-type States map[string]interface{}
-
-type Meta map[string]string
-
-type Code string
-
 type ChangeRoutine struct {
 	Interval time.Duration `json:"interval" bson:"interval"`
-	Code     Code          `json:"code"`
+	Code     string        `json:"code"`
 }
 
 type World struct {
-	Id             string           `json:"id" bson:"id"`
-	Name           string           `json:"name" bson:"name"`
-	Meta           Meta             `json:"meta" bson:"meta"`
-	States         States           `json:"states" bson:"states"`
-	Rooms          map[string]*Room `json:"rooms" bson:"rooms"`
-	ChangeRoutines []ChangeRoutine  `json:"change_routines" bson:"change_routines"`
+	Id             string                 `json:"id" bson:"id"`
+	Name           string                 `json:"name" bson:"name"`
+	Meta           map[string]string      `json:"meta" bson:"meta"`
+	States         map[string]interface{} `json:"states" bson:"states"`
+	Rooms          map[string]*Room       `json:"rooms" bson:"rooms"`
+	ChangeRoutines []ChangeRoutine        `json:"change_routines" bson:"change_routines"`
 	mux            sync.Mutex
 }
 
 type Room struct {
-	Id             string             `json:"id" bson:"id"`
-	Name           string             `json:"name" bson:"name"`
-	Meta           Meta               `json:"meta" bson:"meta"`
-	States         States             `json:"states" bson:"states"`
-	Devices        map[string]*Device `json:"devices" bson:"devices"`
-	ChangeRoutines []ChangeRoutine    `json:"change_routines" bson:"change_routines"`
+	Id             string                 `json:"id" bson:"id"`
+	Name           string                 `json:"name" bson:"name"`
+	Meta           map[string]string      `json:"meta" bson:"meta"`
+	States         map[string]interface{} `json:"states" bson:"states"`
+	Devices        map[string]*Device     `json:"devices" bson:"devices"`
+	ChangeRoutines []ChangeRoutine        `json:"change_routines" bson:"change_routines"`
 }
 
 type Device struct {
-	Id             string              `json:"id" bson:"id"`
-	Name           string              `json:"name" bson:"name"`
-	DeviceType     string              `json:"device_type" bson:"device_type"`
-	Meta           Meta                `json:"meta" bson:"meta"`
-	SetStates      States              `json:"set_states" bson:"set_states"`
-	CurrentStates  States              `json:"current_states" bson:"current_states"`
-	ChangeRoutines []ChangeRoutine     `json:"change_routines" bson:"change_routines"`
-	Services       map[string]Services `json:"services" bson:"services"`
+	Id             string                 `json:"id" bson:"id"`
+	Name           string                 `json:"name" bson:"name"`
+	DeviceType     string                 `json:"device_type" bson:"device_type"`
+	Meta           map[string]string      `json:"meta" bson:"meta"`
+	States         map[string]interface{} `json:"states" bson:"states"`
+	ChangeRoutines []ChangeRoutine        `json:"change_routines" bson:"change_routines"`
+	Services       map[string]Service     `json:"services" bson:"services"`
 }
 
-type Services struct {
+type Service struct {
 	Id             string        `json:"id" bson:"id"`
 	Name           string        `json:"name" bson:"name"`
 	SensorInterval time.Duration `json:"sensor_interval" bson:"sensor_interval"`
-	Code           Code          `json:"code"`
+	Code           string        `json:"code"`
 }

@@ -45,10 +45,7 @@ func (this *StateRepo) UpdateWorld(world World) (err error) {
 		return err
 	}
 	this.Worlds[world.Id] = &world
-	err = this.Start()
-	if err != nil {
-		log.Fatal("unable to restart state repo", err)
-	}
+	this.Start()
 	return this.PersistWorld(world)
 }
 
@@ -85,10 +82,7 @@ func (this *StateRepo) UpdateRoom(worldId string, room Room) (err error) {
 	}
 	world.Rooms[room.Id] = &room
 	this.Worlds[world.Id] = world
-	err = this.Start()
-	if err != nil {
-		log.Fatal("unable to restart state repo", err)
-	}
+	this.Start()
 	return this.PersistWorld(*world)
 }
 
@@ -139,10 +133,7 @@ func (this *StateRepo) UpdateDevice(worldId string, roomId string, device Device
 	room.Devices[device.Id] = &device
 	world.Rooms[room.Id] = room
 	this.Worlds[world.Id] = world
-	err = this.Start()
-	if err != nil {
-		log.Fatal("unable to restart state repo", err)
-	}
+	this.Start()
 	return this.PersistWorld(*world)
 }
 
@@ -170,20 +161,23 @@ func (this *StateRepo) Stop() (err error) {
 	}
 	this.stopChannels = nil
 	this.changeRoutinesTickers = nil
+	this.deviceIndex = nil
 	return
 }
 
 //starts change routines; will first call stop() to prevent overpopulation of change routines
-//if error is returned, the state repo may be in a partially running state which can be stopped with Stop()
-func (this *StateRepo) Start() (err error) {
-	err = this.Stop()
+//if error occurs, the state repo may be in a partially running state which can not be stopped with Stop()
+//in this case a panic occurs
+func (this *StateRepo) Start() {
+	err := this.Stop()
 	if err != nil {
-		return err
+		panic(err)
 	}
+	this.deviceIndex = map[string]*Device{}
 	for _, world := range this.Worlds {
-		tickers, stops, err := world.Start()
+		tickers, stops, err := this.StartWorld(world)
 		if err != nil {
-			return err
+			panic(err)
 		}
 		this.changeRoutinesTickers = append(this.changeRoutinesTickers, tickers...)
 		this.stopChannels = append(this.stopChannels, stops...)

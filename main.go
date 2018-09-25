@@ -39,10 +39,7 @@ func main() {
 	}
 
 	log.Println("start state routines")
-	err = staterepo.Start()
-	if err != nil {
-		log.Fatal("unable to start state repo: ", err)
-	}
+	staterepo.Start()
 
 	log.Println("start api on port: ", config.ServerPort)
 	StartApi(config, staterepo)

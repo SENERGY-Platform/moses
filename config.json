@@ -3,5 +3,6 @@
     "log_level": "DEBUG",
     "mongo_url": "mongodb://loacalhost",
     "world_collection_name": "worlds",
-    "graph_collection_name": "graphs"
+    "graph_collection_name": "graphs",
+    "js_timeout": 2000000000
 }

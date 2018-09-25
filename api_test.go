@@ -56,10 +56,7 @@ func TestMain(m *testing.M) {
 		log.Fatal("unable to load state repo: ", err)
 	}
 	log.Println("start state routines")
-	err = staterepo.Start()
-	if err != nil {
-		log.Fatal("unable to start state repo: ", err)
-	}
+	staterepo.Start()
 	routes := getRoutes(Config{}, staterepo)
 	logger := Logger(routes, "CALL")
 	testserver = httptest.NewServer(logger)
