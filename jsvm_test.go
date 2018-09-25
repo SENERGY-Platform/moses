@@ -157,3 +157,76 @@ func TestJsvmApi(t *testing.T) {
 		t.Fatal("unexpected result", w, w2)
 	}
 }
+
+func TestJsvmApi2(t *testing.T) {
+	w := World{
+		Id:   "world_3",
+		Name: "World2",
+		States: map[string]interface{}{
+			"temp": float64(10),
+		},
+		Rooms: map[string]*Room{
+			"room_1": &Room{
+				Id:   "room_1",
+				Name: "Room1",
+				States: map[string]interface{}{
+					"temp": float64(20),
+				},
+			},
+		},
+		ChangeRoutines: []ChangeRoutine{
+			{
+				Interval: 500 * time.Millisecond,
+				Code: `
+						//Example for World-Change-Routine
+						//room temperature is influenced by the world
+						var temperature = moses.world.state.get("temp");
+						var room_temperature = moses.world.getRoom("room_1").state.get("temp");
+						if(temperature > room_temperature){
+						    room_temperature = room_temperature + 1;
+						}else if(temperature < room_temperature){
+						    room_temperature = room_temperature - 1;
+						}
+						moses.world.getRoom("room_1").state.set("temp", room_temperature);
+				`,
+			},
+		},
+	}
+
+	b, err := json.Marshal(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{}
+	req, err := http.NewRequest("PUT", testserver.URL+"/world", strings.NewReader(string(b)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 {
+		body, _ := ioutil.ReadAll(resp.Body)
+		t.Fatal(resp.Status, string(body))
+	}
+
+	time.Sleep(2 * time.Second)
+
+	resp, err = http.Get(testserver.URL + "/world/world_3")
+	if resp.StatusCode != 200 {
+		body, _ := ioutil.ReadAll(resp.Body)
+		t.Fatal(resp.Status, string(body))
+	}
+	w2 := World{}
+	err = json.NewDecoder(resp.Body).Decode(&w2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newRoomTemp := w2.Rooms["room_1"].States["temp"]
+	oldRoomTemp := w.Rooms["room_1"].States["temp"]
+	if newRoomTemp.(float64) != oldRoomTemp.(float64)-3 && newRoomTemp.(float64) != oldRoomTemp.(float64)-4 {
+		t.Fatal("unexpected result", newRoomTemp.(float64), oldRoomTemp.(float64)-3)
+	}
+}

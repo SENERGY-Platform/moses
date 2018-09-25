@@ -44,11 +44,11 @@ moses.room.state.set("counter", roomCounter);
 //Example for World-Change-Routine
 //room temperature is influenced by the world
 var temperature = moses.world.state.get("temp");
-var room_temperature = moses.world.getRoom("room1").state.get("temp");
+var room_temperature = moses.world.getRoom("room_1").state.get("temp");
 if(temperature > room_temperature){
     room_temperature = room_temperature + 1;
 }else if(temperature < room_temperature){
-    room_temperature = room_temperature + 1;
+    room_temperature = room_temperature - 1;
 }
-moses.world.getRoom("room1").state.set("temp");
+moses.world.getRoom("room1").state.set("temp", room_temperature);
 ```

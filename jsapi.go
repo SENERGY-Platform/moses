@@ -16,6 +16,8 @@
 
 package main
 
+import "log"
+
 func (this *StateRepo) getJsWorldApi(world *World) map[string]interface{} {
 	return map[string]interface{}{
 		"world": this.getJsWorldSubApi(world),
@@ -38,6 +40,7 @@ func (this *StateRepo) getJsWorldSubApi(world *World) map[string]interface{} {
 		"getRoom": func(roomid string) map[string]interface{} {
 			room, ok := world.Rooms[roomid]
 			if !ok {
+				log.Println("WARNING: js-api getRoom(), room not found ", roomid)
 				return map[string]interface{}{}
 			}
 			return this.getJsRoomSubApi(room)
@@ -68,6 +71,7 @@ func (this *StateRepo) getJsRoomSubApi(room *Room) map[string]interface{} {
 		"getDevice": func(deviceid string) map[string]interface{} {
 			device, ok := room.Devices[deviceid]
 			if !ok {
+				log.Println("WARNING: js-api getDevice(), device not found ", deviceid)
 				return map[string]interface{}{}
 			}
 			return this.getJsDeviceSubApi(device)
