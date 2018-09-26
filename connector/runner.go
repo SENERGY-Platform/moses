@@ -14,12 +14,42 @@
  * limitations under the License.
  */
 
-package main
+package connector
 
-import "moses/marshaller"
+import (
+	"log"
+	"sync"
+)
 
-type ProtocolInterface interface {
-	Send(deviceId string, serviceId string, marshaller marshaller.Marshaller, value interface{}) (err error)
-	SetReceiver(receiver func(deviceId string, serviceId string, cmdMsg interface{}, responder func(respMsg interface{}))) //receives and sends json objects (not marshaled)
-	Start() (err error)
+type StopCheckFunc func() bool
+
+type RunnerHandlerFunc func(StopCheckFunc) error
+
+type RunnerTask struct {
+	mux  sync.RWMutex
+	stop bool
+}
+
+func RunTask(handler RunnerHandlerFunc) (task *RunnerTask) {
+	task = &RunnerTask{}
+	go func() {
+		task.mux.Lock()
+		err := handler(func() bool {
+			task.mux.RLock()
+			shouldStop := task.stop
+			task.mux.RUnlock()
+			return shouldStop
+		})
+		if err != nil {
+			log.Println("ERROR: ", err)
+		}
+		task.mux.Unlock()
+	}()
+	return
+}
+
+func (t *RunnerTask) Stop() {
+	t.mux.Lock()
+	t.stop = true
+	t.mux.Unlock()
 }

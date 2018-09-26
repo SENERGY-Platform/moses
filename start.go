@@ -56,6 +56,8 @@ func (this *StateRepo) StartRoom(world *World, room *Room) (tickers []*time.Tick
 
 func (this *StateRepo) StartDevice(world *World, room *Room, device *Device) (tickers []*time.Ticker, stops []chan bool, err error) {
 	this.deviceIndex[device.Id] = device
+	this.deviceRoomIndex[device.Id] = room
+	this.deviceWorldIndex[device.Id] = world
 	for _, routine := range device.ChangeRoutines {
 		ticker, stop := startChangeRoutine(routine, this.getJsDeviceApi(world, room, device), this.Config.JsTimeout, &world.mux)
 		tickers = append(tickers, ticker)

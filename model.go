@@ -17,21 +17,10 @@
 package main
 
 import (
+	"moses/marshaller"
 	"sync"
 	"time"
 )
-
-type StateRepo struct {
-	Worlds                map[string]*World
-	Graphs                map[string]*Graph
-	Persistence           PersistenceInterface
-	Protocol              ProtocolInterface
-	Config                Config
-	deviceIndex           map[string]*Device
-	changeRoutinesTickers []*time.Ticker
-	stopChannels          []chan bool
-	mux                   sync.Mutex
-}
 
 type Point struct {
 	X float64 `json:"x" bson:"x"`
@@ -79,8 +68,9 @@ type Device struct {
 }
 
 type Service struct {
-	Id             string        `json:"id" bson:"id"`
-	Name           string        `json:"name" bson:"name"`
-	SensorInterval time.Duration `json:"sensor_interval" bson:"sensor_interval"`
-	Code           string        `json:"code"`
+	Id             string                `json:"id" bson:"id"`
+	Name           string                `json:"name" bson:"name"`
+	SensorInterval time.Duration         `json:"sensor_interval" bson:"sensor_interval"`
+	Code           string                `json:"code"`
+	Marshaller     marshaller.Marshaller `json:"marshaller" bson:"marshaller"`
 }

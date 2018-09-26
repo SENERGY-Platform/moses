@@ -14,12 +14,10 @@
  * limitations under the License.
  */
 
-package main
+package connector
 
-import "moses/marshaller"
-
-type ProtocolInterface interface {
-	Send(deviceId string, serviceId string, marshaller marshaller.Marshaller, value interface{}) (err error)
-	SetReceiver(receiver func(deviceId string, serviceId string, cmdMsg interface{}, responder func(respMsg interface{}))) //receives and sends json objects (not marshaled)
-	Start() (err error)
+type Config struct {
+	ZookeeperUrl    string
+	KafkaEventTopic string
+	ProtocolTopic   string
 }

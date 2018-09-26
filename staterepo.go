@@ -19,9 +19,25 @@ package main
 import (
 	"errors"
 	"log"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 )
+
+type StateRepo struct {
+	Worlds                map[string]*World
+	Graphs                map[string]*Graph
+	Persistence           PersistenceInterface
+	Protocol              ProtocolInterface
+	Config                Config
+	deviceIndex           map[string]*Device
+	deviceRoomIndex       map[string]*Room
+	deviceWorldIndex      map[string]*World
+	changeRoutinesTickers []*time.Ticker
+	stopChannels          []chan bool
+	mux                   sync.RWMutex
+}
 
 //Update for HTTP-API
 //Stops all change routines and redeploys new world
@@ -162,6 +178,8 @@ func (this *StateRepo) Stop() (err error) {
 	this.stopChannels = nil
 	this.changeRoutinesTickers = nil
 	this.deviceIndex = nil
+	this.deviceRoomIndex = nil
+	this.deviceWorldIndex = nil
 	return
 }
 
@@ -174,6 +192,8 @@ func (this *StateRepo) Start() {
 		panic(err)
 	}
 	this.deviceIndex = map[string]*Device{}
+	this.deviceRoomIndex = map[string]*Room{}
+	this.deviceWorldIndex = map[string]*World{}
 	for _, world := range this.Worlds {
 		tickers, stops, err := this.StartWorld(world)
 		if err != nil {
@@ -182,6 +202,9 @@ func (this *StateRepo) Start() {
 		this.changeRoutinesTickers = append(this.changeRoutinesTickers, tickers...)
 		this.stopChannels = append(this.stopChannels, stops...)
 	}
+	this.Protocol.SetReceiver(func(deviceId string, serviceId string, cmdMsg interface{}, responder func(respMsg interface{})) {
+		this.HandleCommand(deviceId, serviceId, cmdMsg, responder)
+	})
 	return
 }
 
@@ -191,8 +214,37 @@ func (this *StateRepo) PersistWorld(world World) (err error) {
 }
 
 func (this *StateRepo) SendSensorData(device *Device, service Service, value interface{}) {
-	err := this.Protocol.Send(device.Id, service.Id, value)
+	if this.Protocol == nil {
+		log.Println("WARNING: not protocol connected")
+		return
+	}
+	err := this.Protocol.Send(device.Id, service.Id, service.Marshaller, value)
 	if err != nil {
 		log.Println("ERROR: while sending sensor data", value, device.Id, service.Id, err)
+	}
+}
+
+func (this *StateRepo) HandleCommand(deviceId string, serviceId string, cmdMsg interface{}, responder func(respMsg interface{})) {
+	this.mux.RLock()
+	defer this.mux.RUnlock()
+	world, ok := this.deviceWorldIndex[deviceId]
+	if !ok {
+		log.Println("WARNING: no world for device found ", deviceId)
+	}
+	room, ok := this.deviceRoomIndex[deviceId]
+	if !ok {
+		log.Println("WARNING: no room for device found ", deviceId)
+	}
+	device, ok := this.deviceIndex[deviceId]
+	if !ok {
+		log.Println("WARNING: no device with id found ", deviceId)
+	}
+	service, ok := device.Services[serviceId]
+	if !ok {
+		log.Println("WARNING: no matching service for device found ", serviceId)
+	}
+	err := run(service.Code, this.getJsCommandApi(world, room, device, cmdMsg, responder), this.Config.JsTimeout, &world.mux)
+	if err != nil {
+		log.Println("ERROR: while handling command in jsvm", err)
 	}
 }

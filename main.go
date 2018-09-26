@@ -16,7 +16,10 @@
 
 package main
 
-import "log"
+import (
+	"log"
+	"moses/connector"
+)
 
 func main() {
 	log.Println("load config")
@@ -25,14 +28,20 @@ func main() {
 		log.Fatal("unable to load config: ", err)
 	}
 
+	log.Println("init protocol handler")
+	protocol, err := connector.NewMosesProtocolConnector(connector.Config{ZookeeperUrl: config.ZookeeperUrl, KafkaEventTopic: config.KafkaUrl, ProtocolTopic: config.ProtocolTopic})
+	if err != nil {
+		log.Fatal("unable to initialize protocol: ", err)
+	}
+
 	log.Println("connect to database")
 	persistence, err := NewMongoPersistence(config)
 	if err != nil {
 		log.Fatal("unable to connect to database: ", err)
 	}
 
-	log.Println("load states")
-	staterepo := &StateRepo{Persistence: persistence, Config: config}
+	log.Println("load states from database")
+	staterepo := &StateRepo{Persistence: persistence, Config: config, Protocol: protocol}
 	err = staterepo.Load()
 	if err != nil {
 		log.Fatal("unable to load state repo: ", err)

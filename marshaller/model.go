@@ -14,12 +14,21 @@
  * limitations under the License.
  */
 
-package main
+package marshaller
 
-import "moses/marshaller"
-
-type ProtocolInterface interface {
-	Send(deviceId string, serviceId string, marshaller marshaller.Marshaller, value interface{}) (err error)
-	SetReceiver(receiver func(deviceId string, serviceId string, cmdMsg interface{}, responder func(respMsg interface{}))) //receives and sends json objects (not marshaled)
-	Start() (err error)
+type InputOutput struct {
+	Name    string        `json:"name,omitempty"`
+	FieldId string        `json:"field_id"`
+	Type    Type          `json:"type"`
+	Value   string        `json:"value,omitempty"`
+	Values  []InputOutput `json:"values,omitempty"`
 }
+
+type Type struct {
+	Id   string `json:"id"`
+	Name string `json:"name"`
+	Desc string `json:"desc"`
+	Base string `json:"base"`
+}
+
+type FormatedOutput map[string]interface{}

@@ -122,3 +122,13 @@ func (this *StateRepo) getJsSensorSubApi(device *Device, service Service) map[st
 		},
 	}
 }
+
+func (this *StateRepo) getJsCommandApi(world *World, room *Room, device *Device, cmdMsg interface{}, responder func(respMsg interface{})) interface{} {
+	return map[string]interface{}{
+		"world":   this.getJsWorldSubApi(world),
+		"room":    this.getJsRoomSubApi(room),
+		"device":  this.getJsDeviceSubApi(device),
+		"input":   cmdMsg,
+		"respond": responder,
+	}
+}

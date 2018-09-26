@@ -35,6 +35,9 @@ type Config struct {
 	GraphCollectionName string        `json:"graph_collection_name"`
 	MongoUrl            string        `json:"mongo_url"`
 	JsTimeout           time.Duration `json:"js_timeout"`
+	ZookeeperUrl        string        `json:"zookeeper_url"`
+	KafkaUrl            string        `json:"kafka_url"`
+	ProtocolTopic       string        `json:"protocol_topic"`
 }
 
 func LoadConfig() (result Config, err error) {
