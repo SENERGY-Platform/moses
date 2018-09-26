@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"io/ioutil"
 	"log"
+	"moses/marshaller"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -47,11 +48,34 @@ func (this PersistenceMock) LoadGraphs() (result map[string]*Graph, err error) {
 	return
 }
 
+type ProtocolMock struct{}
+
+var test_send_values = []SendMock{}
+var test_receiver func(deviceId string, serviceId string, cmdMsg interface{}, responder func(respMsg interface{}))
+
+type SendMock struct {
+	Device  string
+	Service string
+	Value   interface{}
+}
+
+func (this *ProtocolMock) Send(deviceId string, serviceId string, marshaller marshaller.Marshaller, value interface{}) (err error) {
+	test_send_values = append(test_send_values, SendMock{Device: deviceId, Service: serviceId, Value: value})
+	return
+}
+
+func (this *ProtocolMock) SetReceiver(receiver func(deviceId string, serviceId string, cmdMsg interface{}, responder func(respMsg interface{}))) {
+	test_receiver = receiver
+}
+
+func (this *ProtocolMock) Start() (err error) {
+	return
+}
+
 var testserver *httptest.Server
 
 func TestMain(m *testing.M) {
-	persistencemock := PersistenceMock{}
-	staterepo := &StateRepo{Persistence: persistencemock, Config: Config{JsTimeout: 2 * time.Second}}
+	staterepo := &StateRepo{Persistence: PersistenceMock{}, Config: Config{JsTimeout: 2 * time.Second}, Protocol: &ProtocolMock{}}
 	err := staterepo.Load()
 	if err != nil {
 		log.Fatal("unable to load state repo: ", err)

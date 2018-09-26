@@ -117,17 +117,23 @@ func (this *StateRepo) getJsSensorSubApi(device *Device, service Service) map[st
 		"send": func(value interface{}) {
 			this.SendSensorData(device, service, value)
 		},
-		"parameter": func() interface{} {
+		"input": func() interface{} {
 			return nil
 		},
 	}
 }
 
-func (this *StateRepo) getJsCommandApi(world *World, room *Room, device *Device, cmdMsg interface{}, responder func(respMsg interface{})) interface{} {
+func (this *StateRepo) getJsCommandApi(world *World, room *Room, device *Device, cmdMsg interface{}, responder func(respMsg interface{})) map[string]interface{} {
 	return map[string]interface{}{
 		"world":   this.getJsWorldSubApi(world),
 		"room":    this.getJsRoomSubApi(room),
 		"device":  this.getJsDeviceSubApi(device),
+		"service": this.getJsCommandSubApi(cmdMsg, responder),
+	}
+}
+
+func (this *StateRepo) getJsCommandSubApi(cmdMsg interface{}, responder func(respMsg interface{})) interface{} {
+	return map[string]interface{}{
 		"input":   cmdMsg,
 		"respond": responder,
 	}
