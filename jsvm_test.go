@@ -252,6 +252,7 @@ func ExampleJsvmService() {
 						Id: "device_s1",
 						Services: map[string]Service{
 							"sensor_s1": {
+								Id:             "sensor_s1",
 								Name:           "SenseTemp",
 								SensorInterval: 230 * time.Millisecond,
 								Code: `
@@ -260,6 +261,7 @@ func ExampleJsvmService() {
 								`,
 							},
 							"actuator_a1": {
+								Id:   "actuator_a1",
 								Name: "IncreaseTempBy",
 								Code: `
 									var answer = moses.room.state.get("answer");
@@ -325,5 +327,5 @@ func ExampleJsvmService() {
 
 	//output:
 	//response 2 42 33
-	//[{device_s1  29} {device_s1  28} {device_s1  27} {device_s1  26} {device_s1  33} {device_s1  32} {device_s1  30} {device_s1  29} {device_s1  28} {device_s1  27} {device_s1  26} {device_s1  25} {device_s1  24}]
+	//[{device_s1 sensor_s1 29} {device_s1 sensor_s1 28} {device_s1 sensor_s1 27} {device_s1 sensor_s1 26} {device_s1 sensor_s1 33} {device_s1 sensor_s1 32} {device_s1 sensor_s1 30} {device_s1 sensor_s1 29} {device_s1 sensor_s1 28} {device_s1 sensor_s1 27} {device_s1 sensor_s1 26} {device_s1 sensor_s1 25} {device_s1 sensor_s1 24}]
 }
