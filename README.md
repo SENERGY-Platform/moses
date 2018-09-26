@@ -19,13 +19,68 @@ which allows to read and write the state of the world, room and device.
 The API is accessed by the variable `moses` which provides sub APIs depending on, for which component the routine is written.
 
 - for worlds the moses object provides a API for the world with `moses.world`.
-- for rooms the moses object provides APIs for the current room and the world the room is assigned to with `moses.world` and `moses.room`
-- for devices the moses object provides APIs for the current device and the world and room the device is assigned to with `moses.world`, `moses.room` and `moses.device`
+- for rooms the moses object provides APIs for the current room and world with `moses.world` and `moses.room`
+- for devices the moses object provides APIs for the current device, room and world with `moses.world`, `moses.room` and `moses.device`
+- for services the moses object provides APIs for the current device, room and world with `moses.world`, `moses.room` and `moses.device`
 
-each sub Api has a state object, which can be read and changed with a `get()` and `set()` method.
+each of these sub Api has a state object, which can be read and changed with a `get()` and `set()` method.
 
 the world sub API can access room sub APIs of its children (ref State-Hierarchies) with `getRoom(id)`.
 the room sub API can access device sub APIs of its children (ref State-Hierarchies) with  `getDevice(id)`.
+
+services have additionally to these state-apis access to a service api object which allows access to the input variable with `moses.service.input`.
+routinely called sensor-services have access to a send function with `moses.service.send()` but there input variable is `null`.
+services which are called from outside have a input variable if one is send. they can respond with `moses.service.respond()`.
+
+#### World-Api
+- world: object //world-sub-api of current world
+
+#### Room-Api
+- world: object //world-sub-api of current world
+- room: object //room-sub-api of current room
+
+#### Device-Api
+- world: object //world-sub-api of current world
+- room: object //room-sub-api of current room
+- device: object //device-sub-api of current device
+
+#### Sensor-Service-Api
+- world: object //world-sub-api of current world
+- room: object //room-sub-api of current room
+- device: object //device-sub-api of current device
+- service: object //sensor-sub-api
+
+#### Actuator-Service-Api
+- world: object //world-sub-api of current world
+- room: object //room-sub-api of current room
+- device: object //device-sub-api of current device
+- service: object //actuator-sub-api
+
+---------------------
+
+#### World-Sub-Api
+- state: object //state-sub-api
+- getRoom: function(string)object //room-sub-api for given room id
+
+#### Room-Sub-Api
+- state: object //state-sub-api
+- getDevice: function(string)object //device-sub-api for given device id
+
+#### Device-Sub-Api
+- state: object //state-sub-api
+
+#### Sensor-Sub-Api
+- send: function(anything)  //sends data to outside world
+- input: null               //if service is called by timer as sensor, no input parameter is given
+
+#### Actuator-Sub-Api
+- respond: function(anything)  //sends data to outside world
+- input: anything           //input parameter from outside world call
+
+#### State-Sub-Api
+- set: function(string, anything) //set state value
+- get: function(string) //get state value
+
 
 ### Example
 
@@ -52,3 +107,20 @@ if(temperature > room_temperature){
 }
 moses.world.getRoom("room1").state.set("temp", room_temperature);
 ```
+
+```
+//Example for Sensor-Service
+//reads room temperature
+var temp = moses.room.state.get("temp");
+moses.service.send(temp);
+```
+
+```
+//Example for Actuator-Service
+//increases room temperature and responds with new temperature
+var temp = moses.room.state.get("temp");
+temp = temp + moses.service.input.temp;
+moses.room.state.set("temp", temp);
+moses.service.respond({"newtemp":temp});
+```
+

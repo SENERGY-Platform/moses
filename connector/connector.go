@@ -96,12 +96,16 @@ func (this *MosesProtocolConnector) Start() (err error) {
 			log.Println("ERROR: handle command: ", err.Error()) //ignore marshaling errors --> no repeat; errors would definitely reoccur
 			return
 		}
+
 		var input interface{}
-		err = json.Unmarshal([]byte(protocolmsg.ProtocolParts[0].Value), &input)
-		if err != nil {
-			log.Println("WARNING: service input is not json ", err)
-			input = protocolmsg.ProtocolParts[0].Value
+		if len(protocolmsg.ProtocolParts) != 0 {
+			err = json.Unmarshal([]byte(protocolmsg.ProtocolParts[0].Value), &input)
+			if err != nil {
+				log.Println("WARNING: service input is not json ", err)
+				input = protocolmsg.ProtocolParts[0].Value
+			}
 		}
+
 		this.receiver(envelope.DeviceId, envelope.ServiceId, input, func(respMsg interface{}) {
 			output, err := json.Marshal(respMsg)
 			if err != nil {

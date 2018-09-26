@@ -117,9 +117,7 @@ func (this *StateRepo) getJsSensorSubApi(device *Device, service Service) map[st
 		"send": func(value interface{}) {
 			this.SendSensorData(device, service, value)
 		},
-		"input": func() interface{} {
-			return nil
-		},
+		"input": nil,
 	}
 }
 
