@@ -202,9 +202,13 @@ func (this *StateRepo) Start() {
 		this.changeRoutinesTickers = append(this.changeRoutinesTickers, tickers...)
 		this.stopChannels = append(this.stopChannels, stops...)
 	}
-	this.Protocol.SetReceiver(func(deviceId string, serviceId string, cmdMsg interface{}, responder func(respMsg interface{})) {
-		this.HandleCommand(deviceId, serviceId, cmdMsg, responder)
-	})
+	if this.Protocol != nil {
+		this.Protocol.SetReceiver(func(deviceId string, serviceId string, cmdMsg interface{}, responder func(respMsg interface{})) {
+			this.HandleCommand(deviceId, serviceId, cmdMsg, responder)
+		})
+	} else {
+		log.Println("WARNING: no protocol handler set")
+	}
 	return
 }
 
