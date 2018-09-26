@@ -49,12 +49,12 @@ func (this *StateRepo) UpdateWorld(world World) (err error) {
 		this.Worlds = map[string]*World{}
 	}
 	if world.Id == "" {
-		uuid, err := uuid.NewRandom()
+		uid, err := uuid.NewRandom()
 		if err != nil {
 			log.Println("ERROR: ", err)
 			return err
 		}
-		world.Id = uuid.String()
+		world.Id = uid.String()
 	}
 	err = this.Stop()
 	if err != nil {
@@ -85,12 +85,12 @@ func (this *StateRepo) UpdateRoom(worldId string, room Room) (err error) {
 		world.Rooms = map[string]*Room{}
 	}
 	if room.Id == "" {
-		uuid, err := uuid.NewRandom()
+		uid, err := uuid.NewRandom()
 		if err != nil {
 			log.Println("ERROR: ", err)
 			return err
 		}
-		room.Id = uuid.String()
+		room.Id = uid.String()
 	}
 	err = this.Stop()
 	if err != nil {
@@ -135,12 +135,12 @@ func (this *StateRepo) UpdateDevice(worldId string, roomId string, device Device
 		room.Devices = map[string]*Device{}
 	}
 	if device.Id == "" {
-		uuid, err := uuid.NewRandom()
+		uid, err := uuid.NewRandom()
 		if err != nil {
 			log.Println("ERROR: ", err)
 			return err
 		}
-		device.Id = uuid.String()
+		device.Id = uid.String()
 	}
 	err = this.Stop()
 	if err != nil {

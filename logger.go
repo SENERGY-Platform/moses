@@ -28,7 +28,7 @@ func Logger(handler http.Handler, logLevel string) *LoggerMiddleWare {
 
 type LoggerMiddleWare struct {
 	handler  http.Handler
-	logLevel string `DEBUG | CALL | NONE`
+	logLevel string //DEBUG | CALL | NONE
 }
 
 func (this *LoggerMiddleWare) ServeHTTP(w http.ResponseWriter, r *http.Request) {

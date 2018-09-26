@@ -44,7 +44,7 @@ func startChangeRoutine(routine ChangeRoutine, callbacks map[string]interface{},
 	return
 }
 
-var halt = errors.New("Stahp")
+var halt = errors.New("stop")
 
 func run(code string, moses interface{}, timeout time.Duration, mux sync.Locker) (err error) {
 	defer func() {
