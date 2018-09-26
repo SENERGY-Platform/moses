@@ -189,3 +189,10 @@ func (this *StateRepo) Start() {
 func (this *StateRepo) PersistWorld(world World) (err error) {
 	return this.Persistence.PersistWorld(world)
 }
+
+func (this *StateRepo) SendSensorData(device *Device, service Service, value interface{}) {
+	err := this.Protocol.Send(device.Id, service.Id, value)
+	if err != nil {
+		log.Println("ERROR: while sending sensor data", value, device.Id, service.Id, err)
+	}
+}

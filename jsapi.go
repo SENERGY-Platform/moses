@@ -102,3 +102,23 @@ func (this *StateRepo) getJsDeviceSubApi(device *Device) map[string]interface{} 
 		},
 	}
 }
+
+func (this *StateRepo) getJsSensorApi(world *World, room *Room, device *Device, service Service) map[string]interface{} {
+	return map[string]interface{}{
+		"world":   this.getJsWorldSubApi(world),
+		"room":    this.getJsRoomSubApi(room),
+		"device":  this.getJsDeviceSubApi(device),
+		"service": this.getJsSensorSubApi(device, service),
+	}
+}
+
+func (this *StateRepo) getJsSensorSubApi(device *Device, service Service) map[string]interface{} {
+	return map[string]interface{}{
+		"send": func(value interface{}) {
+			this.SendSensorData(device, service, value)
+		},
+		"parameter": func() interface{} {
+			return nil
+		},
+	}
+}

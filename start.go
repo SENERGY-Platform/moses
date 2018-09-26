@@ -17,16 +17,12 @@
 package main
 
 import (
-	"log"
 	"time"
 )
 
 func (this *StateRepo) StartWorld(world *World) (tickers []*time.Ticker, stops []chan bool, err error) {
 	for _, routine := range world.ChangeRoutines {
 		ticker, stop := startChangeRoutine(routine, this.getJsWorldApi(world), this.Config.JsTimeout, &world.mux)
-		if err != nil {
-			return tickers, stops, err
-		}
 		tickers = append(tickers, ticker)
 		stops = append(stops, stop)
 	}
@@ -44,9 +40,6 @@ func (this *StateRepo) StartWorld(world *World) (tickers []*time.Ticker, stops [
 func (this *StateRepo) StartRoom(world *World, room *Room) (tickers []*time.Ticker, stops []chan bool, err error) {
 	for _, routine := range room.ChangeRoutines {
 		ticker, stop := startChangeRoutine(routine, this.getJsRoomApi(world, room), this.Config.JsTimeout, &world.mux)
-		if err != nil {
-			return tickers, stops, err
-		}
 		tickers = append(tickers, ticker)
 		stops = append(stops, stop)
 	}
@@ -65,9 +58,6 @@ func (this *StateRepo) StartDevice(world *World, room *Room, device *Device) (ti
 	this.deviceIndex[device.Id] = device
 	for _, routine := range device.ChangeRoutines {
 		ticker, stop := startChangeRoutine(routine, this.getJsDeviceApi(world, room, device), this.Config.JsTimeout, &world.mux)
-		if err != nil {
-			return tickers, stops, err
-		}
 		tickers = append(tickers, ticker)
 		stops = append(stops, stop)
 	}
@@ -82,8 +72,11 @@ func (this *StateRepo) StartDevice(world *World, room *Room, device *Device) (ti
 	return
 }
 
-//TODO
 func (this *StateRepo) StartService(world *World, room *Room, device *Device, service Service) (tickers []*time.Ticker, stops []chan bool, err error) {
-	log.Println("WARNING TODO Services.Start()")
+	if service.SensorInterval > 0 {
+		ticker, stop := startChangeRoutine(ChangeRoutine{Interval: service.SensorInterval, Code: service.Code}, this.getJsSensorApi(world, room, device, service), this.Config.JsTimeout, &world.mux)
+		tickers = append(tickers, ticker)
+		stops = append(stops, stop)
+	}
 	return
 }

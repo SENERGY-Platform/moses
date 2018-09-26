@@ -25,6 +25,7 @@ type StateRepo struct {
 	Worlds                map[string]*World
 	Graphs                map[string]*Graph
 	Persistence           PersistenceInterface
+	Protocol              ProtocolInterface
 	Config                Config
 	deviceIndex           map[string]*Device
 	changeRoutinesTickers []*time.Ticker
