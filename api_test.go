@@ -100,7 +100,7 @@ func TestApi(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := &http.Client{}
-	req, err := http.NewRequest("PUT", testserver.URL+"/world", strings.NewReader(string(b)))
+	req, err := http.NewRequest("PUT", testserver.URL+"/dev/world", strings.NewReader(string(b)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestApi(t *testing.T) {
 		t.Fatal(resp.Status, string(body))
 	}
 
-	resp, err = http.Get(testserver.URL + "/worlds")
+	resp, err = http.Get(testserver.URL + "/dev/worlds")
 	if resp.StatusCode != 200 {
 		body, _ := ioutil.ReadAll(resp.Body)
 		t.Fatal(resp.Status, string(body))
@@ -127,7 +127,7 @@ func TestApi(t *testing.T) {
 		t.Fatal(worlds)
 	}
 
-	resp, err = http.Get(testserver.URL + "/world/world_1")
+	resp, err = http.Get(testserver.URL + "/dev/world/world_1")
 	if resp.StatusCode != 200 {
 		body, _ := ioutil.ReadAll(resp.Body)
 		t.Fatal(resp.Status, string(body))
@@ -149,7 +149,7 @@ func TestApi(t *testing.T) {
 		t.Fatal(err)
 	}
 	client = &http.Client{}
-	req, err = http.NewRequest("PUT", testserver.URL+"/world/world_1/room/room_1/device", strings.NewReader(string(b)))
+	req, err = http.NewRequest("PUT", testserver.URL+"/dev/world/world_1/room/room_1/device", strings.NewReader(string(b)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestApi(t *testing.T) {
 
 	w.Rooms["room_1"].Devices["device_2"] = &d2
 
-	resp, err = http.Get(testserver.URL + "/world/world_1")
+	resp, err = http.Get(testserver.URL + "/dev/world/world_1")
 	if resp.StatusCode != 200 {
 		body, _ := ioutil.ReadAll(resp.Body)
 		t.Fatal(resp.Status, string(body))
@@ -178,7 +178,7 @@ func TestApi(t *testing.T) {
 		t.Fatal("unequal ", w, w3)
 	}
 
-	resp, err = http.Get(testserver.URL + "/world/world_1/room/room_1/device/device_2")
+	resp, err = http.Get(testserver.URL + "/dev/world/world_1/room/room_1/device/device_2")
 	if resp.StatusCode != 200 {
 		body, _ := ioutil.ReadAll(resp.Body)
 		t.Fatal(resp.Status, string(body))

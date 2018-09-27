@@ -34,7 +34,7 @@ func StartApi(config Config, staterepo *StateRepo) {
 func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router := httprouter.New()
 
-	router.GET("/worlds", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	router.GET("/dev/worlds", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 		state.mux.RLock()
 		defer state.mux.RUnlock()
 		b, err := json.Marshal(state.Worlds)
@@ -46,7 +46,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		}
 	})
 
-	router.GET("/world/:worldid", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	router.GET("/dev/world/:worldid", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 		state.mux.RLock()
 		defer state.mux.RUnlock()
 		world, ok := state.Worlds[ps.ByName("worldid")]
@@ -64,7 +64,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		}
 	})
 
-	router.GET("/world/:worldid/rooms", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	router.GET("/dev/world/:worldid/rooms", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 		state.mux.RLock()
 		defer state.mux.RUnlock()
 		world, ok := state.Worlds[ps.ByName("worldid")]
@@ -82,7 +82,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		}
 	})
 
-	router.GET("/world/:worldid/room/:roomid", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	router.GET("/dev/world/:worldid/room/:roomid", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 		state.mux.RLock()
 		defer state.mux.RUnlock()
 		world, ok := state.Worlds[ps.ByName("worldid")]
@@ -106,7 +106,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		}
 	})
 
-	router.GET("/world/:worldid/room/:roomid/devices", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	router.GET("/dev/world/:worldid/room/:roomid/devices", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 		state.mux.RLock()
 		defer state.mux.RUnlock()
 		world, ok := state.Worlds[ps.ByName("worldid")]
@@ -130,7 +130,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		}
 	})
 
-	router.GET("/world/:worldid/room/:roomid/device/:deviceid", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	router.GET("/dev/world/:worldid/room/:roomid/device/:deviceid", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 		state.mux.RLock()
 		defer state.mux.RUnlock()
 		world, ok := state.Worlds[ps.ByName("worldid")]
@@ -160,7 +160,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		}
 	})
 
-	router.PUT("/world", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	router.PUT("/dev/world", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 		world := World{}
 		err := json.NewDecoder(r.Body).Decode(&world)
 		if err != nil {
@@ -177,7 +177,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		fmt.Fprint(w, "ok")
 	})
 
-	router.PUT("/world/:worldid/room", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	router.PUT("/dev/world/:worldid/room", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 		room := Room{}
 		err := json.NewDecoder(r.Body).Decode(&room)
 		if err != nil {
@@ -202,7 +202,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		fmt.Fprint(w, "ok")
 	})
 
-	router.PUT("/world/:worldid/room/:roomid/device", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	router.PUT("/dev/world/:worldid/room/:roomid/device", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 		device := Device{}
 		err := json.NewDecoder(r.Body).Decode(&device)
 		if err != nil {
