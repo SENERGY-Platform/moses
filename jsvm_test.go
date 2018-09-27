@@ -314,6 +314,8 @@ func ExampleJsvmService() {
 	}
 
 	time.Sleep(1 * time.Second)
+
+	//send command to actuator service
 	test_receiver("device_s1", "actuator_a1", map[string]interface{}{"temp": 8}, func(respMsg interface{}) {
 		resp, ok := respMsg.(map[string]interface{})
 		if ok {
@@ -321,11 +323,36 @@ func ExampleJsvmService() {
 		}
 	})
 
+	time.Sleep(1 * time.Second)
+
+	//add room to test start and stop of world
+	r2 := Room{
+		Id:   "room_2",
+		Name: "room_2",
+	}
+	b, err = json.Marshal(r2)
+	if err != nil {
+		fmt.Println(err)
+	}
+	client = &http.Client{}
+	req, err = http.NewRequest("PUT", testserver.URL+"/world/world_4/room", strings.NewReader(string(b)))
+	if err != nil {
+		fmt.Println(err)
+	}
+	resp, err = client.Do(req)
+	if err != nil {
+		fmt.Println(err)
+	}
+	if resp.StatusCode != 200 {
+		body, _ := ioutil.ReadAll(resp.Body)
+		fmt.Println(resp.Status, string(body))
+	}
+
 	time.Sleep(2 * time.Second)
 
 	fmt.Println(test_send_values)
 
 	//output:
 	//response 2 42 33
-	//[{device_s1 sensor_s1 29} {device_s1 sensor_s1 28} {device_s1 sensor_s1 27} {device_s1 sensor_s1 26} {device_s1 sensor_s1 33} {device_s1 sensor_s1 32} {device_s1 sensor_s1 30} {device_s1 sensor_s1 29} {device_s1 sensor_s1 28} {device_s1 sensor_s1 27} {device_s1 sensor_s1 26} {device_s1 sensor_s1 25} {device_s1 sensor_s1 24}]
+	//[{device_s1 sensor_s1 29} {device_s1 sensor_s1 28} {device_s1 sensor_s1 27} {device_s1 sensor_s1 26} {device_s1 sensor_s1 33} {device_s1 sensor_s1 32} {device_s1 sensor_s1 30} {device_s1 sensor_s1 29} {device_s1 sensor_s1 27} {device_s1 sensor_s1 26} {device_s1 sensor_s1 25} {device_s1 sensor_s1 24} {device_s1 sensor_s1 23} {device_s1 sensor_s1 22} {device_s1 sensor_s1 20} {device_s1 sensor_s1 19}]
 }
