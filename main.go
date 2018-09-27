@@ -29,11 +29,15 @@ func main() {
 	}
 
 	log.Println("init protocol handler")
-	protocol, err := connector.NewMosesProtocolConnector(connector.Config{ZookeeperUrl: config.ZookeeperUrl, KafkaEventTopic: config.KafkaUrl, ProtocolTopic: config.ProtocolTopic})
+	protocol, err := connector.NewMosesProtocolConnector(connector.Config{
+		ZookeeperUrl:       config.ZookeeperUrl,
+		KafkaEventTopic:    config.KafkaEventTopic,
+		ProtocolTopic:      config.KafkaProtocolTopic,
+		KafkaResponseTopic: config.KafkaResponseTopic,
+	})
 	if err != nil {
 		log.Fatal("unable to initialize protocol: ", err)
 	}
-
 	log.Println("connect to database")
 	persistence, err := NewMongoPersistence(config)
 	if err != nil {

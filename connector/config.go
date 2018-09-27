@@ -17,7 +17,8 @@
 package connector
 
 type Config struct {
-	ZookeeperUrl    string
-	KafkaEventTopic string
-	ProtocolTopic   string
+	ZookeeperUrl       string
+	KafkaEventTopic    string
+	ProtocolTopic      string
+	KafkaResponseTopic string
 }

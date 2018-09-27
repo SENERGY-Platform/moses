@@ -110,9 +110,15 @@ func (this *MosesProtocolConnector) Start() (err error) {
 			output, err := json.Marshal(respMsg)
 			if err != nil {
 				log.Println("ERROR: while marshaling response")
-			} else {
-				protocolmsg.ProtocolParts = []marshaller.ProtocolPart{{Name: "payload", Value: string(output)}}
+				return
 			}
+			protocolmsg.ProtocolParts = []marshaller.ProtocolPart{{Name: "payload", Value: string(output)}}
+			response, err := json.Marshal(protocolmsg)
+			if err != nil {
+				log.Println("ERROR in MosesProtocolConnector.Start().receiver() json.Marshal(): ", err)
+				return
+			}
+			this.producer.Produce(this.Config.KafkaResponseTopic, string(response))
 		})
 		return
 	})
