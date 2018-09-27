@@ -22,7 +22,7 @@ import (
 )
 
 type Marshaller struct {
-	Service Service `json:"service"`
+	Service Service `json:"service" bson:"service"`
 }
 
 type ProtocolPart struct {

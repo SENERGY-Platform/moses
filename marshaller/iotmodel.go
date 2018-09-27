@@ -17,37 +17,46 @@
 package marshaller
 
 type Service struct {
-	Id          string           `json:"id,omitempty"`
-	Name        string           `json:"name,omitempty"`
-	Description string           `json:"description,omitempty"`
-	Input       []TypeAssignment `json:"input,omitempty"`
-	Output      []TypeAssignment `json:"output,omitempty"` // list of alternative result types; for example a string if success or a json on error
+	Id          string           `json:"id,omitempty" bson:"id"`
+	Name        string           `json:"name,omitempty" bson:"name"`
+	Description string           `json:"description,omitempty" bson:"description"`
+	Input       []TypeAssignment `json:"input,omitempty" bson:"input"`
+	Output      []TypeAssignment `json:"output,omitempty" bson:"output"` // list of alternative result types; for example a string if success or a json on error
+	Protocol    Protocol         `json:"protocol,omitempty" bson:"-"`
+}
+
+type Protocol struct {
+	Id                 string       `json:"id"`
+	ProtocolHandlerUrl string       `json:"protocol_handler_url"`
+	Name               string       `json:"name"`
+	Desc               string       `json:"description"`
+	MsgStructure       []MsgSegment `json:"msg_structure"`
 }
 
 type TypeAssignment struct {
-	Name       string     `json:"name"`
-	Type       ValueType  `json:"type"`
-	MsgSegment MsgSegment `json:"msg_segment"`
+	Name       string     `json:"name" bson:"name"`
+	Type       ValueType  `json:"type" bson:"type"`
+	MsgSegment MsgSegment `json:"msg_segment" bson:"msg_segment"`
 }
 
 type MsgSegment struct {
-	Id   string `json:"id"`
-	Name string `json:"name"`
+	Id   string `json:"id" bson:"id"`
+	Name string `json:"name" bson:"name"`
 }
 
 type FieldType struct {
-	Id   string    `json:"id,omitempty"`
-	Name string    `json:"name,omitempty"`
-	Type ValueType `json:"type,omitempty"`
+	Id   string    `json:"id,omitempty" bson:"id"`
+	Name string    `json:"name,omitempty" bson:"name"`
+	Type ValueType `json:"type,omitempty" bson:"type"`
 }
 
 type ValueType struct {
-	Id          string      `json:"id,omitempty"`
-	Name        string      `json:"name,omitempty"`
-	Description string      `json:"description,omitempty"`
-	BaseType    string      `json:"base_type,omitempty"`
-	Fields      []FieldType `json:"fields"`
-	Literal     string      `json:"literal"` //is literal, if not empty
+	Id          string      `json:"id,omitempty" bson:"id"`
+	Name        string      `json:"name,omitempty" bson:"name"`
+	Description string      `json:"description,omitempty" bson:"description"`
+	BaseType    string      `json:"base_type,omitempty" bson:"base_type"`
+	Fields      []FieldType `json:"fields" bson:"fields"`
+	Literal     string      `json:"literal" bson:"literal"` //is literal, if not empty
 }
 
 const (

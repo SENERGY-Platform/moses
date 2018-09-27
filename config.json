@@ -1,11 +1,12 @@
 {
     "server_port": "8080",
+    "mongo_url": "mongodb://mongo",
+    "iot_url": "http://iot",
+    "zookeeper_url": "zk",
     "log_level": "DEBUG",
-    "mongo_url": "mongodb://loacalhost",
     "world_collection_name": "worlds",
     "graph_collection_name": "graphs",
     "js_timeout": 2000000000,
-    "zookeeper_url": "zk",
     "kafka_event_topic": "eventfilter",
     "kafka_protocol_topic": "moses",
     "kafka_response_topic": "response"

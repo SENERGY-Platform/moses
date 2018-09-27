@@ -35,6 +35,8 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router := httprouter.New()
 
 	router.GET("/worlds", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+		state.mux.RLock()
+		defer state.mux.RUnlock()
 		b, err := json.Marshal(state.Worlds)
 		if err != nil {
 			log.Println("ERROR: ", err)
@@ -45,6 +47,8 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	})
 
 	router.GET("/world/:worldid", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+		state.mux.RLock()
+		defer state.mux.RUnlock()
 		world, ok := state.Worlds[ps.ByName("worldid")]
 		if !ok {
 			log.Println("404")
@@ -61,6 +65,8 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	})
 
 	router.GET("/world/:worldid/rooms", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+		state.mux.RLock()
+		defer state.mux.RUnlock()
 		world, ok := state.Worlds[ps.ByName("worldid")]
 		if !ok {
 			log.Println("404")
@@ -77,6 +83,8 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	})
 
 	router.GET("/world/:worldid/room/:roomid", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+		state.mux.RLock()
+		defer state.mux.RUnlock()
 		world, ok := state.Worlds[ps.ByName("worldid")]
 		if !ok {
 			log.Println("404")
@@ -99,6 +107,8 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	})
 
 	router.GET("/world/:worldid/room/:roomid/devices", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+		state.mux.RLock()
+		defer state.mux.RUnlock()
 		world, ok := state.Worlds[ps.ByName("worldid")]
 		if !ok {
 			log.Println("404")
@@ -121,6 +131,8 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	})
 
 	router.GET("/world/:worldid/room/:roomid/device/:deviceid", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+		state.mux.RLock()
+		defer state.mux.RUnlock()
 		world, ok := state.Worlds[ps.ByName("worldid")]
 		if !ok {
 			log.Println("404")
@@ -173,12 +185,14 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 			http.Error(w, err.Error(), 400)
 			return
 		}
+		state.mux.RLock()
 		world, ok := state.Worlds[ps.ByName("worldid")]
 		if !ok {
 			log.Println("404")
 			http.Error(w, "world not found", 404)
 			return
 		}
+		state.mux.RUnlock()
 		err = state.UpdateRoom(world.Id, room)
 		if err != nil {
 			log.Println("ERROR: ", err)
@@ -196,6 +210,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 			http.Error(w, err.Error(), 400)
 			return
 		}
+		state.mux.RLock()
 		world, ok := state.Worlds[ps.ByName("worldid")]
 		if !ok {
 			log.Println("404")
@@ -208,6 +223,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 			http.Error(w, "room not found", 404)
 			return
 		}
+		state.mux.RUnlock()
 		err = state.UpdateDevice(world.Id, room.Id, device)
 		if err != nil {
 			log.Println("ERROR: ", err)
