@@ -60,7 +60,6 @@ type World struct {
 type Room struct {
 	Id             string                 `json:"id" bson:"id"`
 	Name           string                 `json:"name" bson:"name"`
-	Meta           map[string]string      `json:"meta" bson:"meta"`
 	States         map[string]interface{} `json:"states" bson:"states"`
 	Devices        map[string]*Device     `json:"devices" bson:"devices"`
 	ChangeRoutines []ChangeRoutine        `json:"change_routines" bson:"change_routines"`

@@ -38,6 +38,7 @@ func (this *StateRepo) StartWorld(world *World) (tickers []*time.Ticker, stops [
 }
 
 func (this *StateRepo) StartRoom(world *World, room *Room) (tickers []*time.Ticker, stops []chan bool, err error) {
+	this.roomWorldIndex[room.Id] = world
 	for _, routine := range room.ChangeRoutines {
 		ticker, stop := startChangeRoutine(routine, this.getJsRoomApi(world, room), this.Config.JsTimeout, &world.mux)
 		tickers = append(tickers, ticker)

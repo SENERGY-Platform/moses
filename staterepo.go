@@ -34,6 +34,7 @@ type StateRepo struct {
 	deviceIndex           map[string]*Device
 	deviceRoomIndex       map[string]*Room
 	deviceWorldIndex      map[string]*World
+	roomWorldIndex        map[string]*World
 	changeRoutinesTickers []*time.Ticker
 	stopChannels          []chan bool
 	mux                   sync.RWMutex
@@ -215,6 +216,7 @@ func (this *StateRepo) Stop() (err error) {
 	this.deviceIndex = nil
 	this.deviceRoomIndex = nil
 	this.deviceWorldIndex = nil
+	this.roomWorldIndex = nil
 	return
 }
 
@@ -229,6 +231,7 @@ func (this *StateRepo) Start() {
 	this.deviceIndex = map[string]*Device{}
 	this.deviceRoomIndex = map[string]*Room{}
 	this.deviceWorldIndex = map[string]*World{}
+	this.roomWorldIndex = map[string]*World{}
 	for _, world := range this.Worlds {
 		tickers, stops, err := this.StartWorld(world)
 		if err != nil {

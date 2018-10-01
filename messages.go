@@ -16,13 +16,30 @@
 
 package main
 
-type CreateWorldMsg struct {
+type CreateWorldRequest struct {
 	Name   string                 `json:"name"`
 	States map[string]interface{} `json:"states"`
 }
 
-type UpdateWorldMsg struct {
+type UpdateWorldRequest struct {
 	Id     string                 `json:"id"`
+	Name   string                 `json:"name"`
+	States map[string]interface{} `json:"states"`
+}
+
+type RoomResponse struct {
+	World string `json:"world"`
+	Room  Room   `json:"room"`
+}
+
+type UpdateRoomRequest struct {
+	Id     string                 `json:"id"`
+	Name   string                 `json:"name"`
+	States map[string]interface{} `json:"states"`
+}
+
+type CreateRoomRequest struct {
+	World  string                 `json:"world"`
 	Name   string                 `json:"name"`
 	States map[string]interface{} `json:"states"`
 }
