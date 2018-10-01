@@ -24,15 +24,21 @@ import (
 type PersistenceInterface interface {
 	PersistWorld(world World) (err error)
 	PersistGraph(graph Graph) (err error)
+	PersistTemplate(templ RoutineTemplate) error
 	LoadWorlds() (map[string]*World, error)
 	LoadGraphs() (map[string]*Graph, error)
+	GetTemplate(id string) (templ RoutineTemplate, err error)
+	DeleteWorld(id string) error
+	DeleteGraph(id string) error
+	DeleteTemplate(id string) error
 }
 
 type MongoPersistence struct {
-	session             *mgo.Session
-	worldCollectionName string
-	graphCollectionName string
-	tableName           string
+	session                *mgo.Session
+	worldCollectionName    string
+	graphCollectionName    string
+	templateCollectionName string
+	tableName              string
 }
 
 func NewMongoPersistence(config Config) (result MongoPersistence, err error) {
@@ -55,6 +61,11 @@ func (this MongoPersistence) getGraphCollection() (session *mgo.Session, collect
 	return
 }
 
+func (this MongoPersistence) getTemplateCollection() (session *mgo.Session, collection *mgo.Collection) {
+	collection = session.DB(this.tableName).C(this.templateCollectionName)
+	return
+}
+
 func (this MongoPersistence) PersistWorld(world World) (err error) {
 	session, collection := this.getWorldCollection()
 	defer session.Close()
@@ -66,6 +77,20 @@ func (this MongoPersistence) PersistGraph(graph Graph) (err error) {
 	session, collection := this.getGraphCollection()
 	defer session.Close()
 	_, err = collection.Upsert(bson.M{"id": graph.Id}, graph)
+	return
+}
+
+func (this MongoPersistence) PersistTemplate(templ RoutineTemplate) (err error) {
+	session, collection := this.getTemplateCollection()
+	defer session.Close()
+	_, err = collection.Upsert(bson.M{"id": templ.Id}, templ)
+	return
+}
+
+func (this MongoPersistence) GetTemplate(id string) (templ RoutineTemplate, err error) {
+	session, collection := this.getTemplateCollection()
+	defer session.Close()
+	err = collection.Find(bson.M{"id": templ.Id}).One(&templ)
 	return
 }
 
@@ -94,5 +119,26 @@ func (this MongoPersistence) LoadGraphs() (result map[string]*Graph, err error) 
 	for _, graph := range graphs {
 		result[graph.Id] = &graph
 	}
+	return
+}
+
+func (this MongoPersistence) DeleteWorld(id string) (err error) {
+	session, collection := this.getWorldCollection()
+	defer session.Close()
+	_, err = collection.RemoveAll(bson.M{"id": id})
+	return
+}
+
+func (this MongoPersistence) DeleteGraph(id string) (err error) {
+	session, collection := this.getGraphCollection()
+	defer session.Close()
+	_, err = collection.RemoveAll(bson.M{"id": id})
+	return
+}
+
+func (this MongoPersistence) DeleteTemplate(id string) (err error) {
+	session, collection := this.getTemplateCollection()
+	defer session.Close()
+	_, err = collection.RemoveAll(bson.M{"id": id})
 	return
 }

@@ -39,10 +39,10 @@ type StateRepo struct {
 	mux                   sync.RWMutex
 }
 
-//Update for HTTP-API
+//Update for HTTP-DEV-API
 //Stops all change routines and redeploys new world
 //requests a mutex lock on the state repo
-func (this *StateRepo) UpdateWorld(world World) (err error) {
+func (this *StateRepo) DevUpdateWorld(world World) (err error) {
 	this.mux.Lock()
 	defer this.mux.Unlock()
 	if this.Worlds == nil {
@@ -56,19 +56,46 @@ func (this *StateRepo) UpdateWorld(world World) (err error) {
 		}
 		world.Id = uid.String()
 	}
+	err = this.PersistWorld(world)
+	if err != nil {
+		log.Println("ERROR: ", err)
+		return
+	}
 	err = this.Stop()
 	if err != nil {
-		return err
+		log.Println("ERROR: ", err)
+		return
 	}
 	this.Worlds[world.Id] = &world
 	this.Start()
-	return this.PersistWorld(world)
+	return
 }
 
-//Update for HTTP-API
+func (this *StateRepo) DevGetWorld(id string) (world World, exist bool) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	worldp, exist := this.Worlds[id]
+	if !exist {
+		return world, exist
+	}
+	return *worldp, exist
+}
+
+func (this *StateRepo) DevDeleteWorld(id string) (err error) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	err = this.Persistence.DeleteWorld(id)
+	if err != nil {
+		return
+	}
+	delete(this.Worlds, id)
+	return
+}
+
+//Update for HTTP-DEV-API
 //Stops all change routines and redeploys new world with new room
 //requests a mutex lock on the state repo
-func (this *StateRepo) UpdateRoom(worldId string, room Room) (err error) {
+func (this *StateRepo) DevUpdateRoom(worldId string, room Room) (err error) {
 	this.mux.Lock()
 	defer this.mux.Unlock()
 	if worldId == "" {
@@ -92,6 +119,10 @@ func (this *StateRepo) UpdateRoom(worldId string, room Room) (err error) {
 		}
 		room.Id = uid.String()
 	}
+	err = this.PersistWorld(*world)
+	if err != nil {
+		return err
+	}
 	err = this.Stop()
 	if err != nil {
 		return err
@@ -99,13 +130,13 @@ func (this *StateRepo) UpdateRoom(worldId string, room Room) (err error) {
 	world.Rooms[room.Id] = &room
 	this.Worlds[world.Id] = world
 	this.Start()
-	return this.PersistWorld(*world)
+	return
 }
 
-//Update for HTTP-API
+//Update for HTTP-DEV-API
 //Stops all change routines and redeploys new world with new room and device
 //requests a mutex lock on the state repo
-func (this *StateRepo) UpdateDevice(worldId string, roomId string, device Device) (err error) {
+func (this *StateRepo) DevUpdateDevice(worldId string, roomId string, device Device) (err error) {
 	this.mux.Lock()
 	defer this.mux.Unlock()
 	if worldId == "" {
@@ -142,6 +173,10 @@ func (this *StateRepo) UpdateDevice(worldId string, roomId string, device Device
 		}
 		device.Id = uid.String()
 	}
+	err = this.PersistWorld(*world)
+	if err != nil {
+		return err
+	}
 	err = this.Stop()
 	if err != nil {
 		return err
@@ -150,7 +185,7 @@ func (this *StateRepo) UpdateDevice(worldId string, roomId string, device Device
 	world.Rooms[room.Id] = room
 	this.Worlds[world.Id] = world
 	this.Start()
-	return this.PersistWorld(*world)
+	return
 }
 
 //Stops all change routines if any are running and loads state repo from the database (no restart of change routines)

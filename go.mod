@@ -2,6 +2,7 @@ module moses
 
 require (
 	github.com/Shopify/sarama v1.18.0
+	github.com/cbroglie/mustache v1.0.1
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dgrijalva/jwt-go v3.2.0+incompatible // indirect
 	github.com/eapache/go-resiliency v1.1.0 // indirect

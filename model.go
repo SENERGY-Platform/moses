@@ -30,22 +30,31 @@ type Point struct {
 type Graph struct {
 	Id     string  `json:"id" bson:"id"`
 	Name   string  `json:"name" bson:"name"`
-	Values []Point `json:"values"`
+	Values []Point `json:"values" bson:"values"`
 }
 
 type ChangeRoutine struct {
+	Id       string        `json:"id" bson:"id"`
 	Interval time.Duration `json:"interval" bson:"interval"`
-	Code     string        `json:"code"`
+	Code     string        `json:"code" bson:"code"`
+}
+
+type RoutineTemplate struct {
+	Id          string   `json:"id" bson:"id"`
+	Name        string   `json:"name" bson:"name"`
+	Description string   `json:"description" bson:"description"`
+	Template    string   `json:"template" bson:"template"`
+	Parameter   []string `json:"parameter" bson:"parameter"`
 }
 
 type World struct {
 	Id             string                 `json:"id" bson:"id"`
+	Owner          string                 `json:"-" bson:"owner"`
 	Name           string                 `json:"name" bson:"name"`
-	Meta           map[string]string      `json:"meta" bson:"meta"`
 	States         map[string]interface{} `json:"states" bson:"states"`
 	Rooms          map[string]*Room       `json:"rooms" bson:"rooms"`
 	ChangeRoutines []ChangeRoutine        `json:"change_routines" bson:"change_routines"`
-	mux            sync.Mutex
+	mux            sync.Mutex             `json:"-" bson:"-"`
 }
 
 type Room struct {

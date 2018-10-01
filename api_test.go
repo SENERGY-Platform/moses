@@ -32,6 +32,26 @@ import (
 
 type PersistenceMock struct{}
 
+func (this PersistenceMock) PersistTemplate(templ RoutineTemplate) error {
+	return nil
+}
+
+func (this PersistenceMock) GetTemplate(id string) (templ RoutineTemplate, err error) {
+	return templ, nil
+}
+
+func (this PersistenceMock) DeleteWorld(id string) error {
+	return nil
+}
+
+func (this PersistenceMock) DeleteGraph(id string) error {
+	return nil
+}
+
+func (this PersistenceMock) DeleteTemplate(id string) error {
+	return nil
+}
+
 func (this PersistenceMock) PersistWorld(world World) (err error) {
 	return
 }
@@ -82,7 +102,7 @@ func TestMain(m *testing.M) {
 	}
 	log.Println("start state routines")
 	staterepo.Start()
-	routes := getRoutes(Config{}, staterepo)
+	routes := getRoutes(Config{DevApi: "true"}, staterepo)
 	logger := Logger(routes, "CALL")
 	testserver = httptest.NewServer(logger)
 	defer testserver.Close()
@@ -93,7 +113,7 @@ func TestStartup(t *testing.T) {
 
 }
 
-func TestApi(t *testing.T) {
+func TestDevApi(t *testing.T) {
 	w := World{Id: "world_1", Name: "World1", Rooms: map[string]*Room{"room_1": &Room{Id: "room_1", Name: "Room1", Devices: map[string]*Device{"device_1": &Device{Id: "device_1", Name: "Device1"}}}}}
 	b, err := json.Marshal(w)
 	if err != nil {
