@@ -183,11 +183,11 @@ func (this *StateRepo) ReadDevice(jwt Jwt, id string) (device DeviceResponse, ac
 	return device, access, exists, err
 }
 
-func (this *StateRepo) CreateDevice(jwt Jwt, msg CreateDeviceRequest) (device DeviceResponse, access bool, worldExists bool, err error) {
-	worldMsg := WorldMsg{}
-	worldMsg, access, worldExists, err = this.ReadWorld(jwt, msg.World)
-	if err != nil || !access || !worldExists {
-		return device, access, worldExists, err
+func (this *StateRepo) CreateDevice(jwt Jwt, msg CreateDeviceRequest) (device DeviceResponse, access bool, worldAndExists bool, err error) {
+	room := RoomResponse{}
+	room, access, worldAndExists, err = this.ReadRoom(jwt, msg.Room)
+	if err != nil || !access || !worldAndExists {
+		return device, access, worldAndExists, err
 	}
 	uid, err := uuid.NewRandom()
 	if err != nil {
@@ -197,7 +197,8 @@ func (this *StateRepo) CreateDevice(jwt Jwt, msg CreateDeviceRequest) (device De
 	device.Device.Name = msg.Name
 	device.Device.States = msg.States
 	device.Device.ExternalRef = msg.ExternalRef
-	device.World = worldMsg.Id
+	device.World = room.World
+	device.Room = msg.Room
 	err = this.DevUpdateDevice(device.World, device.Room, device.Device)
 	return
 }
@@ -232,4 +233,96 @@ func (this *StateRepo) DeleteDevice(jwt Jwt, id string) (device DeviceResponse, 
 	delete(world.Rooms[device.Room].Devices, device.Device.Id)
 	err = this.DevUpdateWorld(world) //update world is more efficient than update room
 	return
+}
+
+func (this *StateRepo) ReadService(jwt Jwt, id string) (service ServiceResponse, access bool, exists bool, err error) {
+	this.mux.RLock()
+	defer this.mux.RUnlock()
+	admin := isAdmin(jwt)
+	devicep, exists := this.serviceDeviceIndex[id]
+	if !exists {
+		return service, admin, exists, nil
+	}
+	world, exists := this.deviceWorldIndex[devicep.Id]
+	if !exists {
+		return service, admin, exists, errors.New("inconsistent deviceWorldIndex")
+	}
+	world.mux.Lock()
+	defer world.mux.Unlock()
+	if !admin && world.Owner != jwt.UserId {
+		return service, false, exists, nil
+	}
+
+	room, exists := this.deviceRoomIndex[devicep.Id]
+	if !exists {
+		return service, admin, exists, errors.New("inconsistent deviceRoomIndex")
+	}
+
+	service.World = world.Id
+	service.Room = room.Id
+	service.Device = devicep.Id
+	serviceModel := devicep.Services[id]
+	service.Service.Id = serviceModel.Id
+	service.Service.ExternalRef = serviceModel.ExternalRef
+	service.Service.Name = serviceModel.Name
+	service.Service.Code = serviceModel.Code
+	service.Service.SensorInterval = serviceModel.SensorInterval
+	return service, access, exists, err
+}
+
+func (this *StateRepo) CreateService(jwt Jwt, msg CreateServiceRequest) (service ServiceResponse, access bool, worldAndExists bool, err error) {
+	device := DeviceResponse{}
+	device, access, worldAndExists, err = this.ReadDevice(jwt, msg.Device)
+	if err != nil || !access || !worldAndExists {
+		return service, access, worldAndExists, err
+	}
+	uid, err := uuid.NewRandom()
+	if err != nil {
+		return service, true, true, err
+	}
+	service.Service.Id = uid.String()
+	service.Service.Name = msg.Name
+	service.Service.ExternalRef = msg.ExternalRef
+	service.Service.Code = msg.Code
+	service.Service.SensorInterval = msg.SensorInterval
+	service.World = device.World
+	service.Room = device.Room
+	service.Device = device.Device.Id
+	device.Device.Services[service.Service.Id], err = this.PopulateServiceService(jwt, service.Service)
+	if err != nil {
+		return service, access, worldAndExists, err
+	}
+	err = this.DevUpdateDevice(service.World, service.Room, device.Device)
+	return service, access, worldAndExists, err
+}
+
+func (this *StateRepo) PopulateServiceService(jwt Jwt, serviceMsg UpdateServiceRequest) (service Service, err error) {
+	service.Id = serviceMsg.Id
+	service.Name = serviceMsg.Name
+	service.SensorInterval = serviceMsg.SensorInterval
+	service.Code = serviceMsg.Code
+	service.ExternalRef = serviceMsg.ExternalRef
+	service.Marshaller.Service, err = this.GetIotService(jwt, service.ExternalRef)
+	return
+}
+
+func (this *StateRepo) UpdateService(jwt Jwt, msg UpdateServiceRequest) (service ServiceResponse, access bool, exists bool, err error) {
+	service, access, exists, err = this.ReadService(jwt, msg.Id)
+	if err != nil || !access || !exists {
+		return
+	}
+	device, access, exists, err := this.ReadDevice(jwt, service.Device)
+	if err != nil || !access || !exists {
+		return service, access, exists, err
+	}
+	service.Service.Name = msg.Name
+	service.Service.ExternalRef = msg.ExternalRef
+	service.Service.Code = msg.Code
+	service.Service.SensorInterval = msg.SensorInterval
+	device.Device.Services[service.Service.Id], err = this.PopulateServiceService(jwt, service.Service)
+	if err != nil {
+		return service, access, exists, err
+	}
+	err = this.DevUpdateDevice(service.World, service.Room, device.Device)
+	return service, access, exists, err
 }

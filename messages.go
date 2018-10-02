@@ -16,7 +16,10 @@
 
 package main
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 type CreateWorldRequest struct {
 	Name   string                 `json:"name"`
@@ -60,11 +63,33 @@ type UpdateDeviceRequest struct {
 }
 
 type CreateDeviceRequest struct {
-	World       string                 `json:"world"`
 	Room        string                 `json:"room"`
 	Name        string                 `json:"name"`
 	States      map[string]interface{} `json:"states"`
 	ExternalRef string                 `json:"external_ref"` //platform intern device id; 1:1
+}
+
+type UpdateServiceRequest struct {
+	Id             string        `json:"id"`
+	Name           string        `json:"name"`
+	ExternalRef    string        `json:"external_ref"` //platform intern service id
+	SensorInterval time.Duration `json:"sensor_interval"`
+	Code           string        `json:"code"`
+}
+
+type ServiceResponse struct {
+	World   string               `json:"world"`
+	Room    string               `json:"room"`
+	Device  string               `json:"device"`
+	Service UpdateServiceRequest `json:"service"`
+}
+
+type CreateServiceRequest struct {
+	Device         string        `json:"device"`
+	Name           string        `json:"name"`
+	ExternalRef    string        `json:"external_ref"` //platform intern service id, will be used to populate Service.Marshaller and as endpoint for the connector
+	SensorInterval time.Duration `json:"sensor_interval"`
+	Code           string        `json:"code"`
 }
 
 // msg variants of model without pointers for thread safety

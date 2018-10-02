@@ -32,6 +32,7 @@ type StateRepo struct {
 	Protocol               ProtocolInterface
 	Config                 Config
 	externalRefDeviceIndex map[string]*Device
+	serviceDeviceIndex     map[string]*Device
 	deviceRoomIndex        map[string]*Room
 	deviceWorldIndex       map[string]*World
 	roomWorldIndex         map[string]*World
@@ -235,6 +236,7 @@ func (this *StateRepo) Stop() (err error) {
 	this.stopChannels = nil
 	this.changeRoutinesTickers = nil
 	this.externalRefDeviceIndex = nil
+	this.serviceDeviceIndex = nil
 	this.deviceRoomIndex = nil
 	this.deviceWorldIndex = nil
 	this.roomWorldIndex = nil
@@ -250,6 +252,7 @@ func (this *StateRepo) Start() {
 		panic(err)
 	}
 	this.externalRefDeviceIndex = map[string]*Device{}
+	this.serviceDeviceIndex = map[string]*Device{}
 	this.deviceRoomIndex = map[string]*Room{}
 	this.deviceWorldIndex = map[string]*World{}
 	this.roomWorldIndex = map[string]*World{}

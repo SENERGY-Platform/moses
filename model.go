@@ -77,7 +77,7 @@ type Device struct {
 type Service struct {
 	Id             string                `json:"id" bson:"id"`
 	Name           string                `json:"name" bson:"name"`
-	ExternalRef    string                `json:"external_ref" bson:"external_ref"` //platform intern service id
+	ExternalRef    string                `json:"external_ref" bson:"external_ref"` //platform intern service id, will be used to populate Service.Marshaller and as endpoint for the connector
 	SensorInterval time.Duration         `json:"sensor_interval" bson:"sensor_interval"`
 	Code           string                `json:"code"`
 	Marshaller     marshaller.Marshaller `json:"marshaller" bson:"marshaller"`

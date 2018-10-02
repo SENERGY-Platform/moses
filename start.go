@@ -76,6 +76,7 @@ func (this *StateRepo) StartDevice(world *World, room *Room, device *Device) (ti
 }
 
 func (this *StateRepo) StartService(world *World, room *Room, device *Device, service Service) (tickers []*time.Ticker, stops []chan bool, err error) {
+	this.serviceDeviceIndex[service.Id] = device
 	if service.SensorInterval > 0 {
 		ticker, stop := startChangeRoutine(ChangeRoutine{Interval: service.SensorInterval, Code: service.Code}, this.getJsSensorApi(world, room, device, service), this.Config.JsTimeout, &world.mux)
 		tickers = append(tickers, ticker)

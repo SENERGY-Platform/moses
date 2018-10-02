@@ -395,7 +395,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 			http.Error(resp, err.Error(), 400)
 			return
 		}
-		result, access, worldExists, err := state.CreateDevice(jwt, msg)
+		result, access, worldAndRoomExists, err := state.CreateDevice(jwt, msg)
 		if err != nil {
 			log.Println("ERROR: ", err)
 			http.Error(resp, err.Error(), 500)
@@ -406,9 +406,9 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 			http.Error(resp, "access denied", http.StatusUnauthorized)
 			return
 		}
-		if !worldExists {
+		if !worldAndRoomExists {
 			log.Println("WARNING: 404")
-			http.Error(resp, "unknown world ore room id", http.StatusNotFound)
+			http.Error(resp, "unknown world or room id", http.StatusNotFound)
 			return
 		}
 		b, err := json.Marshal(result)

@@ -16,7 +16,10 @@
 
 package main
 
-import "moses/marshaller"
+import (
+	"moses/marshaller"
+	"net/url"
+)
 
 func (this *StateRepo) EnsureMosesProtocol(jwt JwtImpersonate) (err error) {
 	protocolList, err := this.FindProtocol(jwt, this.Config.KafkaProtocolTopic) //moses protocol name should be same as protocol url
@@ -50,5 +53,10 @@ func (this *StateRepo) createMosesProtocol(jwt JwtImpersonate) (err error) {
 		},
 	}
 	err = jwt.PostJSON(this.Config.IotUrl+"/other/protocol", protocol, nil)
+	return
+}
+
+func (this *StateRepo) GetIotService(jwt Jwt, externalServiceId string) (service marshaller.Service, err error) {
+	err = jwt.Impersonate.GetJSON(this.Config.IotUrl+"/service/"+url.PathEscape(externalServiceId), &service)
 	return
 }
