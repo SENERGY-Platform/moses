@@ -99,6 +99,8 @@ func (this *StateRepo) ReadRoom(jwt Jwt, id string) (room RoomResponse, access b
 	if !exists {
 		return room, admin, exists, nil
 	}
+	world.mux.Lock()
+	defer world.mux.Unlock()
 	if !admin && world.Owner != jwt.UserId {
 		return room, false, exists, nil
 	}
@@ -153,5 +155,81 @@ func (this *StateRepo) DeleteRoom(jwt Jwt, id string) (room RoomResponse, access
 	}
 	delete(world.Rooms, room.Room.Id)
 	err = this.DevUpdateWorld(world)
+	return
+}
+
+func (this *StateRepo) ReadDevice(jwt Jwt, id string) (device DeviceResponse, access bool, exists bool, err error) {
+	this.mux.RLock()
+	defer this.mux.RUnlock()
+	admin := isAdmin(jwt)
+	world, exists := this.deviceWorldIndex[id]
+	if !exists {
+		return device, admin, exists, nil
+	}
+	world.mux.Lock()
+	defer world.mux.Unlock()
+	if !admin && world.Owner != jwt.UserId {
+		return device, false, exists, nil
+	}
+
+	room, exists := this.deviceRoomIndex[id]
+	if !exists {
+		return device, admin, exists, errors.New("inconsistent deviceRoomIndex")
+	}
+
+	device.World = world.Id
+	device.Room = room.Id
+	device.Device, err = room.Devices[id].ToMsg()
+	return device, access, exists, err
+}
+
+func (this *StateRepo) CreateDevice(jwt Jwt, msg CreateDeviceRequest) (device DeviceResponse, access bool, worldExists bool, err error) {
+	worldMsg := WorldMsg{}
+	worldMsg, access, worldExists, err = this.ReadWorld(jwt, msg.World)
+	if err != nil || !access || !worldExists {
+		return device, access, worldExists, err
+	}
+	uid, err := uuid.NewRandom()
+	if err != nil {
+		return device, true, true, err
+	}
+	device.Device.Id = uid.String()
+	device.Device.Name = msg.Name
+	device.Device.States = msg.States
+	device.Device.ExternalRef = msg.ExternalRef
+	device.World = worldMsg.Id
+	err = this.DevUpdateDevice(device.World, device.Room, device.Device)
+	return
+}
+
+func (this *StateRepo) UpdateDevice(jwt Jwt, msg UpdateDeviceRequest) (device DeviceResponse, access bool, exists bool, err error) {
+	device, access, exists, err = this.ReadDevice(jwt, msg.Id)
+	if err != nil || !access || !exists {
+		return
+	}
+	device.Device.States = msg.States
+	device.Device.Name = msg.Name
+	device.Device.Id = msg.Id
+	device.Device.ExternalRef = msg.ExternalRef
+	err = this.DevUpdateDevice(device.World, device.Room, device.Device)
+	return
+}
+
+func (this *StateRepo) DeleteDevice(jwt Jwt, id string) (device DeviceResponse, access bool, exists bool, err error) {
+	device, access, exists, err = this.ReadDevice(jwt, id)
+	if err != nil || !access || !exists {
+		return
+	}
+	world := WorldMsg{}
+	world, exists, err = this.DevGetWorld(device.World)
+	if err != nil {
+		return
+	}
+	if !exists {
+		err = errors.New("inconsistent world existence read")
+		return
+	}
+	delete(world.Rooms[device.Room].Devices, device.Device.Id)
+	err = this.DevUpdateWorld(world) //update world is more efficient than update room
 	return
 }
