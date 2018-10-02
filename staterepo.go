@@ -43,9 +43,14 @@ type StateRepo struct {
 //Update for HTTP-DEV-API
 //Stops all change routines and redeploys new world
 //requests a mutex lock on the state repo
-func (this *StateRepo) DevUpdateWorld(world World) (err error) {
+func (this *StateRepo) DevUpdateWorld(worldMsg WorldMsg) (err error) {
 	this.mux.Lock()
 	defer this.mux.Unlock()
+	world, err := worldMsg.ToModel()
+	if err != nil {
+		log.Println("ERROR: ", err)
+		return err
+	}
 	if this.Worlds == nil {
 		this.Worlds = map[string]*World{}
 	}
@@ -57,29 +62,32 @@ func (this *StateRepo) DevUpdateWorld(world World) (err error) {
 		}
 		world.Id = uid.String()
 	}
-	err = this.PersistWorld(world)
+	err = this.persistWorld(world)
 	if err != nil {
 		log.Println("ERROR: ", err)
-		return
+		return err
 	}
 	err = this.Stop()
 	if err != nil {
 		log.Println("ERROR: ", err)
-		return
+		return err
 	}
 	this.Worlds[world.Id] = &world
 	this.Start()
 	return
 }
 
-func (this *StateRepo) DevGetWorld(id string) (world World, exist bool) {
+func (this *StateRepo) DevGetWorld(id string) (world WorldMsg, exist bool, err error) {
 	this.mux.Lock()
 	defer this.mux.Unlock()
 	worldp, exist := this.Worlds[id]
 	if !exist {
-		return world, exist
+		return world, exist, nil
 	}
-	return *worldp, exist
+	worldp.mux.Lock()
+	defer worldp.mux.Unlock()
+	world, err = worldp.ToMsg()
+	return world, exist, err
 }
 
 func (this *StateRepo) DevDeleteWorld(id string) (err error) {
@@ -87,30 +95,35 @@ func (this *StateRepo) DevDeleteWorld(id string) (err error) {
 	defer this.mux.Unlock()
 	err = this.Persistence.DeleteWorld(id)
 	if err != nil {
-		return
+		return err
+	}
+	err = this.Stop()
+	if err != nil {
+		log.Println("ERROR: ", err)
+		return err
 	}
 	delete(this.Worlds, id)
+	this.Start()
 	return
 }
 
 //Update for HTTP-DEV-API
 //Stops all change routines and redeploys new world with new room
 //requests a mutex lock on the state repo
-func (this *StateRepo) DevUpdateRoom(worldId string, room Room) (err error) {
-	this.mux.Lock()
-	defer this.mux.Unlock()
+func (this *StateRepo) DevUpdateRoom(worldId string, room RoomMsg) (err error) {
+	if err != nil {
+		log.Println("ERROR: ", err)
+		return err
+	}
 	if worldId == "" {
 		return errors.New("missing world id")
 	}
-	if this.Worlds == nil {
-		this.Worlds = map[string]*World{}
-	}
-	world, ok := this.Worlds[worldId]
-	if !ok {
-		return errors.New("unknown world id: " + worldId)
+	world, exists, err := this.DevGetWorld(worldId)
+	if !exists {
+		return errors.New("unknown world id")
 	}
 	if world.Rooms == nil {
-		world.Rooms = map[string]*Room{}
+		world.Rooms = map[string]RoomMsg{}
 	}
 	if room.Id == "" {
 		uid, err := uuid.NewRandom()
@@ -120,16 +133,22 @@ func (this *StateRepo) DevUpdateRoom(worldId string, room Room) (err error) {
 		}
 		room.Id = uid.String()
 	}
-	err = this.PersistWorld(*world)
+	world.Rooms[room.Id] = room
+	worldModel, err := world.ToModel()
 	if err != nil {
 		return err
 	}
+	err = this.persistWorld(worldModel)
+	if err != nil {
+		return err
+	}
+	this.mux.Lock()
+	defer this.mux.Unlock()
 	err = this.Stop()
 	if err != nil {
 		return err
 	}
-	world.Rooms[room.Id] = &room
-	this.Worlds[world.Id] = world
+	this.Worlds[world.Id] = &worldModel
 	this.Start()
 	return
 }
@@ -137,34 +156,29 @@ func (this *StateRepo) DevUpdateRoom(worldId string, room Room) (err error) {
 //Update for HTTP-DEV-API
 //Stops all change routines and redeploys new world with new room and device
 //requests a mutex lock on the state repo
-func (this *StateRepo) DevUpdateDevice(worldId string, roomId string, device Device) (err error) {
-	this.mux.Lock()
-	defer this.mux.Unlock()
+func (this *StateRepo) DevUpdateDevice(worldId string, roomId string, device DeviceMsg) (err error) {
 	if worldId == "" {
 		return errors.New("missing world id")
 	}
 	if this.Worlds == nil {
 		this.Worlds = map[string]*World{}
 	}
-	world, ok := this.Worlds[worldId]
-	if !ok {
-		return errors.New("unknown world id: " + worldId)
+	world, exists, err := this.DevGetWorld(worldId)
+	if !exists {
+		return errors.New("unknown world id")
 	}
 	if world.Rooms == nil {
-		world.Rooms = map[string]*Room{}
+		world.Rooms = map[string]RoomMsg{}
 	}
 	if roomId == "" {
 		return errors.New("missing room id")
 	}
-	if this.Worlds[worldId].Rooms == nil {
-		this.Worlds[worldId].Rooms = map[string]*Room{}
-	}
-	room, ok := this.Worlds[worldId].Rooms[roomId]
+	room, ok := world.Rooms[roomId]
 	if !ok {
-		return errors.New("unknown world id: " + worldId)
+		return errors.New("unknown room id: " + roomId)
 	}
 	if room.Devices == nil {
-		room.Devices = map[string]*Device{}
+		room.Devices = map[string]DeviceMsg{}
 	}
 	if device.Id == "" {
 		uid, err := uuid.NewRandom()
@@ -174,17 +188,24 @@ func (this *StateRepo) DevUpdateDevice(worldId string, roomId string, device Dev
 		}
 		device.Id = uid.String()
 	}
-	err = this.PersistWorld(*world)
+	room.Devices[device.Id] = device
+	world.Rooms[room.Id] = room
+	worldModel, err := world.ToModel()
 	if err != nil {
 		return err
 	}
+
+	err = this.persistWorld(worldModel)
+	if err != nil {
+		return err
+	}
+	this.mux.Lock()
+	defer this.mux.Unlock()
 	err = this.Stop()
 	if err != nil {
 		return err
 	}
-	room.Devices[device.Id] = &device
-	world.Rooms[room.Id] = room
-	this.Worlds[world.Id] = world
+	this.Worlds[world.Id] = &worldModel
 	this.Start()
 	return
 }
@@ -251,11 +272,11 @@ func (this *StateRepo) Start() {
 }
 
 //persists given world; will not stop any change routines, nor will it request a lock on the world mutex
-func (this *StateRepo) PersistWorld(world World) (err error) {
+func (this *StateRepo) persistWorld(world World) (err error) {
 	return this.Persistence.PersistWorld(world)
 }
 
-func (this *StateRepo) SendSensorData(device *Device, service Service, value interface{}) {
+func (this *StateRepo) sendSensorData(device *Device, service Service, value interface{}) {
 	if this.Protocol == nil {
 		log.Println("WARNING: not protocol connected")
 		return

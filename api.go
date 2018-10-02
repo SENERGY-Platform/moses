@@ -51,7 +51,12 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 			http.Error(resp, err.Error(), 400)
 			return
 		}
-		result := state.ReadWorlds(jwt)
+		result, err := state.ReadWorlds(jwt)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+			return
+		}
 		b, err := json.Marshal(result)
 		if err != nil {
 			log.Println("ERROR: ", err)
@@ -140,7 +145,12 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 			return
 		}
 		id := params.ByName("id")
-		result, access, exists := state.ReadWorld(jwt, id)
+		result, access, exists, err := state.ReadWorld(jwt, id)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+			return
+		}
 		if !access {
 			log.Println("WARNING: user access denied")
 			http.Error(resp, "access denied", http.StatusUnauthorized)
@@ -169,7 +179,12 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 			return
 		}
 		id := params.ByName("id")
-		access, exists := state.DeleteWorld(jwt, id)
+		access, exists, err := state.DeleteWorld(jwt, id)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+			return
+		}
 		if !access {
 			log.Println("WARNING: user access denied")
 			http.Error(resp, "access denied", http.StatusUnauthorized)
@@ -272,7 +287,12 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 			return
 		}
 		id := params.ByName("id")
-		result, access, exists := state.ReadRoom(jwt, id)
+		result, access, exists, err := state.ReadRoom(jwt, id)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+			return
+		}
 		if !access {
 			log.Println("WARNING: user access denied")
 			http.Error(resp, "access denied", http.StatusUnauthorized)
@@ -320,45 +340,206 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		fmt.Fprint(resp, "ok")
 	})
 
-	// PUT /device
-	router.PUT("/device", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
+	/*
 
-	})
+		// PUT /device
+		router.PUT("/device", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
+			jwt, err := GetJwt(request)
+			if err != nil {
+				log.Println("ERROR: ", err)
+				http.Error(resp, err.Error(), 400)
+				return
+			}
+			msg := UpdateDeviceRequest{}
+			err = json.NewDecoder(request.Body).Decode(&msg)
+			if err != nil {
+				log.Println("ERROR: ", err)
+				http.Error(resp, err.Error(), 400)
+				return
+			}
+			result, access, exists, err := state.UpdateDevice(jwt, msg)
+			if err != nil {
+				log.Println("ERROR: ", err)
+				http.Error(resp, err.Error(), 500)
+				return
+			}
+			if !access {
+				log.Println("WARNING: user access denied")
+				http.Error(resp, "access denied", http.StatusUnauthorized)
+				return
+			}
+			if !exists {
+				log.Println("WARNING: 404")
+				http.Error(resp, "unknown id", http.StatusNotFound)
+				return
+			}
+			b, err := json.Marshal(result)
+			if err != nil {
+				log.Println("ERROR: ", err)
+				http.Error(resp, err.Error(), 500)
+			} else {
+				fmt.Fprint(resp, string(b))
+			}
+		})
 
-	// POST /device						// nutzt devicetypes; body: {room: "", name: "", desc: "", devicetype: ""}
-	router.POST("/device", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
+		// POST /device
+		router.POST("/device", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
+			jwt, err := GetJwt(request)
+			if err != nil {
+				log.Println("ERROR: ", err)
+				http.Error(resp, err.Error(), 400)
+				return
+			}
+			msg := CreateDeviceRequest{}
+			err = json.NewDecoder(request.Body).Decode(&msg)
+			if err != nil {
+				log.Println("ERROR: ", err)
+				http.Error(resp, err.Error(), 400)
+				return
+			}
+			result, access, worldExists, err := state.CreateDevice(jwt, msg)
+			if err != nil {
+				log.Println("ERROR: ", err)
+				http.Error(resp, err.Error(), 500)
+				return
+			}
+			if !access {
+				log.Println("WARNING: user access denied")
+				http.Error(resp, "access denied", http.StatusUnauthorized)
+				return
+			}
+			if !worldExists {
+				log.Println("WARNING: 404")
+				http.Error(resp, "unknown world ore room id", http.StatusNotFound)
+				return
+			}
+			b, err := json.Marshal(result)
+			if err != nil {
+				log.Println("ERROR: ", err)
+				http.Error(resp, err.Error(), 500)
+			} else {
+				fmt.Fprint(resp, string(b))
+			}
+		})
 
-	})
+		// GET /device/:id
+		router.GET("/device/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
+			jwt, err := GetJwt(request)
+			if err != nil {
+				log.Println("ERROR: ", err)
+				http.Error(resp, err.Error(), 400)
+				return
+			}
+			id := params.ByName("id")
+			result, access, exists := state.DeviceRoom(jwt, id)
+			if !access {
+				log.Println("WARNING: user access denied")
+				http.Error(resp, "access denied", http.StatusUnauthorized)
+				return
+			}
+			if !exists {
+				log.Println("WARNING: 404")
+				http.Error(resp, "unknown id", http.StatusNotFound)
+				return
+			}
+			b, err := json.Marshal(result)
+			if err != nil {
+				log.Println("ERROR: ", err)
+				http.Error(resp, err.Error(), 500)
+			} else {
+				fmt.Fprint(resp, string(b))
+			}
+		})
 
-	// GET /device/:wid
-	router.GET("/device/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
+		// DELETE /device/:wid
+		router.DELETE("/device/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
+			jwt, err := GetJwt(request)
+			if err != nil {
+				log.Println("ERROR: ", err)
+				http.Error(resp, err.Error(), 400)
+				return
+			}
+			id := params.ByName("id")
+			_, access, exists, err := state.DeleteDevice(jwt, id)
+			if err != nil {
+				log.Println("ERROR: ", err)
+				http.Error(resp, err.Error(), 500)
+				return
+			}
+			if !access {
+				log.Println("WARNING: user access denied")
+				http.Error(resp, "access denied", http.StatusUnauthorized)
+				return
+			}
+			if !exists {
+				log.Println("WARNING: 404")
+				http.Error(resp, "unknown id", http.StatusNotFound)
+				return
+			}
+			fmt.Fprint(resp, "ok")
+		})
 
-	})
+		// PUT /service
+		router.PUT("/service", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 
-	// DELETE /device/:wid
-	router.DELETE("/device/:id", func(responseWriter http.ResponseWriter, request *http.Request, params httprouter.Params) {
+		})
 
-	})
+		// POST /service
+		router.POST("/service", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 
-	// PUT /service
-	router.PUT("/service", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
+		})
 
-	})
+		// GET /service/:wid
+		router.GET("/service/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 
-	// POST /service
-	router.POST("/service", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
+		})
 
-	})
+		// DELETE /service/:wid
+		router.DELETE("/service/:id", func(responseWriter http.ResponseWriter, request *http.Request, params httprouter.Params) {
 
-	// GET /service/:wid
-	router.GET("/service/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
+		})
 
-	})
+		// POST /device/bydevicetype
+		router.POST("/device/bydevicetype", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
+			jwt, err := GetJwt(request)
+			if err != nil {
+				log.Println("ERROR: ", err)
+				http.Error(resp, err.Error(), 400)
+				return
+			}
+			msg := CreateDeviceByDtRequest{}
+			err = json.NewDecoder(request.Body).Decode(&msg)
+			if err != nil {
+				log.Println("ERROR: ", err)
+				http.Error(resp, err.Error(), 400)
+				return
+			}
+			result, access, worldExists, err := state.CreateDeviceByDt(jwt, msg)
+			if err != nil {
+				log.Println("ERROR: ", err)
+				http.Error(resp, err.Error(), 500)
+				return
+			}
+			if !access {
+				log.Println("WARNING: user access denied")
+				http.Error(resp, "access denied", http.StatusUnauthorized)
+				return
+			}
+			if !worldExists {
+				log.Println("WARNING: 404")
+				http.Error(resp, "unknown world ore room id", http.StatusNotFound)
+				return
+			}
+			b, err := json.Marshal(result)
+			if err != nil {
+				log.Println("ERROR: ", err)
+				http.Error(resp, err.Error(), 500)
+			} else {
+				fmt.Fprint(resp, string(b))
+			}
+		})
 
-	// DELETE /service/:wid
-	router.DELETE("/service/:id", func(responseWriter http.ResponseWriter, request *http.Request, params httprouter.Params) {
-
-	})
+	*/
 
 	// GET /devicetypes										// lists devicetypes with moses protocol service
 
@@ -510,7 +691,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		})
 
 		router.PUT("/dev/world", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-			world := World{}
+			world := WorldMsg{}
 			err := json.NewDecoder(r.Body).Decode(&world)
 			if err != nil {
 				log.Println("ERROR: ", err)
@@ -527,22 +708,14 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		})
 
 		router.PUT("/dev/world/:worldid/room", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-			room := Room{}
+			room := RoomMsg{}
 			err := json.NewDecoder(r.Body).Decode(&room)
 			if err != nil {
 				log.Println("ERROR: ", err)
 				http.Error(w, err.Error(), 400)
 				return
 			}
-			state.mux.RLock()
-			world, ok := state.Worlds[ps.ByName("worldid")]
-			if !ok {
-				log.Println("404")
-				http.Error(w, "world not found", 404)
-				return
-			}
-			state.mux.RUnlock()
-			err = state.DevUpdateRoom(world.Id, room)
+			err = state.DevUpdateRoom(ps.ByName("worldid"), room)
 			if err != nil {
 				log.Println("ERROR: ", err)
 				http.Error(w, err.Error(), 500)
@@ -552,28 +725,14 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		})
 
 		router.PUT("/dev/world/:worldid/room/:roomid/device", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-			device := Device{}
+			device := DeviceMsg{}
 			err := json.NewDecoder(r.Body).Decode(&device)
 			if err != nil {
 				log.Println("ERROR: ", err)
 				http.Error(w, err.Error(), 400)
 				return
 			}
-			state.mux.RLock()
-			world, ok := state.Worlds[ps.ByName("worldid")]
-			if !ok {
-				log.Println("404")
-				http.Error(w, "world not found", 404)
-				return
-			}
-			room, ok := world.Rooms[ps.ByName("roomid")]
-			if !ok {
-				log.Println("404")
-				http.Error(w, "room not found", 404)
-				return
-			}
-			state.mux.RUnlock()
-			err = state.DevUpdateDevice(world.Id, room.Id, device)
+			err = state.DevUpdateDevice(ps.ByName("worldid"), ps.ByName("roomid"), device)
 			if err != nil {
 				log.Println("ERROR: ", err)
 				http.Error(w, err.Error(), 500)

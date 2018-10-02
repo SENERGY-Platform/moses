@@ -30,40 +30,47 @@ func isAdmin(jwt Jwt) bool {
 	return false
 }
 
-func (this *StateRepo) ReadWorlds(jwt Jwt) (worlds []World) {
+func (this *StateRepo) ReadWorlds(jwt Jwt) (worlds []WorldMsg, err error) {
 	this.mux.RLock()
 	defer this.mux.RUnlock()
 	isAdmin := isAdmin(jwt)
 	for _, world := range this.Worlds {
 		if isAdmin || world.Owner == jwt.UserId {
-			worlds = append(worlds, *world)
+			msg, err := world.ToMsg()
+			if err != nil {
+				return worlds, err
+			}
+			worlds = append(worlds, msg)
 		}
 	}
 	return
 }
 
-func (this *StateRepo) CreateWorld(jwt Jwt, msg CreateWorldRequest) (world World, err error) {
+func (this *StateRepo) CreateWorld(jwt Jwt, msg CreateWorldRequest) (world WorldMsg, err error) {
 	uid, err := uuid.NewRandom()
 	if err != nil {
 		return world, err
 	}
-	world = World{Id: uid.String(), Name: msg.Name, States: msg.States, Owner: jwt.UserId}
+	world = WorldMsg{Id: uid.String(), Name: msg.Name, States: msg.States, Owner: jwt.UserId}
 	err = this.DevUpdateWorld(world)
 	return
 }
 
-func (this *StateRepo) ReadWorld(jwt Jwt, id string) (world World, access bool, exists bool) {
-	world, exists = this.DevGetWorld(id)
-	if !isAdmin(jwt) && world.Owner != jwt.UserId {
-		return World{}, false, exists
+func (this *StateRepo) ReadWorld(jwt Jwt, id string) (world WorldMsg, access bool, exists bool, err error) {
+	world, exists, err = this.DevGetWorld(id)
+	if err != nil {
+		return
 	}
-	return world, true, exists
+	if !isAdmin(jwt) && world.Owner != jwt.UserId {
+		return WorldMsg{}, false, exists, err
+	}
+	return world, true, exists, err
 }
 
-func (this *StateRepo) UpdateWorld(jwt Jwt, msg UpdateWorldRequest) (world World, access bool, exists bool, err error) {
-	world, access, exists = this.ReadWorld(jwt, msg.Id)
-	if !access || !exists {
-		world = World{}
+func (this *StateRepo) UpdateWorld(jwt Jwt, msg UpdateWorldRequest) (world WorldMsg, access bool, exists bool, err error) {
+	world, access, exists, err = this.ReadWorld(jwt, msg.Id)
+	if err != nil || !access || !exists {
+		world = WorldMsg{}
 		return
 	}
 	world.Name = msg.Name
@@ -72,59 +79,52 @@ func (this *StateRepo) UpdateWorld(jwt Jwt, msg UpdateWorldRequest) (world World
 	return
 }
 
-func (this *StateRepo) DeleteWorld(jwt Jwt, id string) (access bool, exists bool) {
-	world, exists := this.DevGetWorld(id)
+func (this *StateRepo) DeleteWorld(jwt Jwt, id string) (access bool, exists bool, err error) {
+	world, exists, err := this.DevGetWorld(id)
+	if err != nil {
+		return access, exists, err
+	}
 	if !isAdmin(jwt) && world.Owner != jwt.UserId {
-		return false, exists
+		return false, exists, err
 	}
 	this.DevDeleteWorld(id)
 	return
 }
 
-func (this *StateRepo) ReadRoom(jwt Jwt, id string) (room RoomResponse, access bool, exists bool) {
+func (this *StateRepo) ReadRoom(jwt Jwt, id string) (room RoomResponse, access bool, exists bool, err error) {
 	this.mux.RLock()
 	defer this.mux.RUnlock()
 	admin := isAdmin(jwt)
 	world, exists := this.roomWorldIndex[id]
 	if !exists {
-		return room, admin, exists
+		return room, admin, exists, nil
 	}
 	if !admin && world.Owner != jwt.UserId {
-		return room, false, exists
+		return room, false, exists, nil
 	}
 	room.World = world.Id
-	room.Room = *(world.Rooms[id])
-	return room, access, exists
+	room.Room, err = world.Rooms[id].ToMsg()
+	return room, access, exists, err
 }
 
 func (this *StateRepo) UpdateRoom(jwt Jwt, msg UpdateRoomRequest) (room RoomResponse, access bool, exists bool, err error) {
-	room, access, exists = this.ReadRoom(jwt, msg.Id)
-	if !access || !exists {
-		return
-	}
-	world, exists := this.DevGetWorld(room.World)
-	if !exists {
-		err = errors.New("inconsistent world existence read")
+	room, access, exists, err = this.ReadRoom(jwt, msg.Id)
+	if err != nil || !access || !exists {
 		return
 	}
 	room.Room.States = msg.States
 	room.Room.Name = msg.Name
 	room.Room.Id = msg.Id
-	world.Rooms[room.Room.Id] = &room.Room
-	err = this.DevUpdateWorld(world)
+	err = this.DevUpdateRoom(room.World, room.Room)
 	return
 }
 
 func (this *StateRepo) CreateRoom(jwt Jwt, msg CreateRoomRequest) (room RoomResponse, access bool, worldExists bool, err error) {
-	world, worldExists := this.DevGetWorld(msg.World)
-	admin := isAdmin(jwt)
-	if !worldExists {
-		return room, admin, worldExists, nil
+	worldMsg := WorldMsg{}
+	worldMsg, access, worldExists, err = this.ReadWorld(jwt, msg.World)
+	if err != nil || !access || !worldExists {
+		return room, access, worldExists, err
 	}
-	if !admin && world.Owner != jwt.UserId {
-		return room, false, worldExists, nil
-	}
-
 	uid, err := uuid.NewRandom()
 	if err != nil {
 		return room, true, true, err
@@ -132,18 +132,21 @@ func (this *StateRepo) CreateRoom(jwt Jwt, msg CreateRoomRequest) (room RoomResp
 	room.Room.Id = uid.String()
 	room.Room.Name = msg.Name
 	room.Room.States = msg.States
-	room.World = world.Id
-	world.Rooms[room.Room.Id] = &room.Room
-	err = this.DevUpdateWorld(world)
+	room.World = worldMsg.Id
+	err = this.DevUpdateRoom(room.World, room.Room)
 	return
 }
 
 func (this *StateRepo) DeleteRoom(jwt Jwt, id string) (room RoomResponse, access bool, exists bool, err error) {
-	room, access, exists = this.ReadRoom(jwt, id)
-	if !access || !exists {
+	room, access, exists, err = this.ReadRoom(jwt, id)
+	if err != nil || !access || !exists {
 		return
 	}
-	world, exists := this.DevGetWorld(room.World)
+	world := WorldMsg{}
+	world, exists, err = this.DevGetWorld(room.World)
+	if err != nil {
+		return
+	}
 	if !exists {
 		err = errors.New("inconsistent world existence read")
 		return

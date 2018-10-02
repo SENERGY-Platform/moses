@@ -115,7 +115,7 @@ func (this *StateRepo) getJsSensorApi(world *World, room *Room, device *Device, 
 func (this *StateRepo) getJsSensorSubApi(device *Device, service Service) map[string]interface{} {
 	return map[string]interface{}{
 		"send": func(value interface{}) {
-			this.SendSensorData(device, service, value)
+			this.sendSensorData(device, service, value)
 		},
 		"input": nil,
 	}
