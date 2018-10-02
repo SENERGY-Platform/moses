@@ -95,8 +95,9 @@ func TestJsvmApi(t *testing.T) {
 				},
 				Devices: map[string]*Device{
 					"device_2": &Device{
-						Id:   "device_2",
-						Name: "Device2",
+						Id:          "device_2",
+						Name:        "Device2",
+						ExternalRef: "device_2",
 						States: map[string]interface{}{
 							"answer": float64(42),
 						},
@@ -249,10 +250,12 @@ func ExampleJsvmService() {
 				},
 				Devices: map[string]*Device{
 					"device_s1": {
-						Id: "device_s1",
+						Id:          "device_s1",
+						ExternalRef: "device_s1",
 						Services: map[string]Service{
 							"sensor_s1": {
 								Id:             "sensor_s1",
+								ExternalRef:    "sensor_s1",
 								Name:           "SenseTemp",
 								SensorInterval: 230 * time.Millisecond,
 								Code: `
@@ -261,8 +264,9 @@ func ExampleJsvmService() {
 								`,
 							},
 							"actuator_a1": {
-								Id:   "actuator_a1",
-								Name: "IncreaseTempBy",
+								Id:          "actuator_a1",
+								ExternalRef: "actuator_a1",
+								Name:        "IncreaseTempBy",
 								Code: `
 									var answer = moses.room.state.get("answer");
 									var temp = moses.room.state.get("temp");

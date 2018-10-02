@@ -26,18 +26,18 @@ import (
 )
 
 type StateRepo struct {
-	Worlds                map[string]*World
-	Graphs                map[string]*Graph
-	Persistence           PersistenceInterface
-	Protocol              ProtocolInterface
-	Config                Config
-	deviceIndex           map[string]*Device
-	deviceRoomIndex       map[string]*Room
-	deviceWorldIndex      map[string]*World
-	roomWorldIndex        map[string]*World
-	changeRoutinesTickers []*time.Ticker
-	stopChannels          []chan bool
-	mux                   sync.RWMutex
+	Worlds                 map[string]*World
+	Graphs                 map[string]*Graph
+	Persistence            PersistenceInterface
+	Protocol               ProtocolInterface
+	Config                 Config
+	externalRefDeviceIndex map[string]*Device
+	deviceRoomIndex        map[string]*Room
+	deviceWorldIndex       map[string]*World
+	roomWorldIndex         map[string]*World
+	changeRoutinesTickers  []*time.Ticker
+	stopChannels           []chan bool
+	mux                    sync.RWMutex
 }
 
 //Update for HTTP-DEV-API
@@ -213,7 +213,7 @@ func (this *StateRepo) Stop() (err error) {
 	}
 	this.stopChannels = nil
 	this.changeRoutinesTickers = nil
-	this.deviceIndex = nil
+	this.externalRefDeviceIndex = nil
 	this.deviceRoomIndex = nil
 	this.deviceWorldIndex = nil
 	this.roomWorldIndex = nil
@@ -228,7 +228,7 @@ func (this *StateRepo) Start() {
 	if err != nil {
 		panic(err)
 	}
-	this.deviceIndex = map[string]*Device{}
+	this.externalRefDeviceIndex = map[string]*Device{}
 	this.deviceRoomIndex = map[string]*Room{}
 	this.deviceWorldIndex = map[string]*World{}
 	this.roomWorldIndex = map[string]*World{}
@@ -260,33 +260,47 @@ func (this *StateRepo) SendSensorData(device *Device, service Service, value int
 		log.Println("WARNING: not protocol connected")
 		return
 	}
-	err := this.Protocol.Send(device.Id, service.Id, service.Marshaller, value)
+	if device.ExternalRef == "" {
+		log.Println("WARNING: no external ref for device")
+		return
+	}
+	if service.ExternalRef == "" {
+		log.Println("WARNING: no external ref for service")
+		return
+	}
+	err := this.Protocol.Send(device.ExternalRef, service.ExternalRef, service.Marshaller, value)
 	if err != nil {
-		log.Println("ERROR: while sending sensor data", value, device.Id, service.Id, err)
+		log.Println("ERROR: while sending sensor data", value, device.ExternalRef, service.ExternalRef, err)
 	}
 }
 
-func (this *StateRepo) HandleCommand(deviceId string, serviceId string, cmdMsg interface{}, responder func(respMsg interface{})) {
+func (this *StateRepo) HandleCommand(externalDeviceRef string, externalServiceRef string, cmdMsg interface{}, responder func(respMsg interface{})) {
 	this.mux.RLock()
 	defer this.mux.RUnlock()
-	world, ok := this.deviceWorldIndex[deviceId]
+	device, ok := this.externalRefDeviceIndex[externalDeviceRef]
 	if !ok {
-		log.Println("WARNING: no world for device found ", deviceId)
+		log.Println("WARNING: no device with ref found ", externalDeviceRef)
+		return
 	}
-	room, ok := this.deviceRoomIndex[deviceId]
+	world, ok := this.deviceWorldIndex[device.Id]
 	if !ok {
-		log.Println("WARNING: no room for device found ", deviceId)
+		log.Println("WARNING: no world for device found ", device.Id, " ", externalDeviceRef)
+		return
 	}
-	device, ok := this.deviceIndex[deviceId]
+	room, ok := this.deviceRoomIndex[device.Id]
 	if !ok {
-		log.Println("WARNING: no device with id found ", deviceId)
+		log.Println("WARNING: no room for device found ", device.Id, " ", externalDeviceRef)
+		return
 	}
-	service, ok := device.Services[serviceId]
-	if !ok {
-		log.Println("WARNING: no matching service for device found ", serviceId)
+
+	for _, service := range device.Services {
+		if service.ExternalRef == externalServiceRef {
+			err := run(service.Code, this.getJsCommandApi(world, room, device, cmdMsg, responder), this.Config.JsTimeout, &world.mux)
+			if err != nil {
+				log.Println("ERROR: while handling command in jsvm", err)
+			}
+			return
+		}
 	}
-	err := run(service.Code, this.getJsCommandApi(world, room, device, cmdMsg, responder), this.Config.JsTimeout, &world.mux)
-	if err != nil {
-		log.Println("ERROR: while handling command in jsvm", err)
-	}
+	log.Println("WARNING: no matching service for device found ", externalServiceRef)
 }

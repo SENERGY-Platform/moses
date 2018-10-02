@@ -68,8 +68,7 @@ type Room struct {
 type Device struct {
 	Id             string                 `json:"id" bson:"id"`
 	Name           string                 `json:"name" bson:"name"`
-	DeviceType     string                 `json:"device_type" bson:"device_type"`
-	Meta           map[string]string      `json:"meta" bson:"meta"`
+	ExternalRef    string                 `json:"external_ref" bson:"external_ref"` //platform intern device id; 1:1
 	States         map[string]interface{} `json:"states" bson:"states"`
 	ChangeRoutines []ChangeRoutine        `json:"change_routines" bson:"change_routines"`
 	Services       map[string]Service     `json:"services" bson:"services"`
@@ -78,6 +77,7 @@ type Device struct {
 type Service struct {
 	Id             string                `json:"id" bson:"id"`
 	Name           string                `json:"name" bson:"name"`
+	ExternalRef    string                `json:"external_ref" bson:"external_ref"` //platform intern service id
 	SensorInterval time.Duration         `json:"sensor_interval" bson:"sensor_interval"`
 	Code           string                `json:"code"`
 	Marshaller     marshaller.Marshaller `json:"marshaller" bson:"marshaller"`
