@@ -326,3 +326,17 @@ func (this *StateRepo) UpdateService(jwt Jwt, msg UpdateServiceRequest) (service
 	err = this.DevUpdateDevice(service.World, service.Room, device.Device)
 	return service, access, exists, err
 }
+
+func (this *StateRepo) DeleteService(jwt Jwt, id string) (service ServiceResponse, access bool, exists bool, err error) {
+	service, access, exists, err = this.ReadService(jwt, id)
+	if err != nil || !access || !exists {
+		return
+	}
+	device, access, exists, err := this.ReadDevice(jwt, service.Device)
+	if err != nil || !access || !exists {
+		return service, access, exists, err
+	}
+	delete(device.Device.Services, service.Service.Id)
+	err = this.DevUpdateDevice(device.World, device.Room, device.Device)
+	return
+}

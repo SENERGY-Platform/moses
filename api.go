@@ -484,22 +484,144 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 
 	// PUT /service
 	router.PUT("/service", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-
+		jwt, err := GetJwt(request)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 400)
+			return
+		}
+		msg := UpdateServiceRequest{}
+		err = json.NewDecoder(request.Body).Decode(&msg)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 400)
+			return
+		}
+		result, access, exists, err := state.UpdateService(jwt, msg)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+			return
+		}
+		if !access {
+			log.Println("WARNING: user access denied")
+			http.Error(resp, "access denied", http.StatusUnauthorized)
+			return
+		}
+		if !exists {
+			log.Println("WARNING: 404")
+			http.Error(resp, "unknown id", http.StatusNotFound)
+			return
+		}
+		b, err := json.Marshal(result)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+		} else {
+			fmt.Fprint(resp, string(b))
+		}
 	})
 
 	// POST /service
 	router.POST("/service", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-
+		jwt, err := GetJwt(request)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 400)
+			return
+		}
+		msg := CreateServiceRequest{}
+		err = json.NewDecoder(request.Body).Decode(&msg)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 400)
+			return
+		}
+		result, access, worldAndRoomExists, err := state.CreateService(jwt, msg)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+			return
+		}
+		if !access {
+			log.Println("WARNING: user access denied")
+			http.Error(resp, "access denied", http.StatusUnauthorized)
+			return
+		}
+		if !worldAndRoomExists {
+			log.Println("WARNING: 404")
+			http.Error(resp, "unknown world or room id", http.StatusNotFound)
+			return
+		}
+		b, err := json.Marshal(result)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+		} else {
+			fmt.Fprint(resp, string(b))
+		}
 	})
 
 	// GET /service/:wid
 	router.GET("/service/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-
+		jwt, err := GetJwt(request)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 400)
+			return
+		}
+		id := params.ByName("id")
+		result, access, exists, err := state.ReadService(jwt, id)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+			return
+		}
+		if !access {
+			log.Println("WARNING: user access denied")
+			http.Error(resp, "access denied", http.StatusUnauthorized)
+			return
+		}
+		if !exists {
+			log.Println("WARNING: 404")
+			http.Error(resp, "unknown id", http.StatusNotFound)
+			return
+		}
+		b, err := json.Marshal(result)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+		} else {
+			fmt.Fprint(resp, string(b))
+		}
 	})
 
 	// DELETE /service/:wid
-	router.DELETE("/service/:id", func(responseWriter http.ResponseWriter, request *http.Request, params httprouter.Params) {
-
+	router.DELETE("/service/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
+		jwt, err := GetJwt(request)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 400)
+			return
+		}
+		id := params.ByName("id")
+		_, access, exists, err := state.DeleteService(jwt, id)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+			return
+		}
+		if !access {
+			log.Println("WARNING: user access denied")
+			http.Error(resp, "access denied", http.StatusUnauthorized)
+			return
+		}
+		if !exists {
+			log.Println("WARNING: 404")
+			http.Error(resp, "unknown id", http.StatusNotFound)
+			return
+		}
+		fmt.Fprint(resp, "ok")
 	})
 
 	// POST /device/bydevicetype
