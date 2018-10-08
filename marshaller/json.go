@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"moses/iotmodel"
 	"reflect"
 	"strconv"
 	"strings"
@@ -41,8 +42,8 @@ func FormatToJson(value InputOutput) (result string, err error) {
 }
 
 func FormatToJsonStruct(value InputOutput) (result interface{}, err error) {
-	if !GetAllowedValuesBase().IsPrimitive(ValueType{BaseType: value.Type.Base}) {
-		if GetAllowedValuesBase().IsSet(ValueType{BaseType: value.Type.Base}) {
+	if !iotmodel.GetAllowedValuesBase().IsPrimitive(iotmodel.ValueType{BaseType: value.Type.Base}) {
+		if iotmodel.GetAllowedValuesBase().IsSet(iotmodel.ValueType{BaseType: value.Type.Base}) {
 			list := []interface{}{}
 			for _, val := range value.Values {
 				element, err := FormatToJsonStruct(val)
@@ -65,14 +66,14 @@ func FormatToJsonStruct(value InputOutput) (result interface{}, err error) {
 	} else {
 		effectiveValue := value.Value
 		switch value.Type.Base {
-		case XsdBool:
+		case iotmodel.XsdBool:
 			return strings.TrimSpace(effectiveValue) == "true", err
-		case XsdInt:
+		case iotmodel.XsdInt:
 			f, err := strconv.ParseFloat(effectiveValue, 64)
 			return int64(f), err
-		case XsdFloat:
+		case iotmodel.XsdFloat:
 			return strconv.ParseFloat(effectiveValue, 64)
-		case XsdString:
+		case iotmodel.XsdString:
 			return effectiveValue, err
 		default:
 			temp, _ := json.MarshalIndent(value, "", "     ")
@@ -83,7 +84,7 @@ func FormatToJsonStruct(value InputOutput) (result interface{}, err error) {
 	return
 }
 
-func ParseFromJson(valueType ValueType, value string) (result InputOutput, err error) {
+func ParseFromJson(valueType iotmodel.ValueType, value string) (result InputOutput, err error) {
 	var valueInterface interface{}
 	err = json.Unmarshal([]byte(value), &valueInterface)
 	if err != nil {
@@ -97,14 +98,14 @@ func ParseFromJson(valueType ValueType, value string) (result InputOutput, err e
 	return
 }
 
-func ParseFromJsonInterface(valueType ValueType, valueInterface interface{}) (result InputOutput, err error) {
+func ParseFromJsonInterface(valueType iotmodel.ValueType, valueInterface interface{}) (result InputOutput, err error) {
 	result.Type.Name = valueType.Name
 	result.Type.Desc = valueType.Description
 	result.Type.Id = valueType.Id
 	result.Type.Base = valueType.BaseType
 	switch value := valueInterface.(type) {
 	case map[string]interface{}:
-		if result.Type.Base != MapBaseType && result.Type.Base != StructBaseType && result.Type.Base != IndexStructBaseType {
+		if result.Type.Base != iotmodel.MapBaseType && result.Type.Base != iotmodel.StructBaseType && result.Type.Base != iotmodel.IndexStructBaseType {
 			log.Println("WARNING: used basetype is not consistent to map", result.Type)
 			return
 		}
@@ -115,7 +116,7 @@ func ParseFromJsonInterface(valueType ValueType, valueInterface interface{}) (re
 			}
 		}
 	case []interface{}:
-		if result.Type.Base != ListBaseType {
+		if result.Type.Base != iotmodel.ListBaseType {
 			log.Println("WARNING: used basetype is not consistent to list", result.Type)
 			return
 		}
@@ -126,7 +127,7 @@ func ParseFromJsonInterface(valueType ValueType, valueInterface interface{}) (re
 			}
 		}
 	case bool:
-		if result.Type.Base != XsdBool {
+		if result.Type.Base != iotmodel.XsdBool {
 			log.Println("WARNING: used basetype is not consistent to boolean", result.Type)
 			return
 		}
@@ -136,20 +137,20 @@ func ParseFromJsonInterface(valueType ValueType, valueInterface interface{}) (re
 			result.Value = "false"
 		}
 	case string:
-		if result.Type.Base != XsdString {
+		if result.Type.Base != iotmodel.XsdString {
 			log.Println("WARNING: used basetype is not consistent to string", result.Type)
 			return
 		}
 		result.Value = value
 	case float64:
-		if result.Type.Base != XsdInt && result.Type.Base != XsdFloat {
+		if result.Type.Base != iotmodel.XsdInt && result.Type.Base != iotmodel.XsdFloat {
 			log.Println("WARNING: used basetype is not consistent to number", result.Type)
 			return
 		}
-		if result.Type.Base == XsdInt {
+		if result.Type.Base == iotmodel.XsdInt {
 			result.Value = strconv.FormatInt(int64(value), 10)
 		}
-		if result.Type.Base == XsdFloat {
+		if result.Type.Base == iotmodel.XsdFloat {
 			result.Value = strconv.FormatFloat(value, 'f', -1, 64)
 		}
 	case nil:
@@ -160,7 +161,7 @@ func ParseFromJsonInterface(valueType ValueType, valueInterface interface{}) (re
 	return
 }
 
-func handleJsonChild(valueType ValueType, value interface{}, childName string, result *[]InputOutput) (err error) {
+func handleJsonChild(valueType iotmodel.ValueType, value interface{}, childName string, result *[]InputOutput) (err error) {
 	childField, err := getChildFiled(valueType, childName)
 	if err != nil || childField.Id == "" {
 		log.Println("WARNING: error while trying to find matching field in valuetype (ignore value)", childName, err)
@@ -181,8 +182,8 @@ func handleJsonChild(valueType ValueType, value interface{}, childName string, r
 	return
 }
 
-func getChildFiled(valueType ValueType, childName string) (childField FieldType, err error) {
-	allowed := GetAllowedValuesBase()
+func getChildFiled(valueType iotmodel.ValueType, childName string) (childField iotmodel.FieldType, err error) {
+	allowed := iotmodel.GetAllowedValuesBase()
 	switch {
 	case allowed.IsCollection(valueType):
 		return valueType.Fields[0], err

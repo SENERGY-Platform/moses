@@ -626,16 +626,76 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 
 	// POST /device/bydevicetype
 	router.POST("/device/bydevicetype", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-
+		jwt, err := GetJwt(request)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 400)
+			return
+		}
+		msg := CreateDeviceByTypeRequest{}
+		err = json.NewDecoder(request.Body).Decode(&msg)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 400)
+			return
+		}
+		result, access, worldAndRoomExists, err := state.CreateDeviceByType(jwt, msg)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+			return
+		}
+		if !access {
+			log.Println("WARNING: user access denied")
+			http.Error(resp, "access denied", http.StatusUnauthorized)
+			return
+		}
+		if !worldAndRoomExists {
+			log.Println("WARNING: 404")
+			http.Error(resp, "unknown world or room id", http.StatusNotFound)
+			return
+		}
+		b, err := json.Marshal(result)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+		} else {
+			fmt.Fprint(resp, string(b))
+		}
 	})
 
-	// GET /devicetypes										// lists devicetypes with moses protocol service
+	// GET /devicetypes
+	// returns list of device type ids which use the moses protocol
+	// to get DeviceType objects you can call the permsearch endpoint POST /ids/select/:resource_kind/:right ; /ids/select/:resource_kind/:right/:limit/:offset/:orderfeature/:direction or by requesting the iot repository
+	router.GET("/devicetypes", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
+		jwt, err := GetJwt(request)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 400)
+			return
+		}
+		result, err := state.GetDeviceTypesIds(jwt)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+			return
+		}
+		b, err := json.Marshal(result)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+		} else {
+			fmt.Fprint(resp, string(b))
+		}
+	})
 
-	// PUT /changeroutine					//{id:"", ref_type:"workd|room|device", ref_id: "", interval: 0, code:""}
+	// POST /changeroutine					//{ref_type:"workd|room|device", ref_id: "", interval: 0, code:""}
+	// PUT /changeroutine					//{id:"", interval: 0, code:""}
 	// GET /changeroutine/:routineid
+	// DELETE /changeroutine/:routineid
 
-	// PUT /template 			// body: {id: "", ref_type:"optional", ref_id: "", templ_id: "", name: "", desc: "", interval:0, parameter: {<<param_name>>: <<param_value>>}}
-	// POST /template 			// body: {ref_type:"workd|room|device", ref_id: "", templ_id: "", name: "", desc: "", parameter: {<<param_name>>: <<param_value>>}}
+	// PUT /usetemplate 			// body: {id: "", templ_id: "", name: "", desc: "", interval:0, parameter: {<<param_name>>: <<param_value>>}}
+	// POST /usetemplate 			// body: {ref_type:"workd|room|device", ref_id: "", templ_id: "", name: "", desc: "", parameter: {<<param_name>>: <<param_value>>}}
 
 	// POST /routinetemplate				// body: {name: "", desc: "", templ:""}
 	// PUT /routinetemplate					// body: {id: "", name: "", desc: "", templ:""}

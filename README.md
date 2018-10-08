@@ -30,7 +30,7 @@ the room sub API can access device sub APIs of its children (ref State-Hierarchi
 
 services have additionally to these state-apis access to a service api object which allows access to the input variable with `moses.service.input`.
 routinely called sensor-services have access to a send function with `moses.service.send()` but there input variable is `null`.
-services which are called from outside have a input variable if one is send. they can respond with `moses.service.respond()`.
+services which are called from outside have a input variable if one is send. they can respond with `moses.service.send()`.
 
 #### World-Api
 - world: object //world-sub-api of current world
@@ -74,7 +74,7 @@ services which are called from outside have a input variable if one is send. the
 - input: null               //if service is called by timer as sensor, no input parameter is given
 
 #### Actuator-Sub-Api
-- respond: function(anything)  //sends data to outside world
+- send: function(anything)  //sends data to outside world
 - input: anything           //input parameter from outside world call
 
 #### State-Sub-Api
@@ -121,6 +121,6 @@ moses.service.send(temp);
 var temp = moses.room.state.get("temp");
 temp = temp + moses.service.input.temp;
 moses.room.state.set("temp", temp);
-moses.service.respond({"newtemp":temp});
+moses.service.send({"newtemp":temp});
 ```
 

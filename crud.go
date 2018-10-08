@@ -18,7 +18,10 @@ package main
 
 import (
 	"errors"
+	"github.com/cbroglie/mustache"
 	"github.com/google/uuid"
+	"moses/iotmodel"
+	"moses/marshaller"
 )
 
 func isAdmin(jwt Jwt) bool {
@@ -339,4 +342,97 @@ func (this *StateRepo) DeleteService(jwt Jwt, id string) (service ServiceRespons
 	delete(device.Device.Services, service.Service.Id)
 	err = this.DevUpdateDevice(device.World, device.Room, device.Device)
 	return
+}
+
+func (this *StateRepo) CreateDeviceByType(jwt Jwt, msg CreateDeviceByTypeRequest) (result DeviceResponse, access bool, worldAndExists bool, err error) {
+	room := RoomResponse{}
+	room, access, worldAndExists, err = this.ReadRoom(jwt, msg.Room)
+	if err != nil || !access || !worldAndExists {
+		return result, access, worldAndExists, err
+	}
+	services, err := this.prepareServices(jwt, msg.DeviceTypeId)
+	if err != nil {
+		return result, access, worldAndExists, err
+	}
+	externalDevice, err := this.GenerateExternalDevice(jwt, msg)
+	if err != nil {
+		return result, access, worldAndExists, err
+	}
+	uid, err := uuid.NewRandom()
+	if err != nil {
+		return result, access, worldAndExists, err
+	}
+	result.Device.Id = uid.String()
+	result.Device.Name = msg.Name
+	result.Device.ExternalRef = externalDevice.Url
+	result.World = room.World
+	result.Room = msg.Room
+	result.Device.Services = services
+	err = this.DevUpdateDevice(result.World, result.Room, result.Device)
+	return
+}
+
+func (this *StateRepo) prepareServices(jwt Jwt, deviceTypeId string) (result map[string]Service, err error) {
+	result = map[string]Service{}
+	devicetype, err := this.GetIotDeviceType(jwt, deviceTypeId)
+	if err != nil {
+		return result, err
+	}
+	for _, externalService := range devicetype.Services {
+		if externalService.Protocol.ProtocolHandlerUrl == this.Config.KafkaProtocolTopic {
+			uid, err := uuid.NewRandom()
+			if err != nil {
+				return result, err
+			}
+			service := Service{Id: uid.String(), Name: externalService.Name, ExternalRef: externalService.Id, Marshaller: marshaller.Marshaller{Service: externalService}}
+			service.Code, err = this.createServiceCodeSkeleton(externalService)
+			if err != nil {
+				return result, err
+			}
+			result[service.Id] = service
+		}
+	}
+	return result, err
+}
+
+func (this *StateRepo) createServiceCodeSkeleton(service iotmodel.Service) (result string, err error) {
+	templateParamer := map[string]string{}
+	if len(service.Output) > 0 {
+		output := service.Output[0]
+		io, err := marshaller.SkeletonFromAssignment(output, iotmodel.GetAllowedValuesBase())
+		if err != nil {
+			return result, err
+		}
+		formatedOutput, err := marshaller.FormatToJson(io)
+		if err != nil {
+			return result, err
+		}
+		templateParamer["output"] = formatedOutput
+	}
+
+	if len(service.Input) > 0 {
+		input := service.Input[0]
+		io, err := marshaller.SkeletonFromAssignment(input, iotmodel.GetAllowedValuesBase())
+		if err != nil {
+			return result, err
+		}
+		formatedInput, err := marshaller.FormatToJson(io)
+		if err != nil {
+			return result, err
+		}
+		templateParamer["input"] = formatedInput
+	}
+
+	template := ` 
+{{#input}} 
+/* {{{.}}} */
+var input = moses.service.input; 
+{{/input}}
+
+{{#output}}
+var output = {{{.}}}; 
+moses.service.send(output);
+{{/output}}
+`
+	return mustache.Render(template, templateParamer)
 }

@@ -132,7 +132,7 @@ func (this *StateRepo) getJsCommandApi(world *World, room *Room, device *Device,
 
 func (this *StateRepo) getJsCommandSubApi(cmdMsg interface{}, responder func(respMsg interface{})) interface{} {
 	return map[string]interface{}{
-		"input":   cmdMsg,
-		"respond": responder,
+		"input": cmdMsg,
+		"send":  responder,
 	}
 }

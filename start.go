@@ -22,9 +22,11 @@ import (
 
 func (this *StateRepo) StartWorld(world *World) (tickers []*time.Ticker, stops []chan bool, err error) {
 	for _, routine := range world.ChangeRoutines {
-		ticker, stop := startChangeRoutine(routine, this.getJsWorldApi(world), this.Config.JsTimeout, &world.mux)
-		tickers = append(tickers, ticker)
-		stops = append(stops, stop)
+		if routine.Interval > 0 {
+			ticker, stop := startChangeRoutine(routine, this.getJsWorldApi(world), this.Config.JsTimeout, &world.mux)
+			tickers = append(tickers, ticker)
+			stops = append(stops, stop)
+		}
 	}
 	for _, room := range world.Rooms {
 		roomtickers, roomstops, err := this.StartRoom(world, room)
@@ -40,9 +42,11 @@ func (this *StateRepo) StartWorld(world *World) (tickers []*time.Ticker, stops [
 func (this *StateRepo) StartRoom(world *World, room *Room) (tickers []*time.Ticker, stops []chan bool, err error) {
 	this.roomWorldIndex[room.Id] = world
 	for _, routine := range room.ChangeRoutines {
-		ticker, stop := startChangeRoutine(routine, this.getJsRoomApi(world, room), this.Config.JsTimeout, &world.mux)
-		tickers = append(tickers, ticker)
-		stops = append(stops, stop)
+		if routine.Interval > 0 {
+			ticker, stop := startChangeRoutine(routine, this.getJsRoomApi(world, room), this.Config.JsTimeout, &world.mux)
+			tickers = append(tickers, ticker)
+			stops = append(stops, stop)
+		}
 	}
 	for _, device := range room.Devices {
 		roomtickers, roomstops, err := this.StartDevice(world, room, device)
@@ -60,9 +64,11 @@ func (this *StateRepo) StartDevice(world *World, room *Room, device *Device) (ti
 	this.deviceRoomIndex[device.Id] = room
 	this.deviceWorldIndex[device.Id] = world
 	for _, routine := range device.ChangeRoutines {
-		ticker, stop := startChangeRoutine(routine, this.getJsDeviceApi(world, room, device), this.Config.JsTimeout, &world.mux)
-		tickers = append(tickers, ticker)
-		stops = append(stops, stop)
+		if routine.Interval > 0 {
+			ticker, stop := startChangeRoutine(routine, this.getJsDeviceApi(world, room, device), this.Config.JsTimeout, &world.mux)
+			tickers = append(tickers, ticker)
+			stops = append(stops, stop)
+		}
 	}
 	for _, service := range device.Services {
 		roomtickers, roomstops, err := this.StartService(world, room, device, service)

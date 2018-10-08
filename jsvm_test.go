@@ -272,7 +272,7 @@ func ExampleJsvmService() {
 									var temp = moses.room.state.get("temp");
 									temp = temp + moses.service.input.temp;
 									moses.room.state.set("temp", temp);
-									moses.service.respond({"answer":answer, "temp":temp});
+									moses.service.send({"answer":answer, "temp":temp});
 								`,
 							},
 						},
@@ -409,7 +409,7 @@ func _ExampleJsvmService() {
 								Code: `
 									temp = temp + moses.service.input.temp;
 									moses.device.state.set("soll_temp", temp);
-									moses.service.respond(null);
+									moses.service.send(null);
 								`,
 							},
 						},

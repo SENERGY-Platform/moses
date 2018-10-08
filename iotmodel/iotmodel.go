@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package marshaller
+package iotmodel
 
 type Service struct {
 	Id          string           `json:"id,omitempty" bson:"id"`
@@ -26,11 +26,11 @@ type Service struct {
 }
 
 type Protocol struct {
-	Id                 string       `json:"id"`
-	ProtocolHandlerUrl string       `json:"protocol_handler_url"`
-	Name               string       `json:"name"`
-	Desc               string       `json:"description"`
-	MsgStructure       []MsgSegment `json:"msg_structure"`
+	Id                 string       `json:"id,omitempty"`
+	ProtocolHandlerUrl string       `json:"protocol_handler_url,omitempty"`
+	Name               string       `json:"name,omitempty"`
+	Desc               string       `json:"description,omitempty"`
+	MsgStructure       []MsgSegment `json:"msg_structure,omitempty"`
 }
 
 type TypeAssignment struct {
@@ -57,6 +57,22 @@ type ValueType struct {
 	BaseType    string      `json:"base_type,omitempty" bson:"base_type"`
 	Fields      []FieldType `json:"fields" bson:"fields"`
 	Literal     string      `json:"literal" bson:"literal"` //is literal, if not empty
+}
+
+type DeviceInstance struct {
+	Id         string   `json:"id,omitempty"`
+	Name       string   `json:"name,omitempty"`
+	DeviceType string   `json:"device_type,omitempty"`
+	Url        string   `json:"uri,omitempty"`
+	Tags       []string `json:"tags"`
+	UserTags   []string `json:"user_tags"`
+	Gateway    string   `json:"gateway,omitempty"`
+	ImgUrl     string   `json:"img,omitempty"`
+}
+
+type DeviceType struct {
+	Id       string    `json:"id,omitempty"`
+	Services []Service `json:"services,omitempty"`
 }
 
 const (

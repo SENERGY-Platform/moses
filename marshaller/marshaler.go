@@ -19,10 +19,11 @@ package marshaller
 import (
 	"encoding/json"
 	"log"
+	"moses/iotmodel"
 )
 
 type Marshaller struct {
-	Service Service `json:"service" bson:"service"`
+	Service iotmodel.Service `json:"service" bson:"service"`
 }
 
 type ProtocolPart struct {
