@@ -31,6 +31,7 @@ type StateRepo struct {
 	Persistence            PersistenceInterface
 	Protocol               ProtocolInterface
 	Config                 Config
+	changeRoutineIndex     map[string]ChangeRoutineIndexElement
 	externalRefDeviceIndex map[string]*Device
 	serviceDeviceIndex     map[string]*Device
 	deviceRoomIndex        map[string]*Room
@@ -235,6 +236,7 @@ func (this *StateRepo) Stop() (err error) {
 	}
 	this.stopChannels = nil
 	this.changeRoutinesTickers = nil
+	this.changeRoutineIndex = nil
 	this.externalRefDeviceIndex = nil
 	this.serviceDeviceIndex = nil
 	this.deviceRoomIndex = nil
@@ -251,6 +253,7 @@ func (this *StateRepo) Start() {
 	if err != nil {
 		panic(err)
 	}
+	this.changeRoutineIndex = map[string]ChangeRoutineIndexElement{}
 	this.externalRefDeviceIndex = map[string]*Device{}
 	this.serviceDeviceIndex = map[string]*Device{}
 	this.deviceRoomIndex = map[string]*Room{}

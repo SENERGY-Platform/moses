@@ -22,6 +22,7 @@ import (
 
 func (this *StateRepo) StartWorld(world *World) (tickers []*time.Ticker, stops []chan bool, err error) {
 	for _, routine := range world.ChangeRoutines {
+		this.changeRoutineIndex[routine.Id] = ChangeRoutineIndexElement{Id: routine.Id, RefType: "world", RefId: world.Id}
 		if routine.Interval > 0 {
 			ticker, stop := startChangeRoutine(routine, this.getJsWorldApi(world), this.Config.JsTimeout, &world.mux)
 			tickers = append(tickers, ticker)
@@ -42,6 +43,7 @@ func (this *StateRepo) StartWorld(world *World) (tickers []*time.Ticker, stops [
 func (this *StateRepo) StartRoom(world *World, room *Room) (tickers []*time.Ticker, stops []chan bool, err error) {
 	this.roomWorldIndex[room.Id] = world
 	for _, routine := range room.ChangeRoutines {
+		this.changeRoutineIndex[routine.Id] = ChangeRoutineIndexElement{Id: routine.Id, RefType: "room", RefId: room.Id}
 		if routine.Interval > 0 {
 			ticker, stop := startChangeRoutine(routine, this.getJsRoomApi(world, room), this.Config.JsTimeout, &world.mux)
 			tickers = append(tickers, ticker)
@@ -64,6 +66,7 @@ func (this *StateRepo) StartDevice(world *World, room *Room, device *Device) (ti
 	this.deviceRoomIndex[device.Id] = room
 	this.deviceWorldIndex[device.Id] = world
 	for _, routine := range device.ChangeRoutines {
+		this.changeRoutineIndex[routine.Id] = ChangeRoutineIndexElement{Id: routine.Id, RefType: "device", RefId: device.Id}
 		if routine.Interval > 0 {
 			ticker, stop := startChangeRoutine(routine, this.getJsDeviceApi(world, room, device), this.Config.JsTimeout, &world.mux)
 			tickers = append(tickers, ticker)

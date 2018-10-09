@@ -101,8 +101,8 @@ func TestJsvmApi(t *testing.T) {
 						States: map[string]interface{}{
 							"answer": float64(42),
 						},
-						ChangeRoutines: []ChangeRoutine{
-							{
+						ChangeRoutines: map[string]ChangeRoutine{
+							"5": {
 								Interval: 500 * time.Millisecond,
 								Code: `
 									var deviceAnswer = moses.device.state.get("answer");
@@ -176,8 +176,8 @@ func TestJsvmApi2(t *testing.T) {
 				},
 			},
 		},
-		ChangeRoutines: []ChangeRoutine{
-			{
+		ChangeRoutines: map[string]ChangeRoutine{
+			"4": {
 				Interval: 500 * time.Millisecond,
 				Code: `
 						//Example for World-Change-Routine
@@ -280,8 +280,8 @@ func ExampleJsvmService() {
 				},
 			},
 		},
-		ChangeRoutines: []ChangeRoutine{
-			{
+		ChangeRoutines: map[string]ChangeRoutine{
+			"3": {
 				Interval: 200 * time.Millisecond,
 				Code: `
 						//Example for World-Change-Routine
@@ -380,7 +380,7 @@ func _ExampleJsvmService() {
 					"device_s1": {
 						Id:     "device_s1",
 						States: map[string]interface{}{},
-						ChangeRoutines: []ChangeRoutine{{
+						ChangeRoutines: map[string]ChangeRoutine{"1": {
 							Interval: 1 * time.Hour,
 							Code: `
 								var rtemp = moses.room.state.get("temp");	
@@ -417,8 +417,8 @@ func _ExampleJsvmService() {
 				},
 			},
 		},
-		ChangeRoutines: []ChangeRoutine{
-			{
+		ChangeRoutines: map[string]ChangeRoutine{
+			"2": {
 				Interval: 200 * time.Millisecond,
 				Code: `
 						//Example for World-Change-Routine

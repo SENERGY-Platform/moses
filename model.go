@@ -33,6 +33,12 @@ type Graph struct {
 	Values []Point `json:"values" bson:"values"`
 }
 
+type ChangeRoutineIndexElement struct {
+	Id      string
+	RefType string // "world" || "room" || "device"
+	RefId   string
+}
+
 type ChangeRoutine struct {
 	Id       string        `json:"id" bson:"id"`
 	Interval time.Duration `json:"interval" bson:"interval"`
@@ -48,30 +54,30 @@ type RoutineTemplate struct {
 }
 
 type World struct {
-	Id             string                 `json:"id" bson:"id"`
-	Owner          string                 `json:"-" bson:"owner"`
-	Name           string                 `json:"name" bson:"name"`
-	States         map[string]interface{} `json:"states" bson:"states"`
-	Rooms          map[string]*Room       `json:"rooms" bson:"rooms"`
-	ChangeRoutines []ChangeRoutine        `json:"change_routines" bson:"change_routines"`
-	mux            sync.Mutex             `json:"-" bson:"-"`
+	Id             string                   `json:"id" bson:"id"`
+	Owner          string                   `json:"-" bson:"owner"`
+	Name           string                   `json:"name" bson:"name"`
+	States         map[string]interface{}   `json:"states" bson:"states"`
+	Rooms          map[string]*Room         `json:"rooms" bson:"rooms"`
+	ChangeRoutines map[string]ChangeRoutine `json:"change_routines" bson:"change_routines"`
+	mux            sync.Mutex               `json:"-" bson:"-"`
 }
 
 type Room struct {
-	Id             string                 `json:"id" bson:"id"`
-	Name           string                 `json:"name" bson:"name"`
-	States         map[string]interface{} `json:"states" bson:"states"`
-	Devices        map[string]*Device     `json:"devices" bson:"devices"`
-	ChangeRoutines []ChangeRoutine        `json:"change_routines" bson:"change_routines"`
+	Id             string                   `json:"id" bson:"id"`
+	Name           string                   `json:"name" bson:"name"`
+	States         map[string]interface{}   `json:"states" bson:"states"`
+	Devices        map[string]*Device       `json:"devices" bson:"devices"`
+	ChangeRoutines map[string]ChangeRoutine `json:"change_routines" bson:"change_routines"`
 }
 
 type Device struct {
-	Id             string                 `json:"id" bson:"id"`
-	Name           string                 `json:"name" bson:"name"`
-	ExternalRef    string                 `json:"external_ref" bson:"external_ref"` //platform intern device id; 1:1
-	States         map[string]interface{} `json:"states" bson:"states"`
-	ChangeRoutines []ChangeRoutine        `json:"change_routines" bson:"change_routines"`
-	Services       map[string]Service     `json:"services" bson:"services"`
+	Id             string                   `json:"id" bson:"id"`
+	Name           string                   `json:"name" bson:"name"`
+	ExternalRef    string                   `json:"external_ref" bson:"external_ref"` //platform intern device id; 1:1
+	States         map[string]interface{}   `json:"states" bson:"states"`
+	ChangeRoutines map[string]ChangeRoutine `json:"change_routines" bson:"change_routines"`
+	Services       map[string]Service       `json:"services" bson:"services"`
 }
 
 type Service struct {

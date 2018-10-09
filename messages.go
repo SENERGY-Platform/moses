@@ -99,32 +99,54 @@ type CreateServiceRequest struct {
 	Code           string        `json:"code"`
 }
 
+//{ref_type:"workd|room|device", ref_id: "", interval: 0, code:""}
+type CreateChangeRoutineRequest struct {
+	RefType  string        `json:"ref_type"` // "world" || "room" || "device"
+	RefId    string        `json:"ref_id"`
+	Interval time.Duration `json:"interval"`
+	Code     string        `json:"code"`
+}
+
+type UpdateChangeRoutineRequest struct {
+	Id       string        `json:"id"`
+	Interval time.Duration `json:"interval"`
+	Code     string        `json:"code"`
+}
+
+type ChangeRoutineResponse struct {
+	Id       string        `json:"id"`
+	RefType  string        `json:"ref_type"` // "world" || "room" || "device"
+	RefId    string        `json:"ref_id"`
+	Interval time.Duration `json:"interval"`
+	Code     string        `json:"code"`
+}
+
 // msg variants of model without pointers for thread safety
 
 type WorldMsg struct {
-	Id             string                 `json:"id"`
-	Owner          string                 `json:"-"`
-	Name           string                 `json:"name"`
-	States         map[string]interface{} `json:"states"`
-	Rooms          map[string]RoomMsg     `json:"rooms"`
-	ChangeRoutines []ChangeRoutine        `json:"change_routines"`
+	Id             string                   `json:"id"`
+	Owner          string                   `json:"-"`
+	Name           string                   `json:"name"`
+	States         map[string]interface{}   `json:"states"`
+	Rooms          map[string]RoomMsg       `json:"rooms"`
+	ChangeRoutines map[string]ChangeRoutine `json:"change_routines"`
 }
 
 type RoomMsg struct {
-	Id             string                 `json:"id"`
-	Name           string                 `json:"name"`
-	States         map[string]interface{} `json:"states"`
-	Devices        map[string]DeviceMsg   `json:"devices"`
-	ChangeRoutines []ChangeRoutine        `json:"change_routines"`
+	Id             string                   `json:"id"`
+	Name           string                   `json:"name"`
+	States         map[string]interface{}   `json:"states"`
+	Devices        map[string]DeviceMsg     `json:"devices"`
+	ChangeRoutines map[string]ChangeRoutine `json:"change_routines"`
 }
 
 type DeviceMsg struct {
-	Id             string                 `json:"id"`
-	Name           string                 `json:"name"`
-	ExternalRef    string                 `json:"external_ref"` //platform intern device id; 1:1
-	States         map[string]interface{} `json:"states"`
-	ChangeRoutines []ChangeRoutine        `json:"change_routines"`
-	Services       map[string]Service     `json:"services"`
+	Id             string                   `json:"id"`
+	Name           string                   `json:"name"`
+	ExternalRef    string                   `json:"external_ref"` //platform intern device id; 1:1
+	States         map[string]interface{}   `json:"states"`
+	ChangeRoutines map[string]ChangeRoutine `json:"change_routines"`
+	Services       map[string]Service       `json:"services"`
 }
 
 func jsonCopy(from interface{}, to interface{}) (err error) {

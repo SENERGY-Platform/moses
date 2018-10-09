@@ -689,10 +689,147 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		}
 	})
 
-	// POST /changeroutine					//{ref_type:"workd|room|device", ref_id: "", interval: 0, code:""}
 	// PUT /changeroutine					//{id:"", interval: 0, code:""}
+	router.PUT("/changeroutine", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
+		jwt, err := GetJwt(request)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 400)
+			return
+		}
+		msg := UpdateChangeRoutineRequest{}
+		err = json.NewDecoder(request.Body).Decode(&msg)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 400)
+			return
+		}
+		result, access, exists, err := state.UpdateChangeRoutine(jwt, msg)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+			return
+		}
+		if !access {
+			log.Println("WARNING: user access denied")
+			http.Error(resp, "access denied", http.StatusUnauthorized)
+			return
+		}
+		if !exists {
+			log.Println("WARNING: 404")
+			http.Error(resp, "unknown id", http.StatusNotFound)
+			return
+		}
+		b, err := json.Marshal(result)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+		} else {
+			fmt.Fprint(resp, string(b))
+		}
+	})
+
+	// POST /changeroutine					//{ref_type:"workd|room|device", ref_id: "", interval: 0, code:""}
+	router.POST("/changeroutine", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
+		jwt, err := GetJwt(request)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 400)
+			return
+		}
+		msg := CreateChangeRoutineRequest{}
+		err = json.NewDecoder(request.Body).Decode(&msg)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 400)
+			return
+		}
+		result, access, exists, err := state.CreateChangeRoutine(jwt, msg)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+			return
+		}
+		if !access {
+			log.Println("WARNING: user access denied")
+			http.Error(resp, "access denied", http.StatusUnauthorized)
+			return
+		}
+		if !exists {
+			log.Println("WARNING: 404")
+			http.Error(resp, "unknown world, room ore device id", http.StatusNotFound)
+			return
+		}
+		b, err := json.Marshal(result)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+		} else {
+			fmt.Fprint(resp, string(b))
+		}
+	})
+
 	// GET /changeroutine/:routineid
+	router.GET("/changeroutine/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
+		jwt, err := GetJwt(request)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 400)
+			return
+		}
+		id := params.ByName("id")
+		result, access, exists, err := state.ReadChangeRoutine(jwt, id)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+			return
+		}
+		if !access {
+			log.Println("WARNING: user access denied")
+			http.Error(resp, "access denied", http.StatusUnauthorized)
+			return
+		}
+		if !exists {
+			log.Println("WARNING: 404")
+			http.Error(resp, "unknown id", http.StatusNotFound)
+			return
+		}
+		b, err := json.Marshal(result)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+		} else {
+			fmt.Fprint(resp, string(b))
+		}
+	})
+
 	// DELETE /changeroutine/:routineid
+	router.DELETE("/changeroutine/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
+		jwt, err := GetJwt(request)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 400)
+			return
+		}
+		id := params.ByName("id")
+		_, access, exists, err := state.DeleteChangeRoutine(jwt, id)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+			return
+		}
+		if !access {
+			log.Println("WARNING: user access denied")
+			http.Error(resp, "access denied", http.StatusUnauthorized)
+			return
+		}
+		if !exists {
+			log.Println("WARNING: 404")
+			http.Error(resp, "unknown id", http.StatusNotFound)
+			return
+		}
+		fmt.Fprint(resp, "ok")
+	})
 
 	// PUT /usetemplate 			// body: {id: "", templ_id: "", name: "", desc: "", interval:0, parameter: {<<param_name>>: <<param_value>>}}
 	// POST /usetemplate 			// body: {ref_type:"workd|room|device", ref_id: "", templ_id: "", name: "", desc: "", parameter: {<<param_name>>: <<param_value>>}}
@@ -702,10 +839,6 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	// GET /routinetemplates			// contains default templates created by moses
 	// GET /routinetemplate/:id			// body: {id: "", name: "", desc: "", templ:"", parameter: [""]}
 	// DELETE /routinetemplate/:id
-
-	// DELETE /world/:wid/changeroutine/:routineid
-	// DELETE /world/:wid/room/:rid/changeroutine/:routineid
-	// DELETE /world/:wid/room/:rid/device/:did/changeroutine/:routineid
 
 	/////////////////////////////////////////////////////////////////////////////////////////////////////
 	///////////////////////////////////////	 DEV - API  /////////////////////////////////////////////////

@@ -436,3 +436,143 @@ moses.service.send(output);
 `
 	return mustache.Render(template, templateParamer)
 }
+
+func (this *StateRepo) CreateChangeRoutine(jwt Jwt, msg CreateChangeRoutineRequest) (result ChangeRoutineResponse, access bool, exists bool, err error) {
+	uid, err := uuid.NewRandom()
+	if err != nil {
+		return result, access, exists, err
+	}
+	routine := ChangeRoutine{Interval: msg.Interval, Code: msg.Code, Id: uid.String()}
+	result = ChangeRoutineResponse{Id: routine.Id, Code: routine.Code, Interval: routine.Interval, RefId: msg.RefId, RefType: msg.RefType}
+	switch msg.RefType {
+	case "world":
+		world, access, exists, err := this.ReadWorld(jwt, msg.RefId)
+		if err != nil || !access || !exists {
+			return result, access, exists, err
+		}
+		world.ChangeRoutines[routine.Id] = routine
+		err = this.DevUpdateWorld(world)
+	case "room":
+		room, access, exists, err := this.ReadRoom(jwt, msg.RefId)
+		if err != nil || !access || !exists {
+			return result, access, exists, err
+		}
+		room.Room.ChangeRoutines[routine.Id] = routine
+		err = this.DevUpdateRoom(room.World, room.Room)
+	case "device":
+		device, access, exists, err := this.ReadDevice(jwt, msg.RefId)
+		if err != nil || !access || !exists {
+			return result, access, exists, err
+		}
+		device.Device.ChangeRoutines[routine.Id] = routine
+		err = this.DevUpdateDevice(device.World, device.Room, device.Device)
+	}
+	return result, access, exists, err
+}
+
+func (this *StateRepo) UpdateChangeRoutine(jwt Jwt, msg UpdateChangeRoutineRequest) (routine ChangeRoutineResponse, access bool, exists bool, err error) {
+	routine, access, exists, err = this.ReadChangeRoutine(jwt, msg.Id)
+	if err != nil || !access || !exists {
+		return routine, access, exists, err
+	}
+	switch routine.RefType {
+	case "world":
+		world, access, exists, err := this.ReadWorld(jwt, routine.RefId)
+		if err != nil || !access || !exists {
+			return routine, access, exists, err
+		}
+		world.ChangeRoutines[msg.Id] = ChangeRoutine{Interval: msg.Interval, Code: msg.Code, Id: msg.Id}
+		err = this.DevUpdateWorld(world)
+	case "room":
+		room, access, exists, err := this.ReadRoom(jwt, routine.RefId)
+		if err != nil || !access || !exists {
+			return routine, access, exists, err
+		}
+		room.Room.ChangeRoutines[msg.Id] = ChangeRoutine{Interval: msg.Interval, Code: msg.Code, Id: msg.Id}
+		err = this.DevUpdateRoom(room.World, room.Room)
+	case "device":
+		device, access, exists, err := this.ReadDevice(jwt, routine.RefId)
+		if err != nil || !access || !exists {
+			return routine, access, exists, err
+		}
+		device.Device.ChangeRoutines[msg.Id] = ChangeRoutine{Interval: msg.Interval, Code: msg.Code, Id: msg.Id}
+		err = this.DevUpdateDevice(device.World, device.Room, device.Device)
+	}
+	return routine, access, exists, err
+}
+
+func (this *StateRepo) ReadChangeRoutine(jwt Jwt, id string) (routine ChangeRoutineResponse, access bool, exists bool, err error) {
+	this.mux.RLock()
+	defer this.mux.RUnlock()
+	index, exists := this.changeRoutineIndex[id]
+	if !exists {
+		return routine, access, exists, err
+	}
+	routine.RefType = index.RefType
+	routine.RefId = index.RefId
+	routine.Id = id
+	switch routine.RefType {
+	case "world":
+		world, access, exists, err := this.ReadWorld(jwt, routine.RefId)
+		if err != nil || !access || !exists {
+			return routine, access, exists, err
+		}
+		worldRoutine, ok := world.ChangeRoutines[routine.Id]
+		if !ok {
+			return routine, access, exists, errors.New("inconsistent routine id existence")
+		}
+		routine.Code = worldRoutine.Code
+		routine.Interval = worldRoutine.Interval
+	case "room":
+		room, access, exists, err := this.ReadRoom(jwt, routine.RefId)
+		if err != nil || !access || !exists {
+			return routine, access, exists, err
+		}
+		roomRoutine, ok := room.Room.ChangeRoutines[routine.Id]
+		if !ok {
+			return routine, access, exists, errors.New("inconsistent routine id existence")
+		}
+		routine.Code = roomRoutine.Code
+		routine.Interval = roomRoutine.Interval
+	case "device":
+		device, access, exists, err := this.ReadDevice(jwt, routine.RefId)
+		if err != nil || !access || !exists {
+			return routine, access, exists, err
+		}
+		deviceRoutine, ok := device.Device.ChangeRoutines[routine.Id]
+		if !ok {
+			return routine, access, exists, errors.New("inconsistent routine id existence")
+		}
+		routine.Code = deviceRoutine.Code
+		routine.Interval = deviceRoutine.Interval
+	}
+	return routine, access, exists, err
+}
+
+func (this *StateRepo) DeleteChangeRoutine(jwt Jwt, id string) (routine ChangeRoutineResponse, access bool, exists bool, err error) {
+	routine, access, exists, err = this.ReadChangeRoutine(jwt, id)
+	if err != nil || !access || !exists {
+		return
+	}
+	switch routine.RefType {
+	case "world":
+		world, access, exists, err := this.ReadWorld(jwt, routine.RefId)
+		if err != nil || !access || !exists {
+			return routine, access, exists, err
+		}
+		err = this.DevUpdateWorld(world)
+	case "room":
+		room, access, exists, err := this.ReadRoom(jwt, routine.RefId)
+		if err != nil || !access || !exists {
+			return routine, access, exists, err
+		}
+		err = this.DevUpdateRoom(room.World, room.Room)
+	case "device":
+		device, access, exists, err := this.ReadDevice(jwt, routine.RefId)
+		if err != nil || !access || !exists {
+			return routine, access, exists, err
+		}
+		err = this.DevUpdateDevice(device.World, device.Room, device.Device)
+	}
+	return
+}
