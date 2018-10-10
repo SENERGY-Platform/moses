@@ -624,3 +624,23 @@ func (this *StateRepo) DeleteTemplate(jwt Jwt, id string) (err error) {
 func (this *StateRepo) ReadTemplates(jwt Jwt) (result []RoutineTemplate, err error) {
 	return this.Persistence.GetTemplates()
 }
+
+func (this *StateRepo) UpdateChangeRoutineByTemplate(jwt Jwt, msg UpdateChangeRoutineByTemplateRequest) (routine ChangeRoutineResponse, access bool, exists bool, err error) {
+	templ, exists, err := this.ReadTemplate(jwt, msg.TemplId)
+	if err != nil || !exists {
+		return routine, true, exists, err
+	}
+	updateRequest := UpdateChangeRoutineRequest{Id: msg.RoutineId, Interval: msg.Interval}
+	updateRequest.Code, err = RenderTempl(templ.Template, msg.Parameter)
+	return this.UpdateChangeRoutine(jwt, updateRequest)
+}
+
+func (this *StateRepo) CreateChangeRoutineByTemplate(jwt Jwt, msg CreateChangeRoutineByTemplateRequest) (routine ChangeRoutineResponse, access bool, exists bool, err error) {
+	templ, exists, err := this.ReadTemplate(jwt, msg.TemplId)
+	if err != nil || !exists {
+		return routine, true, exists, err
+	}
+	createRequest := CreateChangeRoutineRequest{RefId: msg.RefId, RefType: msg.RefType, Interval: msg.Interval}
+	createRequest.Code, err = RenderTempl(templ.Template, msg.Parameter)
+	return this.CreateChangeRoutine(jwt, createRequest)
+}

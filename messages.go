@@ -134,6 +134,22 @@ type UpdateTemplateRequest struct {
 	Template    string `json:"template"`
 }
 
+//  {ref_type:"workd|room|device", ref_id: "", templ_id: "", name: "", desc: "", parameter: {<<param_name>>: <<param_value>>}}
+type CreateChangeRoutineByTemplateRequest struct {
+	RefType   string            `json:"ref_type"` // "world" || "room" || "device"
+	RefId     string            `json:"ref_id"`
+	TemplId   string            `json:"templ_id"`
+	Interval  time.Duration     `json:"interval"`
+	Parameter map[string]string `json:"parameter"`
+}
+
+type UpdateChangeRoutineByTemplateRequest struct {
+	RoutineId string            `json:"routine_id""`
+	TemplId   string            `json:"templ_id"`
+	Interval  time.Duration     `json:"interval"`
+	Parameter map[string]string `json:"parameter"`
+}
+
 // msg variants of model without pointers for thread safety
 
 type WorldMsg struct {

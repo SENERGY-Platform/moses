@@ -37,3 +37,7 @@ func GetTemplateParameterList(str string) (result []string, err error) {
 	}
 	return
 }
+
+func RenderTempl(templ string, parameter interface{}) (result string, err error) {
+	return mustache.Render(templ, parameter)
+}

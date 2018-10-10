@@ -757,7 +757,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		}
 		if !exists {
 			log.Println("WARNING: 404")
-			http.Error(resp, "unknown world, room ore device id", http.StatusNotFound)
+			http.Error(resp, "unknown world, room or device id", http.StatusNotFound)
 			return
 		}
 		b, err := json.Marshal(result)
@@ -983,8 +983,85 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		fmt.Fprint(resp, "ok")
 	})
 
-	// PUT /usetemplate 			// body: {id: "", templ_id: "", name: "", desc: "", interval:0, parameter: {<<param_name>>: <<param_value>>}}
 	// POST /usetemplate 			// body: {ref_type:"workd|room|device", ref_id: "", templ_id: "", name: "", desc: "", parameter: {<<param_name>>: <<param_value>>}}
+	router.POST("/usetemplate", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
+		jwt, err := GetJwt(request)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 400)
+			return
+		}
+		msg := CreateChangeRoutineByTemplateRequest{}
+		err = json.NewDecoder(request.Body).Decode(&msg)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 400)
+			return
+		}
+		result, access, exists, err := state.CreateChangeRoutineByTemplate(jwt, msg)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+			return
+		}
+		if !access {
+			log.Println("WARNING: user access denied")
+			http.Error(resp, "access denied", http.StatusUnauthorized)
+			return
+		}
+		if !exists {
+			log.Println("WARNING: 404")
+			http.Error(resp, "unknown world, room or device id", http.StatusNotFound)
+			return
+		}
+		b, err := json.Marshal(result)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+		} else {
+			fmt.Fprint(resp, string(b))
+		}
+	})
+
+	// PUT /usetemplate 			// body: {id: "", templ_id: "", name: "", desc: "", interval:0, parameter: {<<param_name>>: <<param_value>>}}
+	router.PUT("/usetemplate", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
+		jwt, err := GetJwt(request)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 400)
+			return
+		}
+		msg := UpdateChangeRoutineByTemplateRequest{}
+		err = json.NewDecoder(request.Body).Decode(&msg)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 400)
+			return
+		}
+		result, access, exists, err := state.UpdateChangeRoutineByTemplate(jwt, msg)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+			return
+		}
+		if !access {
+			log.Println("WARNING: user access denied")
+			http.Error(resp, "access denied", http.StatusUnauthorized)
+			return
+		}
+		if !exists {
+			log.Println("WARNING: 404")
+			http.Error(resp, "unknown id", http.StatusNotFound)
+			return
+		}
+		b, err := json.Marshal(result)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+		} else {
+			fmt.Fprint(resp, string(b))
+		}
+	})
 
 	/////////////////////////////////////////////////////////////////////////////////////////////////////
 	///////////////////////////////////////	 DEV - API  /////////////////////////////////////////////////
