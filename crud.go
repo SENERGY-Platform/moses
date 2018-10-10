@@ -19,6 +19,7 @@ package main
 import (
 	"errors"
 	"github.com/cbroglie/mustache"
+	"github.com/globalsign/mgo"
 	"github.com/google/uuid"
 	"moses/iotmodel"
 	"moses/marshaller"
@@ -575,4 +576,51 @@ func (this *StateRepo) DeleteChangeRoutine(jwt Jwt, id string) (routine ChangeRo
 		err = this.DevUpdateDevice(device.World, device.Room, device.Device)
 	}
 	return
+}
+
+func (this *StateRepo) CreateTemplate(jwt Jwt, request CreateTemplateRequest) (result RoutineTemplate, err error) {
+	uid, err := uuid.NewRandom()
+	if err != nil {
+		return result, err
+	}
+	result = RoutineTemplate{Id: uid.String(), Name: result.Name, Description: result.Description, Template: request.Template}
+	result.Parameter, err = GetTemplateParameterList(request.Template)
+	if err != nil {
+		return result, err
+	}
+	err = this.Persistence.PersistTemplate(result)
+	return result, err
+}
+
+func (this *StateRepo) UpdateTemplate(jwt Jwt, request UpdateTemplateRequest) (result RoutineTemplate, exists bool, err error) {
+	result, err = this.Persistence.GetTemplate(request.Id)
+	if err == mgo.ErrNotFound {
+		return result, false, nil
+	}
+	if err != nil {
+		return result, false, err
+	}
+	result = RoutineTemplate{Id: request.Id, Name: result.Name, Description: result.Description, Template: request.Template}
+	result.Parameter, err = GetTemplateParameterList(request.Template)
+	if err != nil {
+		return result, true, err
+	}
+	err = this.Persistence.PersistTemplate(result)
+	return result, true, err
+}
+
+func (this *StateRepo) ReadTemplate(jwt Jwt, id string) (result RoutineTemplate, exists bool, err error) {
+	result, err = this.Persistence.GetTemplate(id)
+	if err == mgo.ErrNotFound {
+		return result, false, nil
+	}
+	return result, true, err
+}
+
+func (this *StateRepo) DeleteTemplate(jwt Jwt, id string) (err error) {
+	return this.Persistence.DeleteTemplate(id)
+}
+
+func (this *StateRepo) ReadTemplates(jwt Jwt) (result []RoutineTemplate, err error) {
+	return this.Persistence.GetTemplates()
 }

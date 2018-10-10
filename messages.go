@@ -121,6 +121,19 @@ type ChangeRoutineResponse struct {
 	Code     string        `json:"code"`
 }
 
+type CreateTemplateRequest struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Template    string `json:"template"`
+}
+
+type UpdateTemplateRequest struct {
+	Id          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Template    string `json:"template"`
+}
+
 // msg variants of model without pointers for thread safety
 
 type WorldMsg struct {

@@ -40,6 +40,10 @@ func (this PersistenceMock) GetTemplate(id string) (templ RoutineTemplate, err e
 	return templ, nil
 }
 
+func (this PersistenceMock) GetTemplates() (templ []RoutineTemplate, err error) {
+	return templ, nil
+}
+
 func (this PersistenceMock) DeleteWorld(id string) error {
 	return nil
 }

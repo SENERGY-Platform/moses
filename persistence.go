@@ -28,6 +28,7 @@ type PersistenceInterface interface {
 	LoadWorlds() (map[string]*World, error)
 	LoadGraphs() (map[string]*Graph, error)
 	GetTemplate(id string) (templ RoutineTemplate, err error)
+	GetTemplates() (templ []RoutineTemplate, err error)
 	DeleteWorld(id string) error
 	DeleteGraph(id string) error
 	DeleteTemplate(id string) error
@@ -91,6 +92,13 @@ func (this MongoPersistence) GetTemplate(id string) (templ RoutineTemplate, err 
 	session, collection := this.getTemplateCollection()
 	defer session.Close()
 	err = collection.Find(bson.M{"id": templ.Id}).One(&templ)
+	return
+}
+
+func (this MongoPersistence) GetTemplates() (templ []RoutineTemplate, err error) {
+	session, collection := this.getTemplateCollection()
+	defer session.Close()
+	err = collection.Find(nil).All(&templ)
 	return
 }
 
