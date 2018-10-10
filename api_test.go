@@ -19,103 +19,11 @@ package main
 import (
 	"encoding/json"
 	"io/ioutil"
-	"log"
-	"moses/marshaller"
 	"net/http"
-	"net/http/httptest"
-	"os"
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 )
-
-type PersistenceMock struct{}
-
-func (this PersistenceMock) PersistTemplate(templ RoutineTemplate) error {
-	return nil
-}
-
-func (this PersistenceMock) GetTemplate(id string) (templ RoutineTemplate, err error) {
-	return templ, nil
-}
-
-func (this PersistenceMock) GetTemplates() (templ []RoutineTemplate, err error) {
-	return templ, nil
-}
-
-func (this PersistenceMock) DeleteWorld(id string) error {
-	return nil
-}
-
-func (this PersistenceMock) DeleteGraph(id string) error {
-	return nil
-}
-
-func (this PersistenceMock) DeleteTemplate(id string) error {
-	return nil
-}
-
-func (this PersistenceMock) PersistWorld(world World) (err error) {
-	return
-}
-
-func (this PersistenceMock) PersistGraph(graph Graph) (err error) {
-	return
-}
-
-func (this PersistenceMock) LoadWorlds() (result map[string]*World, err error) {
-	return
-}
-
-func (this PersistenceMock) LoadGraphs() (result map[string]*Graph, err error) {
-	return
-}
-
-type ProtocolMock struct{}
-
-var test_send_values = []SendMock{}
-var test_receiver func(deviceId string, serviceId string, cmdMsg interface{}, responder func(respMsg interface{}))
-
-type SendMock struct {
-	Device  string
-	Service string
-	Value   interface{}
-}
-
-func (this *ProtocolMock) Send(deviceId string, serviceId string, marshaller marshaller.Marshaller, value interface{}) (err error) {
-	test_send_values = append(test_send_values, SendMock{Device: deviceId, Service: serviceId, Value: value})
-	return
-}
-
-func (this *ProtocolMock) SetReceiver(receiver func(deviceId string, serviceId string, cmdMsg interface{}, responder func(respMsg interface{}))) {
-	test_receiver = receiver
-}
-
-func (this *ProtocolMock) Start() (err error) {
-	return
-}
-
-var testserver *httptest.Server
-
-func TestMain(m *testing.M) {
-	staterepo := &StateRepo{Persistence: PersistenceMock{}, Config: Config{JsTimeout: 2 * time.Second}, Protocol: &ProtocolMock{}}
-	err := staterepo.Load()
-	if err != nil {
-		log.Fatal("unable to load state repo: ", err)
-	}
-	log.Println("start state routines")
-	staterepo.Start()
-	routes := getRoutes(Config{DevApi: "true"}, staterepo)
-	logger := Logger(routes, "CALL")
-	testserver = httptest.NewServer(logger)
-	defer testserver.Close()
-	os.Exit(m.Run())
-}
-
-func TestStartup(t *testing.T) {
-
-}
 
 func TestDevApi(t *testing.T) {
 	w := World{Id: "world_1", Name: "World1", Rooms: map[string]*Room{"room_1": &Room{Id: "room_1", Name: "Room1", Devices: map[string]*Device{"device_1": &Device{Id: "device_1", Name: "Device1"}}}}}
@@ -124,7 +32,7 @@ func TestDevApi(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := &http.Client{}
-	req, err := http.NewRequest("PUT", testserver.URL+"/dev/world", strings.NewReader(string(b)))
+	req, err := http.NewRequest("PUT", mockserver.URL+"/dev/world", strings.NewReader(string(b)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +45,7 @@ func TestDevApi(t *testing.T) {
 		t.Fatal(resp.Status, string(body))
 	}
 
-	resp, err = http.Get(testserver.URL + "/dev/worlds")
+	resp, err = http.Get(mockserver.URL + "/dev/worlds")
 	if resp.StatusCode != 200 {
 		body, _ := ioutil.ReadAll(resp.Body)
 		t.Fatal(resp.Status, string(body))
@@ -151,7 +59,7 @@ func TestDevApi(t *testing.T) {
 		t.Fatal(worlds)
 	}
 
-	resp, err = http.Get(testserver.URL + "/dev/world/world_1")
+	resp, err = http.Get(mockserver.URL + "/dev/world/world_1")
 	if resp.StatusCode != 200 {
 		body, _ := ioutil.ReadAll(resp.Body)
 		t.Fatal(resp.Status, string(body))
@@ -173,7 +81,7 @@ func TestDevApi(t *testing.T) {
 		t.Fatal(err)
 	}
 	client = &http.Client{}
-	req, err = http.NewRequest("PUT", testserver.URL+"/dev/world/world_1/room/room_1/device", strings.NewReader(string(b)))
+	req, err = http.NewRequest("PUT", mockserver.URL+"/dev/world/world_1/room/room_1/device", strings.NewReader(string(b)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +96,7 @@ func TestDevApi(t *testing.T) {
 
 	w.Rooms["room_1"].Devices["device_2"] = &d2
 
-	resp, err = http.Get(testserver.URL + "/dev/world/world_1")
+	resp, err = http.Get(mockserver.URL + "/dev/world/world_1")
 	if resp.StatusCode != 200 {
 		body, _ := ioutil.ReadAll(resp.Body)
 		t.Fatal(resp.Status, string(body))
@@ -202,7 +110,7 @@ func TestDevApi(t *testing.T) {
 		t.Fatal("unequal ", w, w3)
 	}
 
-	resp, err = http.Get(testserver.URL + "/dev/world/world_1/room/room_1/device/device_2")
+	resp, err = http.Get(mockserver.URL + "/dev/world/world_1/room/room_1/device/device_2")
 	if resp.StatusCode != 200 {
 		body, _ := ioutil.ReadAll(resp.Body)
 		t.Fatal(resp.Status, string(body))

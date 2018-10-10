@@ -125,7 +125,7 @@ func TestJsvmApi(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := &http.Client{}
-	req, err := http.NewRequest("PUT", testserver.URL+"/dev/world", strings.NewReader(string(b)))
+	req, err := http.NewRequest("PUT", mockserver.URL+"/dev/world", strings.NewReader(string(b)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func TestJsvmApi(t *testing.T) {
 
 	time.Sleep(2 * time.Second)
 
-	resp, err = http.Get(testserver.URL + "/dev/world/world_2")
+	resp, err = http.Get(mockserver.URL + "/dev/world/world_2")
 	if resp.StatusCode != 200 {
 		body, _ := ioutil.ReadAll(resp.Body)
 		t.Fatal(resp.Status, string(body))
@@ -200,7 +200,7 @@ func TestJsvmApi2(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := &http.Client{}
-	req, err := http.NewRequest("PUT", testserver.URL+"/dev/world", strings.NewReader(string(b)))
+	req, err := http.NewRequest("PUT", mockserver.URL+"/dev/world", strings.NewReader(string(b)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +215,7 @@ func TestJsvmApi2(t *testing.T) {
 
 	time.Sleep(2 * time.Second)
 
-	resp, err = http.Get(testserver.URL + "/dev/world/world_3")
+	resp, err = http.Get(mockserver.URL + "/dev/world/world_3")
 	if resp.StatusCode != 200 {
 		body, _ := ioutil.ReadAll(resp.Body)
 		t.Fatal(resp.Status, string(body))
@@ -304,7 +304,7 @@ func ExampleJsvmService() {
 		fmt.Println(err)
 	}
 	client := &http.Client{}
-	req, err := http.NewRequest("PUT", testserver.URL+"/dev/world", strings.NewReader(string(b)))
+	req, err := http.NewRequest("PUT", mockserver.URL+"/dev/world", strings.NewReader(string(b)))
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -339,7 +339,7 @@ func ExampleJsvmService() {
 		fmt.Println(err)
 	}
 	client = &http.Client{}
-	req, err = http.NewRequest("PUT", testserver.URL+"/dev/world/world_4/room", strings.NewReader(string(b)))
+	req, err = http.NewRequest("PUT", mockserver.URL+"/dev/world/world_4/room", strings.NewReader(string(b)))
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -441,7 +441,7 @@ func _ExampleJsvmService() {
 		fmt.Println(err)
 	}
 	client := &http.Client{}
-	req, err := http.NewRequest("PUT", testserver.URL+"/dev/world", strings.NewReader(string(b)))
+	req, err := http.NewRequest("PUT", mockserver.URL+"/dev/world", strings.NewReader(string(b)))
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -476,7 +476,7 @@ func _ExampleJsvmService() {
 		fmt.Println(err)
 	}
 	client = &http.Client{}
-	req, err = http.NewRequest("PUT", testserver.URL+"/dev/world/world_4/room", strings.NewReader(string(b)))
+	req, err = http.NewRequest("PUT", mockserver.URL+"/dev/world/world_4/room", strings.NewReader(string(b)))
 	if err != nil {
 		fmt.Println(err)
 	}

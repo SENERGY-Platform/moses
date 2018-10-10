@@ -53,16 +53,19 @@ func NewMongoPersistence(config Config) (result MongoPersistence, err error) {
 }
 
 func (this MongoPersistence) getWorldCollection() (session *mgo.Session, collection *mgo.Collection) {
+	session = this.session.Copy()
 	collection = session.DB(this.tableName).C(this.worldCollectionName)
 	return
 }
 
 func (this MongoPersistence) getGraphCollection() (session *mgo.Session, collection *mgo.Collection) {
+	session = this.session.Copy()
 	collection = session.DB(this.tableName).C(this.graphCollectionName)
 	return
 }
 
 func (this MongoPersistence) getTemplateCollection() (session *mgo.Session, collection *mgo.Collection) {
+	session = this.session.Copy()
 	collection = session.DB(this.tableName).C(this.templateCollectionName)
 	return
 }
