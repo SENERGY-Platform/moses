@@ -155,8 +155,18 @@ func TestJsvmApi(t *testing.T) {
 	w.States["answer"] = float64(42)
 	w.Rooms["room_1"].States["answer"] = float64(42)
 	w.Rooms["room_1"].States["counter"] = float64(3)
-	if !reflect.DeepEqual(w, w2) {
-		t.Fatal("unexpected result", w, w2)
+
+	var compa interface{}
+	var compb interface{}
+
+	abuffer, _ := json.Marshal(w)
+	json.Unmarshal(abuffer, &compa)
+
+	bbuffer, _ := json.Marshal(w2)
+	json.Unmarshal(bbuffer, &compb)
+
+	if !reflect.DeepEqual(compa, compb) {
+		t.Fatal("unexpected result", compa, compb)
 	}
 }
 

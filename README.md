@@ -1,6 +1,16 @@
 # My Own Smart Environment Simulator (MOSES)
 A simulator for smart environments
 
+## Dependencies
+* Persists data on Mongodb
+* Calls the Iot-Repository from the SEPL-Project
+* Publishes messages to Kafka (+Zookeeper)
+* tests create docker containers
+    * testing host needs access to fgseitsrancher.wifa.intern.uni-leipzig.de:5000/iot-ontology docker image
+    * testing host needs access to fgseitsrancher.wifa.intern.uni-leipzig.de:5000/iot-device-repository docker image
+    * testing host needs access to fgseitsrancher.wifa.intern.uni-leipzig.de:5000/permissionsearch docker image
+* Golang library dependencies are managed by go.mod file
+
 ## State-Hierarchies 
 
 ### world
