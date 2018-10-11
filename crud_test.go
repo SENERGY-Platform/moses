@@ -145,16 +145,38 @@ func TestSimpleCrud(t *testing.T) {
 		t.Fatal("unexpected get response", deviceUpdate, device)
 	}
 
-	//get world by id
-	//compare world with gotten one
-	//add room
-	//compare room output with input
-	//get room by id & compare
-	//update room & compare result
-	//add device
-	//compare device output with input
-	//get device by id
-	//compare device with gotten one
+	expectedRoom := RoomResponse{World: world.Id, Room: room.Room}
+	expectedRoom.Room.Devices = map[string]DeviceMsg{device.Device.Id: device.Device}
+	room = RoomResponse{}
+	err = httpRequest("GET", integratedServer.URL+"/room/"+roomUpdate.Id, nil, &room)
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+	if room.World == "" || room.Room.Id == "" || !reflect.DeepEqual(room, expectedRoom) {
+		t.Fatal("unexpected get response", expectedRoom, room)
+	}
+
+	expectedWorld := world
+	expectedWorld.Rooms = map[string]RoomMsg{expectedRoom.Room.Id: expectedRoom.Room}
+
+	world = WorldMsg{}
+	err = httpRequest("GET", integratedServer.URL+"/world/"+worldUpdate.Id, nil, &world)
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+	if world.Id == "" || !reflect.DeepEqual(world, expectedWorld) {
+		t.Fatal("unexpected get response", expectedWorld, world)
+	}
+
+	worlds := []WorldMsg{}
+	err = httpRequest("GET", integratedServer.URL+"/worlds", nil, &worlds)
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+	if !reflect.DeepEqual(worlds, []WorldMsg{expectedWorld}) {
+		t.Fatal("unexpected get response", expectedWorld, worlds)
+	}
+
 	//add change routines to all levels
 	//get world list and compare deep
 	//get world by id and compare deep
