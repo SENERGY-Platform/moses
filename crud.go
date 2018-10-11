@@ -296,6 +296,9 @@ func (this *StateRepo) CreateService(jwt Jwt, msg CreateServiceRequest) (service
 	service.World = device.World
 	service.Room = device.Room
 	service.Device = device.Device.Id
+	if device.Device.Services == nil {
+		device.Device.Services = map[string]Service{}
+	}
 	device.Device.Services[service.Service.Id], err = this.PopulateServiceService(jwt, service.Service)
 	if err != nil {
 		return service, access, worldAndExists, err
@@ -310,7 +313,9 @@ func (this *StateRepo) PopulateServiceService(jwt Jwt, serviceMsg UpdateServiceR
 	service.SensorInterval = serviceMsg.SensorInterval
 	service.Code = serviceMsg.Code
 	service.ExternalRef = serviceMsg.ExternalRef
-	service.Marshaller.Service, err = this.GetIotService(jwt, service.ExternalRef)
+	if service.ExternalRef != "" {
+		service.Marshaller.Service, err = this.GetIotService(jwt, service.ExternalRef)
+	}
 	return
 }
 

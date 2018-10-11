@@ -199,6 +199,9 @@ func (this RoomMsg) ToModel() (result Room, err error) {
 
 func (this DeviceMsg) ToModel() (result Device, err error) {
 	err = jsonCopy(this, &result)
+	for _, service := range this.Services {
+		result.Services[service.Id] = service
+	}
 	return
 }
 
@@ -215,5 +218,8 @@ func (this Room) ToMsg() (result RoomMsg, err error) {
 
 func (this Device) ToMsg() (result DeviceMsg, err error) {
 	err = jsonCopy(this, &result)
+	for _, service := range this.Services {
+		result.Services[service.Id] = service
+	}
 	return
 }

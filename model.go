@@ -86,5 +86,5 @@ type Service struct {
 	ExternalRef    string                `json:"external_ref" bson:"external_ref"` //platform intern service id, will be used to populate Service.Marshaller and as endpoint for the connector
 	SensorInterval time.Duration         `json:"sensor_interval" bson:"sensor_interval"`
 	Code           string                `json:"code"`
-	Marshaller     marshaller.Marshaller `json:"marshaller" bson:"marshaller"`
+	Marshaller     marshaller.Marshaller `json:"-" bson:"marshaller"`
 }

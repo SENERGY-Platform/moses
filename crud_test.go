@@ -24,6 +24,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func httpRequest(method string, url string, body interface{}, result interface{}) (err error) {
@@ -145,6 +146,46 @@ func TestSimpleCrud(t *testing.T) {
 		t.Fatal("unexpected get response", deviceUpdate, device)
 	}
 
+	serviceCreate := CreateServiceRequest{Device: device.Device.Id, Name: "Service1", Code: "console.log(\"foobar\")", SensorInterval: 1 * time.Second}
+	service := ServiceResponse{}
+	err = httpRequest("POST", integratedServer.URL+"/service", serviceCreate, &service)
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+	if service.World == "" || service.Service.Id == "" || service.Service.Name != serviceCreate.Name || service.Service.Code != serviceCreate.Code || service.Service.SensorInterval != serviceCreate.SensorInterval {
+		t.Fatal("unexpected create response", serviceCreate, service)
+	}
+
+	serviceUpdate := UpdateServiceRequest{Id: service.Service.Id, Name: "Service2", Code: "console.log(\"42\")", SensorInterval: 2 * time.Second}
+	service = ServiceResponse{}
+	err = httpRequest("PUT", integratedServer.URL+"/service", serviceUpdate, &service)
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+	if service.World == "" || service.Service.Id == "" || service.Service.Name != serviceUpdate.Name || service.Service.Code != serviceUpdate.Code || service.Service.SensorInterval != serviceUpdate.SensorInterval {
+		t.Fatal("unexpected update response", serviceUpdate, service)
+	}
+
+	service = ServiceResponse{}
+	err = httpRequest("GET", integratedServer.URL+"/service/"+serviceUpdate.Id, nil, &service)
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+	if service.World == "" || service.Service.Id == "" || service.Service.Name != serviceUpdate.Name || service.Service.Code != serviceUpdate.Code || service.Service.SensorInterval != serviceUpdate.SensorInterval {
+		t.Fatal("unexpected get response", serviceUpdate, service)
+	}
+
+	expectedDevice := DeviceResponse{World: world.Id, Room: room.Room.Id, Device: device.Device}
+	expectedDevice.Device.Services = map[string]Service{service.Service.Id: Service{Id: service.Service.Id, SensorInterval: service.Service.SensorInterval, Code: service.Service.Code, Name: service.Service.Name, ExternalRef: service.Service.ExternalRef}}
+	device = DeviceResponse{}
+	err = httpRequest("GET", integratedServer.URL+"/device/"+deviceUpdate.Id, nil, &device)
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+	if !reflect.DeepEqual(device, expectedDevice) {
+		t.Fatal("unexpected get response", expectedDevice, device)
+	}
+
 	expectedRoom := RoomResponse{World: world.Id, Room: room.Room}
 	expectedRoom.Room.Devices = map[string]DeviceMsg{device.Device.Id: device.Device}
 	room = RoomResponse{}
@@ -177,9 +218,6 @@ func TestSimpleCrud(t *testing.T) {
 		t.Fatal("unexpected get response", expectedWorld, worlds)
 	}
 
-	//add change routines to all levels
-	//get world list and compare deep
-	//get world by id and compare deep
-	//get room by id and compare deep
-	//get device by id and compare deep
+	//add change routines to all levels & compare
+
 }
