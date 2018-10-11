@@ -21,6 +21,7 @@ import (
 	"github.com/cbroglie/mustache"
 	"github.com/globalsign/mgo"
 	"github.com/google/uuid"
+	"log"
 	"moses/iotmodel"
 	"moses/marshaller"
 )
@@ -62,13 +63,13 @@ func (this *StateRepo) CreateWorld(jwt Jwt, msg CreateWorldRequest) (world World
 
 func (this *StateRepo) ReadWorld(jwt Jwt, id string) (world WorldMsg, access bool, exists bool, err error) {
 	world, exists, err = this.DevGetWorld(id)
-	if err != nil {
+	if err != nil || !exists {
 		return
 	}
 	if !isAdmin(jwt) && world.Owner != jwt.UserId {
 		return WorldMsg{}, false, exists, err
 	}
-	return world, true, exists, err
+	return world, true, true, err
 }
 
 func (this *StateRepo) UpdateWorld(jwt Jwt, msg UpdateWorldRequest) (world WorldMsg, access bool, exists bool, err error) {
@@ -101,21 +102,24 @@ func (this *StateRepo) ReadRoom(jwt Jwt, id string) (room RoomResponse, access b
 	admin := isAdmin(jwt)
 	world, exists := this.roomWorldIndex[id]
 	if !exists {
+		log.Println("DEBUG: room world index id not found", id, this.roomWorldIndex)
 		return room, admin, exists, nil
 	}
 	world.mux.Lock()
 	defer world.mux.Unlock()
 	if !admin && world.Owner != jwt.UserId {
+		log.Println("DEBUG: room access denied", world.Owner, " != ", jwt.UserId)
 		return room, false, exists, nil
 	}
 	room.World = world.Id
 	room.Room, err = world.Rooms[id].ToMsg()
-	return room, access, exists, err
+	return room, true, true, err
 }
 
 func (this *StateRepo) UpdateRoom(jwt Jwt, msg UpdateRoomRequest) (room RoomResponse, access bool, exists bool, err error) {
 	room, access, exists, err = this.ReadRoom(jwt, msg.Id)
 	if err != nil || !access || !exists {
+		log.Println("DEBUG: update world", access, exists, err)
 		return
 	}
 	room.Room.States = msg.States
@@ -140,7 +144,7 @@ func (this *StateRepo) CreateRoom(jwt Jwt, msg CreateRoomRequest) (room RoomResp
 	room.Room.States = msg.States
 	room.World = worldMsg.Id
 	err = this.DevUpdateRoom(room.World, room.Room)
-	return
+	return room, true, true, err
 }
 
 func (this *StateRepo) DeleteRoom(jwt Jwt, id string) (room RoomResponse, access bool, exists bool, err error) {
@@ -184,7 +188,7 @@ func (this *StateRepo) ReadDevice(jwt Jwt, id string) (device DeviceResponse, ac
 	device.World = world.Id
 	device.Room = room.Id
 	device.Device, err = room.Devices[id].ToMsg()
-	return device, access, exists, err
+	return device, true, true, err
 }
 
 func (this *StateRepo) CreateDevice(jwt Jwt, msg CreateDeviceRequest) (device DeviceResponse, access bool, worldAndExists bool, err error) {
@@ -204,7 +208,7 @@ func (this *StateRepo) CreateDevice(jwt Jwt, msg CreateDeviceRequest) (device De
 	device.World = room.World
 	device.Room = msg.Room
 	err = this.DevUpdateDevice(device.World, device.Room, device.Device)
-	return
+	return device, true, true, err
 }
 
 func (this *StateRepo) UpdateDevice(jwt Jwt, msg UpdateDeviceRequest) (device DeviceResponse, access bool, exists bool, err error) {
@@ -217,7 +221,7 @@ func (this *StateRepo) UpdateDevice(jwt Jwt, msg UpdateDeviceRequest) (device De
 	device.Device.Id = msg.Id
 	device.Device.ExternalRef = msg.ExternalRef
 	err = this.DevUpdateDevice(device.World, device.Room, device.Device)
-	return
+	return device, true, true, err
 }
 
 func (this *StateRepo) DeleteDevice(jwt Jwt, id string) (device DeviceResponse, access bool, exists bool, err error) {
@@ -236,7 +240,7 @@ func (this *StateRepo) DeleteDevice(jwt Jwt, id string) (device DeviceResponse, 
 	}
 	delete(world.Rooms[device.Room].Devices, device.Device.Id)
 	err = this.DevUpdateWorld(world) //update world is more efficient than update room
-	return
+	return device, true, true, err
 }
 
 func (this *StateRepo) ReadService(jwt Jwt, id string) (service ServiceResponse, access bool, exists bool, err error) {
@@ -271,7 +275,7 @@ func (this *StateRepo) ReadService(jwt Jwt, id string) (service ServiceResponse,
 	service.Service.Name = serviceModel.Name
 	service.Service.Code = serviceModel.Code
 	service.Service.SensorInterval = serviceModel.SensorInterval
-	return service, access, exists, err
+	return service, true, true, err
 }
 
 func (this *StateRepo) CreateService(jwt Jwt, msg CreateServiceRequest) (service ServiceResponse, access bool, worldAndExists bool, err error) {
@@ -297,7 +301,7 @@ func (this *StateRepo) CreateService(jwt Jwt, msg CreateServiceRequest) (service
 		return service, access, worldAndExists, err
 	}
 	err = this.DevUpdateDevice(service.World, service.Room, device.Device)
-	return service, access, worldAndExists, err
+	return service, true, true, err
 }
 
 func (this *StateRepo) PopulateServiceService(jwt Jwt, serviceMsg UpdateServiceRequest) (service Service, err error) {
@@ -328,7 +332,7 @@ func (this *StateRepo) UpdateService(jwt Jwt, msg UpdateServiceRequest) (service
 		return service, access, exists, err
 	}
 	err = this.DevUpdateDevice(service.World, service.Room, device.Device)
-	return service, access, exists, err
+	return service, true, true, err
 }
 
 func (this *StateRepo) DeleteService(jwt Jwt, id string) (service ServiceResponse, access bool, exists bool, err error) {
@@ -342,7 +346,7 @@ func (this *StateRepo) DeleteService(jwt Jwt, id string) (service ServiceRespons
 	}
 	delete(device.Device.Services, service.Service.Id)
 	err = this.DevUpdateDevice(device.World, device.Room, device.Device)
-	return
+	return service, true, true, err
 }
 
 func (this *StateRepo) CreateDeviceByType(jwt Jwt, msg CreateDeviceByTypeRequest) (result DeviceResponse, access bool, worldAndExists bool, err error) {
@@ -370,7 +374,7 @@ func (this *StateRepo) CreateDeviceByType(jwt Jwt, msg CreateDeviceByTypeRequest
 	result.Room = msg.Room
 	result.Device.Services = services
 	err = this.DevUpdateDevice(result.World, result.Room, result.Device)
-	return
+	return result, true, true, err
 }
 
 func (this *StateRepo) prepareServices(jwt Jwt, deviceTypeId string) (result map[string]Service, err error) {
@@ -468,7 +472,7 @@ func (this *StateRepo) CreateChangeRoutine(jwt Jwt, msg CreateChangeRoutineReque
 		device.Device.ChangeRoutines[routine.Id] = routine
 		err = this.DevUpdateDevice(device.World, device.Room, device.Device)
 	}
-	return result, access, exists, err
+	return result, true, true, err
 }
 
 func (this *StateRepo) UpdateChangeRoutine(jwt Jwt, msg UpdateChangeRoutineRequest) (routine ChangeRoutineResponse, access bool, exists bool, err error) {
@@ -499,7 +503,7 @@ func (this *StateRepo) UpdateChangeRoutine(jwt Jwt, msg UpdateChangeRoutineReque
 		device.Device.ChangeRoutines[msg.Id] = ChangeRoutine{Interval: msg.Interval, Code: msg.Code, Id: msg.Id}
 		err = this.DevUpdateDevice(device.World, device.Room, device.Device)
 	}
-	return routine, access, exists, err
+	return routine, true, true, err
 }
 
 func (this *StateRepo) ReadChangeRoutine(jwt Jwt, id string) (routine ChangeRoutineResponse, access bool, exists bool, err error) {
@@ -547,7 +551,7 @@ func (this *StateRepo) ReadChangeRoutine(jwt Jwt, id string) (routine ChangeRout
 		routine.Code = deviceRoutine.Code
 		routine.Interval = deviceRoutine.Interval
 	}
-	return routine, access, exists, err
+	return routine, true, true, err
 }
 
 func (this *StateRepo) DeleteChangeRoutine(jwt Jwt, id string) (routine ChangeRoutineResponse, access bool, exists bool, err error) {
@@ -575,7 +579,7 @@ func (this *StateRepo) DeleteChangeRoutine(jwt Jwt, id string) (routine ChangeRo
 		}
 		err = this.DevUpdateDevice(device.World, device.Room, device.Device)
 	}
-	return
+	return routine, true, true, err
 }
 
 func (this *StateRepo) CreateTemplate(jwt Jwt, request CreateTemplateRequest) (result RoutineTemplate, err error) {

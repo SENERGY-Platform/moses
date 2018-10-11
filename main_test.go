@@ -96,7 +96,7 @@ func (this *ProtocolMock) Start() (err error) {
 }
 
 var mockserver *httptest.Server
-var integratedserver *httptest.Server
+var integratedServer *httptest.Server
 
 func GetFreePort() (int, error) {
 	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
@@ -111,6 +111,8 @@ func GetFreePort() (int, error) {
 	defer listener.Close()
 	return listener.Addr().(*net.TCPAddr).Port, nil
 }
+
+var integratedConfig Config
 
 func TestMain(m *testing.M) {
 	//with mocks
@@ -129,9 +131,9 @@ func TestMain(m *testing.M) {
 	//indication tests
 	log.Println("start integrated system for tests")
 
-	config, err := LoadConfig()
+	integratedConfig, err := LoadConfig()
 	if err != nil {
-		log.Fatal("unable to load config: ", err)
+		log.Fatal("unable to load integratedConfig: ", err)
 	}
 
 	pool, err := dockertest.NewPool("")
@@ -145,7 +147,7 @@ func TestMain(m *testing.M) {
 		log.Fatalf("Could not start dockerrabbitmq: %s", err)
 	}
 	defer mongo.Close()
-	config.MongoUrl = "mongodb://localhost:" + mongo.GetPort("27017/tcp")
+	integratedConfig.MongoUrl = "mongodb://localhost:" + mongo.GetPort("27017/tcp")
 
 	kafkaport, err := GetFreePort()
 	if err != nil {
@@ -164,7 +166,7 @@ func TestMain(m *testing.M) {
 		"2181/tcp": {{HostIP: "", HostPort: strconv.Itoa(zkport)}},
 	}})
 	defer dockerkafka.Close()
-	config.ZookeeperUrl = "localhost:" + strconv.Itoa(zkport)
+	integratedConfig.ZookeeperUrl = "localhost:" + strconv.Itoa(zkport)
 
 	log.Println("start rabbitmq")
 	dockerrabbitmq, err := pool.Run("rabbitmq", "3-management", []string{})
@@ -220,27 +222,27 @@ func TestMain(m *testing.M) {
 		log.Fatalf("Could not start iot repo: %s", err)
 	}
 	defer dockeriot.Close()
-	config.IotUrl = "mongodb://localhost:" + mongo.GetPort("27017/tcp")
+	integratedConfig.IotUrl = "mongodb://localhost:" + mongo.GetPort("27017/tcp")
 
 	time.Sleep(5 * time.Second)
 
 	log.Println("init protocol handler")
 	protocol, err := connector.NewMosesProtocolConnector(connector.Config{
-		ZookeeperUrl:       config.ZookeeperUrl,
-		KafkaEventTopic:    config.KafkaEventTopic,
-		ProtocolTopic:      config.KafkaProtocolTopic,
-		KafkaResponseTopic: config.KafkaResponseTopic,
+		ZookeeperUrl:       integratedConfig.ZookeeperUrl,
+		KafkaEventTopic:    integratedConfig.KafkaEventTopic,
+		ProtocolTopic:      integratedConfig.KafkaProtocolTopic,
+		KafkaResponseTopic: integratedConfig.KafkaResponseTopic,
 	})
 	if err != nil {
 		log.Fatal("unable to initialize protocol: ", err)
 	}
 	log.Println("connect to database")
-	persistence, err := NewMongoPersistence(config)
+	persistence, err := NewMongoPersistence(integratedConfig)
 	if err != nil {
 		log.Fatal("unable to connect to database: ", err)
 	}
 
-	integratedstaterepo := &StateRepo{Persistence: persistence, Config: config, Protocol: protocol}
+	integratedstaterepo := &StateRepo{Persistence: persistence, Config: integratedConfig, Protocol: protocol}
 	err = integratedstaterepo.Load()
 	if err != nil {
 		log.Fatal("unable to load state repo: ", err)
@@ -249,8 +251,8 @@ func TestMain(m *testing.M) {
 	staterepo.Start()
 	integratedroutes := getRoutes(Config{DevApi: "true"}, integratedstaterepo)
 	integratedlogger := Logger(integratedroutes, "CALL")
-	integratedserver = httptest.NewServer(integratedlogger)
-	defer integratedserver.Close()
+	integratedServer = httptest.NewServer(integratedlogger)
+	defer integratedServer.Close()
 
 	//run
 	m.Run()

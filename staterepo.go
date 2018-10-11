@@ -283,6 +283,7 @@ func (this *StateRepo) persistWorld(world World) (err error) {
 }
 
 func (this *StateRepo) sendSensorData(device *Device, service Service, value interface{}) {
+	log.Println("DEBUG: send data to connector", device, service, value)
 	if this.Protocol == nil {
 		log.Println("WARNING: not protocol connected")
 		return

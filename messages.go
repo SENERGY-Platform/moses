@@ -188,6 +188,7 @@ func jsonCopy(from interface{}, to interface{}) (err error) {
 
 func (this WorldMsg) ToModel() (result World, err error) {
 	err = jsonCopy(this, &result)
+	result.Owner = this.Owner
 	return
 }
 
@@ -203,6 +204,7 @@ func (this DeviceMsg) ToModel() (result Device, err error) {
 
 func (this World) ToMsg() (result WorldMsg, err error) {
 	err = jsonCopy(this, &result)
+	result.Owner = this.Owner
 	return
 }
 
