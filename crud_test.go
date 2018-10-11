@@ -69,7 +69,7 @@ func httpAdminRequest(method string, url string, body interface{}, result interf
 	return httpBaseRequest(auth, method, url, body, result)
 }
 
-func TestSimpleCrud(t *testing.T) {
+func TestCrud(t *testing.T) {
 	worldCreate := CreateWorldRequest{Name: "World1", States: map[string]interface{}{"w1": "test"}}
 	world := WorldMsg{}
 	err := httpUserRequest("POST", integratedServer.URL+"/world", worldCreate, &world)
@@ -383,6 +383,36 @@ moses.service.send(output);
 	if deviceGet.World == "" || deviceGet.Device.Id == "" || !reflect.DeepEqual(deviceGet, device) {
 		t.Fatal("unexpected get response", deviceGet, device)
 	}
+
+	templateCreate := CreateTemplateRequest{Name: "testName", Template: "var foo = \"{{bar}}\"", Description: "testDesc"}
+	template := RoutineTemplate{}
+	err = httpAdminRequest("POST", integratedServer.URL+"/routinetemplate", templateCreate, &template)
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+	if template.Name != templateCreate.Name || template.Template != templateCreate.Template || template.Description != templateCreate.Description || len(template.Parameter) != 1 || template.Parameter[0] != "bar" {
+		t.Fatal("unexpected create response", templateCreate, template)
+	}
+
+	templateUpdate := UpdateTemplateRequest{Id: template.Id, Description: "testDesc", Template: "var foo = \"{{foobar}}\"", Name: "testName"}
+	template = RoutineTemplate{}
+	err = httpAdminRequest("PUT", integratedServer.URL+"/routinetemplate", templateUpdate, &template)
+	if err != nil {
+		t.Fatal("Error", err, templateUpdate)
+	}
+	if template.Name != templateUpdate.Name || template.Template != templateUpdate.Template || template.Description != templateUpdate.Description || len(template.Parameter) != 1 || template.Parameter[0] != "foobar" {
+		t.Fatal("unexpected update response", templateUpdate, template)
+	}
+
+	template = RoutineTemplate{}
+	err = httpUserRequest("GET", integratedServer.URL+"/routinetemplate/"+templateUpdate.Id, nil, &template)
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+	if template.Name != templateUpdate.Name || template.Template != templateUpdate.Template || template.Description != templateUpdate.Description || len(template.Parameter) != 1 || template.Parameter[0] != "foobar" {
+		t.Fatal("unexpected get response", templateUpdate, template)
+	}
+
 }
 
 func helperCreateDeviceType() (dt iotmodel.DeviceType, err error) {

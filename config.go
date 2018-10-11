@@ -29,18 +29,19 @@ import (
 )
 
 type Config struct {
-	ServerPort          string        `json:"server_port"`
-	LogLevel            string        `json:"log_level"`
-	WorldCollectionName string        `json:"world_collection_name"`
-	GraphCollectionName string        `json:"graph_collection_name"`
-	MongoUrl            string        `json:"mongo_url"`
-	JsTimeout           time.Duration `json:"js_timeout"`
-	ZookeeperUrl        string        `json:"zookeeper_url"`
-	KafkaEventTopic     string        `json:"kafka_event_topic"`
-	KafkaProtocolTopic  string        `json:"kafka_protocol_topic"`
-	KafkaResponseTopic  string        `json:"kafka_response_topic"`
-	IotUrl              string        `json:"iot_url"`
-	DevApi              string        `json:"dev_api"`
+	ServerPort             string        `json:"server_port"`
+	LogLevel               string        `json:"log_level"`
+	WorldCollectionName    string        `json:"world_collection_name"`
+	GraphCollectionName    string        `json:"graph_collection_name"`
+	TemplateCollectionName string        `json:"template_collection_name"`
+	MongoUrl               string        `json:"mongo_url"`
+	JsTimeout              time.Duration `json:"js_timeout"`
+	ZookeeperUrl           string        `json:"zookeeper_url"`
+	KafkaEventTopic        string        `json:"kafka_event_topic"`
+	KafkaProtocolTopic     string        `json:"kafka_protocol_topic"`
+	KafkaResponseTopic     string        `json:"kafka_response_topic"`
+	IotUrl                 string        `json:"iot_url"`
+	DevApi                 string        `json:"dev_api"`
 }
 
 func LoadConfig() (result Config, err error) {

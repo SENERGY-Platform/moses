@@ -876,7 +876,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.POST("/routinetemplate", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: jwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
@@ -888,19 +888,19 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		msg := CreateTemplateRequest{}
 		err = json.NewDecoder(request.Body).Decode(&msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: jsondecode", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		result, err := state.CreateTemplate(jwt, msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: create", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
 		b, err := json.Marshal(result)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: jsonencode", err)
 			http.Error(resp, err.Error(), 500)
 		} else {
 			fmt.Fprint(resp, string(b))

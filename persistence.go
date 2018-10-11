@@ -45,6 +45,7 @@ type MongoPersistence struct {
 func NewMongoPersistence(config Config) (result MongoPersistence, err error) {
 	result.worldCollectionName = config.WorldCollectionName
 	result.graphCollectionName = config.GraphCollectionName
+	result.templateCollectionName = config.TemplateCollectionName
 	result.session, err = mgo.Dial(config.MongoUrl)
 	if err == nil {
 		result.session.SetMode(mgo.Monotonic, true)
@@ -94,7 +95,7 @@ func (this MongoPersistence) PersistTemplate(templ RoutineTemplate) (err error) 
 func (this MongoPersistence) GetTemplate(id string) (templ RoutineTemplate, err error) {
 	session, collection := this.getTemplateCollection()
 	defer session.Close()
-	err = collection.Find(bson.M{"id": templ.Id}).One(&templ)
+	err = collection.Find(bson.M{"id": id}).One(&templ)
 	return
 }
 

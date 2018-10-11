@@ -611,7 +611,7 @@ func (this *StateRepo) CreateTemplate(jwt Jwt, request CreateTemplateRequest) (r
 	if err != nil {
 		return result, err
 	}
-	result = RoutineTemplate{Id: uid.String(), Name: result.Name, Description: result.Description, Template: request.Template}
+	result = RoutineTemplate{Id: uid.String(), Name: request.Name, Description: request.Description, Template: request.Template}
 	result.Parameter, err = GetTemplateParameterList(request.Template)
 	if err != nil {
 		return result, err
@@ -623,12 +623,13 @@ func (this *StateRepo) CreateTemplate(jwt Jwt, request CreateTemplateRequest) (r
 func (this *StateRepo) UpdateTemplate(jwt Jwt, request UpdateTemplateRequest) (result RoutineTemplate, exists bool, err error) {
 	result, err = this.Persistence.GetTemplate(request.Id)
 	if err == mgo.ErrNotFound {
+		log.Println("DEBUG: template not found", request.Id)
 		return result, false, nil
 	}
 	if err != nil {
 		return result, false, err
 	}
-	result = RoutineTemplate{Id: request.Id, Name: result.Name, Description: result.Description, Template: request.Template}
+	result = RoutineTemplate{Id: request.Id, Name: request.Name, Description: request.Description, Template: request.Template}
 	result.Parameter, err = GetTemplateParameterList(request.Template)
 	if err != nil {
 		return result, true, err
@@ -638,6 +639,10 @@ func (this *StateRepo) UpdateTemplate(jwt Jwt, request UpdateTemplateRequest) (r
 }
 
 func (this *StateRepo) ReadTemplate(jwt Jwt, id string) (result RoutineTemplate, exists bool, err error) {
+	result, ok := defaultTemplates[id]
+	if ok {
+		return result, true, nil
+	}
 	result, err = this.Persistence.GetTemplate(id)
 	if err == mgo.ErrNotFound {
 		return result, false, nil
@@ -650,7 +655,16 @@ func (this *StateRepo) DeleteTemplate(jwt Jwt, id string) (err error) {
 }
 
 func (this *StateRepo) ReadTemplates(jwt Jwt) (result []RoutineTemplate, err error) {
-	return this.Persistence.GetTemplates()
+	result, err = this.Persistence.GetTemplates()
+	if err != nil {
+		return
+	}
+	defaults := []RoutineTemplate{}
+	for _, templ := range defaultTemplates {
+		defaults = append(defaults, templ)
+	}
+	result = append(defaults, result...)
+	return
 }
 
 func (this *StateRepo) UpdateChangeRoutineByTemplate(jwt Jwt, msg UpdateChangeRoutineByTemplateRequest) (routine ChangeRoutineResponse, access bool, exists bool, err error) {

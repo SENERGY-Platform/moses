@@ -6,6 +6,7 @@
     "log_level": "DEBUG",
     "world_collection_name": "worlds",
     "graph_collection_name": "graphs",
+    "template_collection_name": "templates",
     "js_timeout": 2000000000,
     "kafka_event_topic": "eventfilter",
     "kafka_protocol_topic": "moses",
