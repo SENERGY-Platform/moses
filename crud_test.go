@@ -175,7 +175,99 @@ func TestSimpleCrud(t *testing.T) {
 		t.Fatal("unexpected get response", serviceUpdate, service)
 	}
 
+	//routines
+
+	worldRoutineCreate := CreateChangeRoutineRequest{RefType: "world", RefId: world.Id, Code: "var foo = 'world'", Interval: 3 * time.Second}
+	worldRoutine := ChangeRoutineResponse{}
+	err = httpRequest("POST", integratedServer.URL+"/changeroutine", worldRoutineCreate, &worldRoutine)
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+	if worldRoutine.Id == "" || worldRoutine.Code != worldRoutineCreate.Code || worldRoutine.Interval != worldRoutineCreate.Interval || worldRoutine.RefId != worldRoutineCreate.RefId || worldRoutine.RefType != worldRoutineCreate.RefType {
+		t.Fatal("unexpected create response", worldRoutine, worldRoutineCreate)
+	}
+
+	worldRoutineUpdate := UpdateChangeRoutineRequest{Id: worldRoutine.Id, Code: "var foo = 'world2'", Interval: 4 * time.Second}
+	worldRoutine = ChangeRoutineResponse{}
+	err = httpRequest("PUT", integratedServer.URL+"/changeroutine", worldRoutineUpdate, &worldRoutine)
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+	if worldRoutine.Id != worldRoutineUpdate.Id || worldRoutine.Code != worldRoutineUpdate.Code || worldRoutine.Interval != worldRoutineUpdate.Interval {
+		t.Fatal("unexpected update response", worldRoutineUpdate, worldRoutine)
+	}
+
+	worldRoutine = ChangeRoutineResponse{}
+	err = httpRequest("GET", integratedServer.URL+"/changeroutine/"+worldRoutineUpdate.Id, nil, &worldRoutine)
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+	if worldRoutine.Id != worldRoutineUpdate.Id || worldRoutine.Code != worldRoutineUpdate.Code || worldRoutine.Interval != worldRoutineUpdate.Interval {
+		t.Fatal("unexpected update response", worldRoutine, worldRoutineUpdate)
+	}
+
+	roomRoutineCreate := CreateChangeRoutineRequest{RefType: "room", RefId: room.Room.Id, Code: "var foo = 'room'", Interval: 3 * time.Second}
+	roomRoutine := ChangeRoutineResponse{}
+	err = httpRequest("POST", integratedServer.URL+"/changeroutine", roomRoutineCreate, &roomRoutine)
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+	if roomRoutine.Id == "" || roomRoutine.Code != roomRoutineCreate.Code || roomRoutine.Interval != roomRoutineCreate.Interval || roomRoutine.RefId != roomRoutineCreate.RefId || roomRoutine.RefType != roomRoutineCreate.RefType {
+		t.Fatal("unexpected create response", roomRoutineCreate, roomRoutine)
+	}
+
+	roomRoutineUpdate := UpdateChangeRoutineRequest{Id: roomRoutine.Id, Code: "var foo = 'room2'", Interval: 4 * time.Second}
+	roomRoutine = ChangeRoutineResponse{}
+	err = httpRequest("PUT", integratedServer.URL+"/changeroutine", roomRoutineUpdate, &roomRoutine)
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+	if roomRoutine.Id != roomRoutineUpdate.Id || roomRoutine.Code != roomRoutineUpdate.Code || roomRoutine.Interval != roomRoutineUpdate.Interval {
+		t.Fatal("unexpected update response", roomRoutine, roomRoutineUpdate)
+	}
+
+	roomRoutine = ChangeRoutineResponse{}
+	err = httpRequest("GET", integratedServer.URL+"/changeroutine/"+roomRoutineUpdate.Id, nil, &roomRoutine)
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+	if roomRoutine.Id != roomRoutineUpdate.Id || roomRoutine.Code != roomRoutineUpdate.Code || roomRoutine.Interval != roomRoutineUpdate.Interval {
+		t.Fatal("unexpected update response", roomRoutineUpdate, roomRoutine)
+	}
+
+	deviceRoutineCreate := CreateChangeRoutineRequest{RefType: "device", RefId: device.Device.Id, Code: "var foo = 'device'", Interval: 3 * time.Second}
+	deviceRoutine := ChangeRoutineResponse{}
+	err = httpRequest("POST", integratedServer.URL+"/changeroutine", deviceRoutineCreate, &deviceRoutine)
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+	if deviceRoutine.Id == "" || deviceRoutine.Code != deviceRoutineCreate.Code || deviceRoutine.Interval != deviceRoutineCreate.Interval || deviceRoutine.RefId != deviceRoutineCreate.RefId || deviceRoutine.RefType != deviceRoutineCreate.RefType {
+		t.Fatal("unexpected create response", deviceRoutine, deviceRoutineCreate)
+	}
+
+	deviceRoutineUpdate := UpdateChangeRoutineRequest{Id: deviceRoutine.Id, Code: "var foo = 'device2'", Interval: 4 * time.Second}
+	deviceRoutine = ChangeRoutineResponse{}
+	err = httpRequest("PUT", integratedServer.URL+"/changeroutine", deviceRoutineUpdate, &deviceRoutine)
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+	if deviceRoutine.Id != deviceRoutineUpdate.Id || deviceRoutine.Code != deviceRoutineUpdate.Code || deviceRoutine.Interval != deviceRoutineUpdate.Interval {
+		t.Fatal("unexpected update response", deviceRoutine, deviceRoutineUpdate)
+	}
+
+	deviceRoutine = ChangeRoutineResponse{}
+	err = httpRequest("GET", integratedServer.URL+"/changeroutine/"+deviceRoutineUpdate.Id, nil, &deviceRoutine)
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+	if deviceRoutine.Id != deviceRoutineUpdate.Id || deviceRoutine.Code != deviceRoutineUpdate.Code || deviceRoutine.Interval != deviceRoutineUpdate.Interval {
+		t.Fatal("unexpected update response", deviceRoutineUpdate, deviceRoutine)
+	}
+
+	//deep
+
 	expectedDevice := DeviceResponse{World: world.Id, Room: room.Room.Id, Device: device.Device}
+	expectedDevice.Device.ChangeRoutines = map[string]ChangeRoutine{deviceRoutine.Id: ChangeRoutine{Id: deviceRoutine.Id, Interval: deviceRoutine.Interval, Code: deviceRoutine.Code}}
 	expectedDevice.Device.Services = map[string]Service{service.Service.Id: Service{Id: service.Service.Id, SensorInterval: service.Service.SensorInterval, Code: service.Service.Code, Name: service.Service.Name, ExternalRef: service.Service.ExternalRef}}
 	device = DeviceResponse{}
 	err = httpRequest("GET", integratedServer.URL+"/device/"+deviceUpdate.Id, nil, &device)
@@ -187,6 +279,7 @@ func TestSimpleCrud(t *testing.T) {
 	}
 
 	expectedRoom := RoomResponse{World: world.Id, Room: room.Room}
+	expectedRoom.Room.ChangeRoutines = map[string]ChangeRoutine{roomRoutine.Id: ChangeRoutine{Id: roomRoutine.Id, Interval: roomRoutine.Interval, Code: roomRoutine.Code}}
 	expectedRoom.Room.Devices = map[string]DeviceMsg{device.Device.Id: device.Device}
 	room = RoomResponse{}
 	err = httpRequest("GET", integratedServer.URL+"/room/"+roomUpdate.Id, nil, &room)
@@ -198,8 +291,8 @@ func TestSimpleCrud(t *testing.T) {
 	}
 
 	expectedWorld := world
+	expectedWorld.ChangeRoutines = map[string]ChangeRoutine{worldRoutine.Id: ChangeRoutine{Id: worldRoutine.Id, Interval: worldRoutine.Interval, Code: worldRoutine.Code}}
 	expectedWorld.Rooms = map[string]RoomMsg{expectedRoom.Room.Id: expectedRoom.Room}
-
 	world = WorldMsg{}
 	err = httpRequest("GET", integratedServer.URL+"/world/"+worldUpdate.Id, nil, &world)
 	if err != nil {

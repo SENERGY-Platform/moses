@@ -56,7 +56,7 @@ func (this *StateRepo) CreateWorld(jwt Jwt, msg CreateWorldRequest) (world World
 	if err != nil {
 		return world, err
 	}
-	world = WorldMsg{Id: uid.String(), Name: msg.Name, States: msg.States, Owner: jwt.UserId}
+	world = WorldMsg{Id: uid.String(), Name: msg.Name, States: msg.States, Owner: jwt.UserId, ChangeRoutines: map[string]ChangeRoutine{}}
 	err = this.DevUpdateWorld(world)
 	return
 }
@@ -143,6 +143,7 @@ func (this *StateRepo) CreateRoom(jwt Jwt, msg CreateRoomRequest) (room RoomResp
 	room.Room.Name = msg.Name
 	room.Room.States = msg.States
 	room.World = worldMsg.Id
+	room.Room.ChangeRoutines = map[string]ChangeRoutine{}
 	err = this.DevUpdateRoom(room.World, room.Room)
 	return room, true, true, err
 }
@@ -207,6 +208,7 @@ func (this *StateRepo) CreateDevice(jwt Jwt, msg CreateDeviceRequest) (device De
 	device.Device.ExternalRef = msg.ExternalRef
 	device.World = room.World
 	device.Room = msg.Room
+	device.Device.ChangeRoutines = map[string]ChangeRoutine{}
 	err = this.DevUpdateDevice(device.World, device.Room, device.Device)
 	return device, true, true, err
 }
@@ -460,6 +462,9 @@ func (this *StateRepo) CreateChangeRoutine(jwt Jwt, msg CreateChangeRoutineReque
 		if err != nil || !access || !exists {
 			return result, access, exists, err
 		}
+		if world.ChangeRoutines == nil {
+			world.ChangeRoutines = map[string]ChangeRoutine{}
+		}
 		world.ChangeRoutines[routine.Id] = routine
 		err = this.DevUpdateWorld(world)
 	case "room":
@@ -467,12 +472,18 @@ func (this *StateRepo) CreateChangeRoutine(jwt Jwt, msg CreateChangeRoutineReque
 		if err != nil || !access || !exists {
 			return result, access, exists, err
 		}
+		if room.Room.ChangeRoutines == nil {
+			room.Room.ChangeRoutines = map[string]ChangeRoutine{}
+		}
 		room.Room.ChangeRoutines[routine.Id] = routine
 		err = this.DevUpdateRoom(room.World, room.Room)
 	case "device":
 		device, access, exists, err := this.ReadDevice(jwt, msg.RefId)
 		if err != nil || !access || !exists {
 			return result, access, exists, err
+		}
+		if device.Device.ChangeRoutines == nil {
+			device.Device.ChangeRoutines = map[string]ChangeRoutine{}
 		}
 		device.Device.ChangeRoutines[routine.Id] = routine
 		err = this.DevUpdateDevice(device.World, device.Room, device.Device)
@@ -485,36 +496,44 @@ func (this *StateRepo) UpdateChangeRoutine(jwt Jwt, msg UpdateChangeRoutineReque
 	if err != nil || !access || !exists {
 		return routine, access, exists, err
 	}
+	changeRoutine := ChangeRoutine{Interval: msg.Interval, Code: msg.Code, Id: msg.Id}
+	routine.Code = changeRoutine.Code
+	routine.Interval = changeRoutine.Interval
 	switch routine.RefType {
 	case "world":
 		world, access, exists, err := this.ReadWorld(jwt, routine.RefId)
 		if err != nil || !access || !exists {
 			return routine, access, exists, err
 		}
-		world.ChangeRoutines[msg.Id] = ChangeRoutine{Interval: msg.Interval, Code: msg.Code, Id: msg.Id}
+		world.ChangeRoutines[msg.Id] = changeRoutine
 		err = this.DevUpdateWorld(world)
 	case "room":
 		room, access, exists, err := this.ReadRoom(jwt, routine.RefId)
 		if err != nil || !access || !exists {
 			return routine, access, exists, err
 		}
-		room.Room.ChangeRoutines[msg.Id] = ChangeRoutine{Interval: msg.Interval, Code: msg.Code, Id: msg.Id}
+		room.Room.ChangeRoutines[msg.Id] = changeRoutine
 		err = this.DevUpdateRoom(room.World, room.Room)
 	case "device":
 		device, access, exists, err := this.ReadDevice(jwt, routine.RefId)
 		if err != nil || !access || !exists {
 			return routine, access, exists, err
 		}
-		device.Device.ChangeRoutines[msg.Id] = ChangeRoutine{Interval: msg.Interval, Code: msg.Code, Id: msg.Id}
+		device.Device.ChangeRoutines[msg.Id] = changeRoutine
 		err = this.DevUpdateDevice(device.World, device.Room, device.Device)
 	}
 	return routine, true, true, err
 }
 
-func (this *StateRepo) ReadChangeRoutine(jwt Jwt, id string) (routine ChangeRoutineResponse, access bool, exists bool, err error) {
+func (this *StateRepo) getChangeRoutineFromIndex(id string) (routine ChangeRoutineIndexElement, exists bool) {
 	this.mux.RLock()
 	defer this.mux.RUnlock()
-	index, exists := this.changeRoutineIndex[id]
+	routine, exists = this.changeRoutineIndex[id]
+	return
+}
+
+func (this *StateRepo) ReadChangeRoutine(jwt Jwt, id string) (routine ChangeRoutineResponse, access bool, exists bool, err error) {
+	index, exists := this.getChangeRoutineFromIndex(id)
 	if !exists {
 		return routine, access, exists, err
 	}
