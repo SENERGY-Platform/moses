@@ -1064,6 +1064,38 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	})
 
 	/////////////////////////////////////////////////////////////////////////////////////////////////////
+	///////////////////////////////////////	 ADMIN - API  ///////////////////////////////////////////////
+	/////////////////////////////////////////////////////////////////////////////////////////////////////
+
+	router.GET("/admin/initiot", func(resp http.ResponseWriter, req *http.Request, ps httprouter.Params) {
+		jwt, err := GetJwt(req)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 400)
+			return
+		}
+		if !isAdmin(jwt) {
+			log.Println("WARNING: access denied")
+			http.Error(resp, "access denied", http.StatusUnauthorized)
+			return
+		}
+		protocol, err := state.EnsureMosesProtocol(jwt.Impersonate)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+			return
+		}
+
+		b, err := json.Marshal(protocol)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+		} else {
+			fmt.Fprint(resp, string(b))
+		}
+	})
+
+	/////////////////////////////////////////////////////////////////////////////////////////////////////
 	///////////////////////////////////////	 DEV - API  /////////////////////////////////////////////////
 	/////////////////////////////////////////////////////////////////////////////////////////////////////
 

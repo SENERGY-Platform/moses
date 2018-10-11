@@ -376,7 +376,7 @@ func (this *StateRepo) CreateDeviceByType(jwt Jwt, msg CreateDeviceByTypeRequest
 	}
 	result.Device.Id = uid.String()
 	result.Device.Name = msg.Name
-	result.Device.ExternalRef = externalDevice.Url
+	result.Device.ExternalRef = externalDevice.Id
 	result.World = room.World
 	result.Room = msg.Room
 	result.Device.Services = services
@@ -437,12 +437,12 @@ func (this *StateRepo) createServiceCodeSkeleton(service iotmodel.Service) (resu
 
 	template := ` 
 {{#input}} 
-/* {{{.}}} */
+/* {{{input}}} */
 var input = moses.service.input; 
 {{/input}}
 
 {{#output}}
-var output = {{{.}}}; 
+var output = {{{output}}}
 moses.service.send(output);
 {{/output}}
 `

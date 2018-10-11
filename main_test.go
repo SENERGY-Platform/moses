@@ -131,7 +131,7 @@ func TestMain(m *testing.M) {
 	//indication tests
 	log.Println("start integrated system for tests")
 
-	integratedConfig, err := LoadConfig()
+	integratedConfig, err = LoadConfig()
 	if err != nil {
 		log.Fatal("unable to load integratedConfig: ", err)
 	}
@@ -222,7 +222,7 @@ func TestMain(m *testing.M) {
 		log.Fatalf("Could not start iot repo: %s", err)
 	}
 	defer dockeriot.Close()
-	integratedConfig.IotUrl = "mongodb://localhost:" + mongo.GetPort("27017/tcp")
+	integratedConfig.IotUrl = "http://localhost:" + dockeriot.GetPort("8080/tcp")
 
 	time.Sleep(5 * time.Second)
 

@@ -17,28 +17,41 @@
 package main
 
 import (
-	"github.com/google/uuid"
+	"errors"
 	"log"
 	"moses/iotmodel"
 	"net/url"
 )
 
-func (this *StateRepo) EnsureMosesProtocol(jwt JwtImpersonate) (err error) {
-	protocolList, err := this.findProtocol(jwt, this.Config.KafkaProtocolTopic) //moses protocol name should be same as protocol url
+func (this *StateRepo) EnsureMosesProtocol(jwt JwtImpersonate) (result iotmodel.Protocol, err error) {
+	result, err = this.findProtocol(jwt)
 	if err != nil {
-		return err
+		err = this.createMosesProtocol(jwt)
+	} else {
+		return result, err
+	}
+	if err != nil {
+		return result, err
+	}
+	//create protocol if not found
+	return this.findProtocol(jwt)
+}
+
+func (this *StateRepo) findProtocol(jwt JwtImpersonate) (result iotmodel.Protocol, err error) {
+	protocolList, err := this.findProtocolList(jwt, this.Config.KafkaProtocolTopic) //moses protocol name should be same as protocol url
+	if err != nil {
+		return result, err
 	}
 	for _, protocol := range protocolList {
 		if protocol.ProtocolHandlerUrl == this.Config.KafkaProtocolTopic {
-			return nil //if protocol is found, we are finished
+			return protocol, nil //if protocol is found, we are finished
 		}
 	}
-
 	//create protocol if not found
-	return this.createMosesProtocol(jwt)
+	return result, errors.New("no protocol found")
 }
 
-func (this *StateRepo) findProtocol(jwt JwtImpersonate, protocolName string) (result []iotmodel.Protocol, err error) {
+func (this *StateRepo) findProtocolList(jwt JwtImpersonate, protocolName string) (result []iotmodel.Protocol, err error) {
 	err = jwt.GetJSON(this.Config.IotUrl+"/ui/search/others/protocols/"+protocolName+"/10/0", &result)
 	return
 }
@@ -54,35 +67,40 @@ func (this *StateRepo) createMosesProtocol(jwt JwtImpersonate) (err error) {
 			},
 		},
 	}
+
 	err = jwt.PostJSON(this.Config.IotUrl+"/other/protocol", protocol, nil)
 	return
 }
 
 func (this *StateRepo) GetIotService(jwt Jwt, externalServiceId string) (service iotmodel.Service, err error) {
 	err = jwt.Impersonate.GetJSON(this.Config.IotUrl+"/service/"+url.PathEscape(externalServiceId), &service)
+	if err != nil {
+		log.Println("ERROR: unable to get service", err)
+	}
 	return
 }
 
 func (this *StateRepo) GetIotDeviceType(jwt Jwt, id string) (dt iotmodel.DeviceType, err error) {
 	err = jwt.Impersonate.GetJSON(this.Config.IotUrl+"/deviceType/"+url.PathEscape(id), &dt)
+	if err != nil {
+		log.Println("ERROR: unable to get device type", err)
+	}
 	return
 }
 
 func (this *StateRepo) GetDeviceTypesIds(jwt Jwt) (result []string, err error) {
 	err = jwt.Impersonate.PostJSON(this.Config.IotUrl+"/query/service", iotmodel.Service{Protocol: iotmodel.Protocol{ProtocolHandlerUrl: this.Config.KafkaProtocolTopic}}, &result)
+	if err != nil {
+		log.Println("ERROR: unable to query service", err)
+	}
 	return
 }
 
 func (this *StateRepo) GenerateExternalDevice(jwt Jwt, request CreateDeviceByTypeRequest) (device iotmodel.DeviceInstance, err error) {
-	uri, err := uuid.NewRandom()
+	deviceInp := iotmodel.DeviceInstance{Name: request.Name, UserTags: []string{"moses"}, DeviceType: request.DeviceTypeId, Url: "moses_will_be_ignored"}
+	err = jwt.Impersonate.PostJSON(this.Config.IotUrl+"/deviceInstance", deviceInp, &device)
 	if err != nil {
-		return device, err
-	}
-	device = iotmodel.DeviceInstance{Name: request.Name, UserTags: []string{"moses"}, Url: uri.String(), DeviceType: request.DeviceTypeId}
-	var response interface{}
-	err = jwt.Impersonate.PostJSON(this.Config.IotUrl+"/deviceInstance", device, &response)
-	if err != nil {
-		log.Println("ERROR: unable to create device in iot repository: ", err, response)
+		log.Println("ERROR: unable to create device in iot repository: ", err, device)
 	}
 	return
 }
