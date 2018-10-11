@@ -146,7 +146,7 @@ func TestSimpleCrud(t *testing.T) {
 		t.Fatal("unexpected get response", deviceUpdate, device)
 	}
 
-	serviceCreate := CreateServiceRequest{Device: device.Device.Id, Name: "Service1", Code: "console.log(\"foobar\")", SensorInterval: 1 * time.Second}
+	serviceCreate := CreateServiceRequest{Device: device.Device.Id, Name: "Service1", Code: "var foo = \"bar\"", SensorInterval: 1 * time.Second}
 	service := ServiceResponse{}
 	err = httpRequest("POST", integratedServer.URL+"/service", serviceCreate, &service)
 	if err != nil {
@@ -156,7 +156,7 @@ func TestSimpleCrud(t *testing.T) {
 		t.Fatal("unexpected create response", serviceCreate, service)
 	}
 
-	serviceUpdate := UpdateServiceRequest{Id: service.Service.Id, Name: "Service2", Code: "console.log(\"42\")", SensorInterval: 2 * time.Second}
+	serviceUpdate := UpdateServiceRequest{Id: service.Service.Id, Name: "Service2", Code: "var foo = \"42\"", SensorInterval: 2 * time.Second}
 	service = ServiceResponse{}
 	err = httpRequest("PUT", integratedServer.URL+"/service", serviceUpdate, &service)
 	if err != nil {

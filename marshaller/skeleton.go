@@ -18,7 +18,7 @@ package marshaller
 
 import (
 	"errors"
-	"fmt"
+	"log"
 	"moses/iotmodel"
 )
 
@@ -86,7 +86,7 @@ func setSkeletonValueFromValueType(skeleton *InputOutput, valueType iotmodel.Val
 		}
 		skeleton.Values = append(skeleton.Values, input)
 	default:
-		fmt.Println("unknown base type: " + valueType.BaseType)
+		log.Println("unknown base type: " + valueType.BaseType)
 		return errors.New("unknown base type: " + valueType.BaseType)
 	}
 	return
