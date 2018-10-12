@@ -445,6 +445,20 @@ moses.service.send(output);
 		t.Fatal("unexpected create response", worldToDelete)
 	}
 
+	err = integratedstaterepo.Load()
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+
+	worlds = []WorldMsg{}
+	err = httpUserRequest("GET", integratedServer.URL+"/worlds", nil, &worlds)
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+	if len(worlds) != 2 || (worlds[0].Name == worldCreate.Name && worlds[1].Name == worldToDelete.Name) || (worlds[1].Name == worldCreate.Name && worlds[0].Name == worldToDelete.Name) {
+		t.Fatal("unexpected get response", worlds[0].Name, worlds[1].Name)
+	}
+
 	err = httpUserRequest("DELETE", integratedServer.URL+"/world/"+worldToDelete.Id, nil, nil)
 	if err != nil {
 		t.Fatal("Error", err)

@@ -116,7 +116,9 @@ func (this MongoPersistence) LoadWorlds() (result map[string]*World, err error) 
 		return result, err
 	}
 	for _, world := range worlds {
-		result[world.Id] = &world
+		var tempWorld World
+		tempWorld = world
+		result[tempWorld.Id] = &tempWorld
 	}
 	return
 }
@@ -131,7 +133,9 @@ func (this MongoPersistence) LoadGraphs() (result map[string]*Graph, err error) 
 		return result, err
 	}
 	for _, graph := range graphs {
-		result[graph.Id] = &graph
+		var temp Graph
+		temp = graph
+		result[graph.Id] = &temp
 	}
 	return
 }

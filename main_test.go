@@ -113,6 +113,7 @@ func GetFreePort() (int, error) {
 }
 
 var integratedConfig Config
+var integratedstaterepo StateRepo
 
 func TestMain(m *testing.M) {
 	//with mocks
@@ -242,14 +243,14 @@ func TestMain(m *testing.M) {
 		log.Fatal("unable to connect to database: ", err)
 	}
 
-	integratedstaterepo := &StateRepo{Persistence: persistence, Config: integratedConfig, Protocol: protocol}
+	integratedstaterepo = StateRepo{Persistence: persistence, Config: integratedConfig, Protocol: protocol}
 	err = integratedstaterepo.Load()
 	if err != nil {
 		log.Fatal("unable to load state repo: ", err)
 	}
 	log.Println("start integrated state routines")
 	staterepo.Start()
-	integratedroutes := getRoutes(Config{DevApi: "true"}, integratedstaterepo)
+	integratedroutes := getRoutes(Config{DevApi: "true"}, &integratedstaterepo)
 	integratedlogger := Logger(integratedroutes, "CALL")
 	integratedServer = httptest.NewServer(integratedlogger)
 	defer integratedServer.Close()
