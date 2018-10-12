@@ -66,7 +66,8 @@ func LoadConfigLocation(location string) (result Config, err error) {
 		log.Println("invalid config json: ", err)
 		return result, err
 	}
-	handleEnvironmentVars(result)
+	log.Println("handle environment variables")
+	handleEnvironmentVars(&result)
 	return
 }
 
