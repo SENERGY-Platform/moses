@@ -107,6 +107,7 @@ func (this MongoPersistence) GetTemplates() (templ []RoutineTemplate, err error)
 }
 
 func (this MongoPersistence) LoadWorlds() (result map[string]*World, err error) {
+	result = map[string]*World{}
 	session, collection := this.getWorldCollection()
 	defer session.Close()
 	worlds := []World{}
@@ -121,6 +122,7 @@ func (this MongoPersistence) LoadWorlds() (result map[string]*World, err error) 
 }
 
 func (this MongoPersistence) LoadGraphs() (result map[string]*Graph, err error) {
+	result = map[string]*Graph{}
 	session, collection := this.getGraphCollection()
 	defer session.Close()
 	graphs := []Graph{}
