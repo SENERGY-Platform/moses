@@ -166,7 +166,7 @@ func TestJsvmApi(t *testing.T) {
 	json.Unmarshal(bbuffer, &compb)
 
 	if !reflect.DeepEqual(compa, compb) {
-		t.Fatal("unexpected result", compa, compb)
+		t.Fatal("unexpected result", compa, "\n\n", compb)
 	}
 }
 

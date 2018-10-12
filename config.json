@@ -3,7 +3,7 @@
     "mongo_url": "mongodb://mongo",
     "iot_url": "http://iot",
     "zookeeper_url": "zk",
-    "log_level": "DEBUG",
+    "log_level": "CALL",
     "world_collection_name": "worlds",
     "graph_collection_name": "graphs",
     "template_collection_name": "templates",

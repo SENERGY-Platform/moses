@@ -86,14 +86,16 @@ func (this *StateRepo) UpdateWorld(jwt Jwt, msg UpdateWorldRequest) (world World
 
 func (this *StateRepo) DeleteWorld(jwt Jwt, id string) (access bool, exists bool, err error) {
 	world, exists, err := this.DevGetWorld(id)
-	if err != nil {
+	if err != nil || !exists {
+		log.Println("ERROR:", err, exists)
 		return access, exists, err
 	}
 	if !isAdmin(jwt) && world.Owner != jwt.UserId {
+		log.Println("ERROR: access denied", world.Owner, jwt.UserId)
 		return false, exists, err
 	}
-	this.DevDeleteWorld(id)
-	return
+	err = this.DevDeleteWorld(id)
+	return true, exists, err
 }
 
 func (this *StateRepo) ReadRoom(jwt Jwt, id string) (room RoomResponse, access bool, exists bool, err error) {
@@ -164,7 +166,7 @@ func (this *StateRepo) DeleteRoom(jwt Jwt, id string) (room RoomResponse, access
 	}
 	delete(world.Rooms, room.Room.Id)
 	err = this.DevUpdateWorld(world)
-	return
+	return room, true, exists, err
 }
 
 func (this *StateRepo) ReadDevice(jwt Jwt, id string) (device DeviceResponse, access bool, exists bool, err error) {

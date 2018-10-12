@@ -434,6 +434,31 @@ moses.service.send(output);
 		t.Fatal("unexpected get response", deviceGet2, deviceGet)
 	}
 
+	//delete
+	createWorldToDelete := CreateWorldRequest{Name: "WorldToDelete"}
+	worldToDelete := WorldMsg{}
+	err = httpUserRequest("POST", integratedServer.URL+"/world", createWorldToDelete, &worldToDelete)
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+	if worldToDelete.Id == "" || worldToDelete.Name != createWorldToDelete.Name {
+		t.Fatal("unexpected create response", worldToDelete)
+	}
+
+	err = httpUserRequest("DELETE", integratedServer.URL+"/world/"+worldToDelete.Id, nil, nil)
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+
+	worlds = []WorldMsg{}
+	err = httpUserRequest("GET", integratedServer.URL+"/worlds", nil, &worlds)
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+	if len(worlds) != 1 || worlds[0].Name == worldToDelete.Name {
+		t.Fatal("unexpected get response", worlds)
+	}
+
 	//TODO:
 	// read and use default template
 	// delete entities
