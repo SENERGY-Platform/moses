@@ -329,7 +329,7 @@ func TestCrud(t *testing.T) {
 		t.Fatal("Error", err)
 	}
 
-	time.Sleep(3 * time.Second)
+	time.Sleep(4 * time.Second)
 
 	createByDt := CreateDeviceByTypeRequest{Room: room.Room.Id, ExternalRef: "foobar", Name: "foo42", DeviceTypeId: dt.Id}
 	device = DeviceResponse{}
@@ -413,6 +413,30 @@ moses.service.send(output);
 		t.Fatal("unexpected get response", templateUpdate, template)
 	}
 
+	routine := ChangeRoutineResponse{}
+	templUse := CreateChangeRoutineByTemplateRequest{TemplId: template.Id, Interval: 1 * time.Second, Parameter: map[string]string{"foobar": "42"}, RefType: "device", RefId: deviceGet.Device.Id}
+	err = httpUserRequest("POST", integratedServer.URL+"/usetemplate", templUse, &routine)
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+	if routine.Id == "" || routine.Code != "var foo = \"42\"" || routine.Interval != templUse.Interval || templUse.RefType != "device" || templUse.RefId != deviceGet.Device.Id {
+		t.Fatal("unexpected response", routine)
+	}
+
+	deviceGet.Device.ChangeRoutines = map[string]ChangeRoutine{}
+	deviceGet.Device.ChangeRoutines[routine.Id] = ChangeRoutine{Id: routine.Id, Interval: routine.Interval, Code: routine.Code}
+	deviceGet2 := DeviceResponse{}
+	err = httpUserRequest("GET", integratedServer.URL+"/device/"+deviceGet.Device.Id, nil, &deviceGet2)
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+	if deviceGet2.World == "" || deviceGet2.Device.Id == "" || !reflect.DeepEqual(deviceGet2, deviceGet) {
+		t.Fatal("unexpected get response", deviceGet2, deviceGet)
+	}
+
+	//TODO:
+	// read and use default template
+	// delete entities
 }
 
 func helperCreateDeviceType() (dt iotmodel.DeviceType, err error) {

@@ -487,6 +487,8 @@ func (this *StateRepo) CreateChangeRoutine(jwt Jwt, msg CreateChangeRoutineReque
 		}
 		device.Device.ChangeRoutines[routine.Id] = routine
 		err = this.DevUpdateDevice(device.World, device.Room, device.Device)
+	default:
+		err = errors.New("unknown ref type")
 	}
 	return result, true, true, err
 }
@@ -521,6 +523,8 @@ func (this *StateRepo) UpdateChangeRoutine(jwt Jwt, msg UpdateChangeRoutineReque
 		}
 		device.Device.ChangeRoutines[msg.Id] = changeRoutine
 		err = this.DevUpdateDevice(device.World, device.Room, device.Device)
+	default:
+		err = errors.New("unknown ref type")
 	}
 	return routine, true, true, err
 }
@@ -574,6 +578,8 @@ func (this *StateRepo) ReadChangeRoutine(jwt Jwt, id string) (routine ChangeRout
 		}
 		routine.Code = deviceRoutine.Code
 		routine.Interval = deviceRoutine.Interval
+	default:
+		err = errors.New("unknown ref type")
 	}
 	return routine, true, true, err
 }
@@ -602,6 +608,8 @@ func (this *StateRepo) DeleteChangeRoutine(jwt Jwt, id string) (routine ChangeRo
 			return routine, access, exists, err
 		}
 		err = this.DevUpdateDevice(device.World, device.Room, device.Device)
+	default:
+		err = errors.New("unknown ref type")
 	}
 	return routine, true, true, err
 }
