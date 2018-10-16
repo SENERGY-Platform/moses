@@ -331,7 +331,7 @@ func TestCrud(t *testing.T) {
 
 	time.Sleep(4 * time.Second)
 
-	createByDt := CreateDeviceByTypeRequest{Room: room.Room.Id, ExternalRef: "foobar", Name: "foo42", DeviceTypeId: dt.Id}
+	createByDt := CreateDeviceByTypeRequest{Room: room.Room.Id, Name: "foo42", DeviceTypeId: dt.Id}
 	device = DeviceResponse{}
 	err = httpUserRequest("POST", integratedServer.URL+"/device/bydevicetype", createByDt, &device)
 	if err != nil {

@@ -73,7 +73,6 @@ type CreateDeviceByTypeRequest struct {
 	DeviceTypeId string `json:"device_type_id"`
 	Room         string `json:"room"`
 	Name         string `json:"name"`
-	ExternalRef  string `json:"external_ref"` //platform intern device id; 1:1; optional
 }
 
 type UpdateServiceRequest struct {
