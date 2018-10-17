@@ -473,6 +473,38 @@ moses.service.send(output);
 		t.Fatal("unexpected get response", worlds)
 	}
 
+	//delete device
+	createByDt = CreateDeviceByTypeRequest{Room: room.Room.Id, Name: "toDelete", DeviceTypeId: dt.Id}
+	device = DeviceResponse{}
+	err = httpUserRequest("POST", integratedServer.URL+"/device/bydevicetype", createByDt, &device)
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+
+	time.Sleep(3 * time.Second)
+
+	iotDevice = iotmodel.DeviceInstance{}
+	err = httpUserRequest("GET", integratedConfig.IotUrl+"/deviceInstance/"+url.PathEscape(device.Device.ExternalRef), nil, &iotDevice)
+	if err != nil {
+		t.Fatal("Error", integratedConfig.IotUrl+"/deviceInstance/"+url.PathEscape(device.Device.ExternalRef), err)
+	}
+	if device.Device.ExternalRef != iotDevice.Id || iotDevice.Name != createByDt.Name {
+		t.Fatal("unexpected response", device.Device.ExternalRef, iotDevice.Id, iotDevice.Name, createByDt.Name)
+	}
+
+	err = httpUserRequest("DELETE", integratedServer.URL+"/device/"+device.Device.Id, nil, nil)
+	if err != nil {
+		t.Fatal("Error", err)
+	}
+
+	time.Sleep(3 * time.Second)
+
+	iotDevice = iotmodel.DeviceInstance{}
+	err = httpUserRequest("GET", integratedConfig.IotUrl+"/deviceInstance/"+url.PathEscape(device.Device.ExternalRef), nil, &iotDevice)
+	if err == nil {
+		t.Fatal("Error", integratedConfig.IotUrl+"/deviceInstance/"+url.PathEscape(device.Device.ExternalRef), "expected not to find device", iotDevice)
+	}
+
 	//TODO:
 	// read and use default template
 	// delete entities

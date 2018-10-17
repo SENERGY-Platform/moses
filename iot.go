@@ -104,3 +104,10 @@ func (this *StateRepo) GenerateExternalDevice(jwt Jwt, request CreateDeviceByTyp
 	}
 	return
 }
+
+func (this *StateRepo) DeleteExternalDevice(jwt Jwt, id string) (err error) {
+	if id != "" {
+		_, err = jwt.Impersonate.Delete(this.Config.IotUrl + "/deviceInstance/" + url.PathEscape(id))
+	}
+	return
+}

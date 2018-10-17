@@ -246,6 +246,9 @@ func (this *StateRepo) DeleteDevice(jwt Jwt, id string) (device DeviceResponse, 
 	}
 	delete(world.Rooms[device.Room].Devices, device.Device.Id)
 	err = this.DevUpdateWorld(world) //update world is more efficient than update room
+	if err == nil {
+		this.DeleteExternalDevice(jwt, device.Device.ExternalRef)
+	}
 	return device, true, true, err
 }
 

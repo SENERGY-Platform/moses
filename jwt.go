@@ -162,6 +162,27 @@ func (this JwtImpersonate) Get(url string) (resp *http.Response, err error) {
 	return
 }
 
+func (this JwtImpersonate) Delete(url string) (resp *http.Response, err error) {
+	req, err := http.NewRequest("DELETE", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", string(this))
+	resp, err = http.DefaultClient.Do(req)
+
+	if err == nil && resp.StatusCode == 401 {
+		buf := new(bytes.Buffer)
+		buf.ReadFrom(resp.Body)
+		resp.Body.Close()
+		log.Println(buf.String())
+		err = errors.New("access denied")
+	}
+	if err == nil && (resp.StatusCode != 200) {
+		err = errors.New("unexpected statuscode in response for POST " + url)
+	}
+	return
+}
+
 func (this JwtImpersonate) GetJSON(url string, result interface{}) (err error) {
 	resp, err := this.Get(url)
 	if err != nil {
