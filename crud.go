@@ -80,6 +80,7 @@ func (this *StateRepo) UpdateWorld(jwt Jwt, msg UpdateWorldRequest) (world World
 	}
 	world.Name = msg.Name
 	world.States = msg.States
+	world.ChangeRoutines = msg.ChangeRoutines
 	err = this.DevUpdateWorld(world)
 	return
 }
@@ -127,6 +128,7 @@ func (this *StateRepo) UpdateRoom(jwt Jwt, msg UpdateRoomRequest) (room RoomResp
 	room.Room.States = msg.States
 	room.Room.Name = msg.Name
 	room.Room.Id = msg.Id
+	room.Room.ChangeRoutines = msg.ChangeRoutines
 	err = this.DevUpdateRoom(room.World, room.Room)
 	return
 }
@@ -226,6 +228,8 @@ func (this *StateRepo) UpdateDevice(jwt Jwt, msg UpdateDeviceRequest) (device De
 	device.Device.ImageUrl = msg.ImageUrl
 	device.Device.Id = msg.Id
 	device.Device.ExternalRef = msg.ExternalRef
+	device.Device.ChangeRoutines = msg.ChangeRoutines
+	device.Device.Services = msg.Services
 	err = this.DevUpdateDevice(device.World, device.Room, device.Device)
 	return device, true, true, err
 }

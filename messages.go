@@ -27,9 +27,10 @@ type CreateWorldRequest struct {
 }
 
 type UpdateWorldRequest struct {
-	Id     string                 `json:"id"`
-	Name   string                 `json:"name"`
-	States map[string]interface{} `json:"states"`
+	Id             string                   `json:"id"`
+	Name           string                   `json:"name"`
+	States         map[string]interface{}   `json:"states"`
+	ChangeRoutines map[string]ChangeRoutine `json:"change_routines"`
 }
 
 type RoomResponse struct {
@@ -38,9 +39,10 @@ type RoomResponse struct {
 }
 
 type UpdateRoomRequest struct {
-	Id     string                 `json:"id"`
-	Name   string                 `json:"name"`
-	States map[string]interface{} `json:"states"`
+	Id             string                   `json:"id"`
+	Name           string                   `json:"name"`
+	States         map[string]interface{}   `json:"states"`
+	ChangeRoutines map[string]ChangeRoutine `json:"change_routines"`
 }
 
 type CreateRoomRequest struct {
@@ -56,11 +58,13 @@ type DeviceResponse struct {
 }
 
 type UpdateDeviceRequest struct {
-	Id          string                 `json:"id"`
-	Name        string                 `json:"name"`
-	ImageUrl    string                 `json:"image_url"`
-	States      map[string]interface{} `json:"states"`
-	ExternalRef string                 `json:"external_ref"` //platform intern device id; 1:1
+	Id             string                   `json:"id"`
+	Name           string                   `json:"name"`
+	ImageUrl       string                   `json:"image_url"`
+	States         map[string]interface{}   `json:"states"`
+	ChangeRoutines map[string]ChangeRoutine `json:"change_routines"`
+	Services       map[string]Service       `json:"services"`
+	ExternalRef    string                   `json:"external_ref"` //platform intern device id; 1:1
 }
 
 type CreateDeviceRequest struct {
