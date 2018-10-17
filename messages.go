@@ -58,6 +58,7 @@ type DeviceResponse struct {
 type UpdateDeviceRequest struct {
 	Id          string                 `json:"id"`
 	Name        string                 `json:"name"`
+	ImageUrl    string                 `json:"image_url"`
 	States      map[string]interface{} `json:"states"`
 	ExternalRef string                 `json:"external_ref"` //platform intern device id; 1:1
 }
@@ -65,6 +66,7 @@ type UpdateDeviceRequest struct {
 type CreateDeviceRequest struct {
 	Room        string                 `json:"room"`
 	Name        string                 `json:"name"`
+	ImageUrl    string                 `json:"image_url"`
 	States      map[string]interface{} `json:"states"`
 	ExternalRef string                 `json:"external_ref"` //platform intern device id; 1:1
 }
@@ -171,6 +173,7 @@ type RoomMsg struct {
 type DeviceMsg struct {
 	Id             string                   `json:"id"`
 	Name           string                   `json:"name"`
+	ImageUrl       string                   `json:"image_url"`
 	ExternalRef    string                   `json:"external_ref"` //platform intern device id; 1:1
 	States         map[string]interface{}   `json:"states"`
 	ChangeRoutines map[string]ChangeRoutine `json:"change_routines"`

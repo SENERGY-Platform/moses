@@ -206,6 +206,7 @@ func (this *StateRepo) CreateDevice(jwt Jwt, msg CreateDeviceRequest) (device De
 	}
 	device.Device.Id = uid.String()
 	device.Device.Name = msg.Name
+	device.Device.ImageUrl = msg.ImageUrl
 	device.Device.States = msg.States
 	device.Device.ExternalRef = msg.ExternalRef
 	device.World = room.World
@@ -222,6 +223,7 @@ func (this *StateRepo) UpdateDevice(jwt Jwt, msg UpdateDeviceRequest) (device De
 	}
 	device.Device.States = msg.States
 	device.Device.Name = msg.Name
+	device.Device.ImageUrl = msg.ImageUrl
 	device.Device.Id = msg.Id
 	device.Device.ExternalRef = msg.ExternalRef
 	err = this.DevUpdateDevice(device.World, device.Room, device.Device)
@@ -378,6 +380,7 @@ func (this *StateRepo) CreateDeviceByType(jwt Jwt, msg CreateDeviceByTypeRequest
 	}
 	result.Device.Id = uid.String()
 	result.Device.Name = msg.Name
+	result.Device.ImageUrl = externalDevice.ImgUrl
 	result.Device.ExternalRef = externalDevice.Id
 	result.World = room.World
 	result.Room = msg.Room
