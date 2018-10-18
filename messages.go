@@ -18,7 +18,6 @@ package main
 
 import (
 	"encoding/json"
-	"time"
 )
 
 type CreateWorldRequest struct {
@@ -82,11 +81,11 @@ type CreateDeviceByTypeRequest struct {
 }
 
 type UpdateServiceRequest struct {
-	Id             string        `json:"id"`
-	Name           string        `json:"name"`
-	ExternalRef    string        `json:"external_ref"` //platform intern service id
-	SensorInterval time.Duration `json:"sensor_interval"`
-	Code           string        `json:"code"`
+	Id             string `json:"id"`
+	Name           string `json:"name"`
+	ExternalRef    string `json:"external_ref"` //platform intern service id
+	SensorInterval int64  `json:"sensor_interval"`
+	Code           string `json:"code"`
 }
 
 type ServiceResponse struct {
@@ -97,33 +96,33 @@ type ServiceResponse struct {
 }
 
 type CreateServiceRequest struct {
-	Device         string        `json:"device"`
-	Name           string        `json:"name"`
-	ExternalRef    string        `json:"external_ref"` //platform intern service id, will be used to populate Service.Marshaller and as endpoint for the connector
-	SensorInterval time.Duration `json:"sensor_interval"`
-	Code           string        `json:"code"`
+	Device         string `json:"device"`
+	Name           string `json:"name"`
+	ExternalRef    string `json:"external_ref"` //platform intern service id, will be used to populate Service.Marshaller and as endpoint for the connector
+	SensorInterval int64  `json:"sensor_interval"`
+	Code           string `json:"code"`
 }
 
 //{ref_type:"workd|room|device", ref_id: "", interval: 0, code:""}
 type CreateChangeRoutineRequest struct {
-	RefType  string        `json:"ref_type"` // "world" || "room" || "device"
-	RefId    string        `json:"ref_id"`
-	Interval time.Duration `json:"interval"`
-	Code     string        `json:"code"`
+	RefType  string `json:"ref_type"` // "world" || "room" || "device"
+	RefId    string `json:"ref_id"`
+	Interval int64  `json:"interval"`
+	Code     string `json:"code"`
 }
 
 type UpdateChangeRoutineRequest struct {
-	Id       string        `json:"id"`
-	Interval time.Duration `json:"interval"`
-	Code     string        `json:"code"`
+	Id       string `json:"id"`
+	Interval int64  `json:"interval"`
+	Code     string `json:"code"`
 }
 
 type ChangeRoutineResponse struct {
-	Id       string        `json:"id"`
-	RefType  string        `json:"ref_type"` // "world" || "room" || "device"
-	RefId    string        `json:"ref_id"`
-	Interval time.Duration `json:"interval"`
-	Code     string        `json:"code"`
+	Id       string `json:"id"`
+	RefType  string `json:"ref_type"` // "world" || "room" || "device"
+	RefId    string `json:"ref_id"`
+	Interval int64  `json:"interval"`
+	Code     string `json:"code"`
 }
 
 type CreateTemplateRequest struct {
@@ -144,14 +143,14 @@ type CreateChangeRoutineByTemplateRequest struct {
 	RefType   string            `json:"ref_type"` // "world" || "room" || "device"
 	RefId     string            `json:"ref_id"`
 	TemplId   string            `json:"templ_id"`
-	Interval  time.Duration     `json:"interval"`
+	Interval  int64             `json:"interval"`
 	Parameter map[string]string `json:"parameter"`
 }
 
 type UpdateChangeRoutineByTemplateRequest struct {
 	RoutineId string            `json:"routine_id""`
 	TemplId   string            `json:"templ_id"`
-	Interval  time.Duration     `json:"interval"`
+	Interval  int64             `json:"interval"`
 	Parameter map[string]string `json:"parameter"`
 }
 

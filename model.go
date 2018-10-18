@@ -19,7 +19,6 @@ package main
 import (
 	"moses/marshaller"
 	"sync"
-	"time"
 )
 
 type Point struct {
@@ -40,9 +39,9 @@ type ChangeRoutineIndexElement struct {
 }
 
 type ChangeRoutine struct {
-	Id       string        `json:"id" bson:"id"`
-	Interval time.Duration `json:"interval" bson:"interval"`
-	Code     string        `json:"code" bson:"code"`
+	Id       string `json:"id" bson:"id"`
+	Interval int64  `json:"interval" bson:"interval"`
+	Code     string `json:"code" bson:"code"`
 }
 
 type RoutineTemplate struct {
@@ -85,7 +84,7 @@ type Service struct {
 	Id             string                `json:"id" bson:"id"`
 	Name           string                `json:"name" bson:"name"`
 	ExternalRef    string                `json:"external_ref" bson:"external_ref"` //platform intern service id, will be used to populate Service.Marshaller and as endpoint for the connector
-	SensorInterval time.Duration         `json:"sensor_interval" bson:"sensor_interval"`
+	SensorInterval int64                 `json:"sensor_interval" bson:"sensor_interval"`
 	Code           string                `json:"code"`
 	Marshaller     marshaller.Marshaller `json:"-" bson:"marshaller"`
 }

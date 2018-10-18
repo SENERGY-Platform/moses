@@ -26,7 +26,7 @@ import (
 )
 
 func startChangeRoutine(routine ChangeRoutine, callbacks map[string]interface{}, timeout time.Duration, mux sync.Locker) (ticker *time.Ticker, stop chan bool) {
-	ticker = time.NewTicker(routine.Interval)
+	ticker = time.NewTicker(time.Duration(routine.Interval) * time.Second)
 	stop = make(chan bool)
 	go func() {
 		for {

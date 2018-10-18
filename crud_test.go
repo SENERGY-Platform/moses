@@ -157,7 +157,7 @@ func TestCrud(t *testing.T) {
 		t.Fatal("unexpected get response", deviceUpdate, device)
 	}
 
-	serviceCreate := CreateServiceRequest{Device: device.Device.Id, Name: "Service1", Code: "var foo = \"bar\"", SensorInterval: 1 * time.Second}
+	serviceCreate := CreateServiceRequest{Device: device.Device.Id, Name: "Service1", Code: "var foo = \"bar\"", SensorInterval: 1}
 	service := ServiceResponse{}
 	err = httpUserRequest("POST", integratedServer.URL+"/service", serviceCreate, &service)
 	if err != nil {
@@ -167,7 +167,7 @@ func TestCrud(t *testing.T) {
 		t.Fatal("unexpected create response", serviceCreate, service)
 	}
 
-	serviceUpdate := UpdateServiceRequest{Id: service.Service.Id, Name: "Service2", Code: "var foo = \"42\"", SensorInterval: 2 * time.Second}
+	serviceUpdate := UpdateServiceRequest{Id: service.Service.Id, Name: "Service2", Code: "var foo = \"42\"", SensorInterval: 2}
 	service = ServiceResponse{}
 	err = httpUserRequest("PUT", integratedServer.URL+"/service", serviceUpdate, &service)
 	if err != nil {
@@ -188,7 +188,7 @@ func TestCrud(t *testing.T) {
 
 	//routines
 
-	worldRoutineCreate := CreateChangeRoutineRequest{RefType: "world", RefId: world.Id, Code: "var foo = 'world'", Interval: 3 * time.Second}
+	worldRoutineCreate := CreateChangeRoutineRequest{RefType: "world", RefId: world.Id, Code: "var foo = 'world'", Interval: 3}
 	worldRoutine := ChangeRoutineResponse{}
 	err = httpUserRequest("POST", integratedServer.URL+"/changeroutine", worldRoutineCreate, &worldRoutine)
 	if err != nil {
@@ -198,7 +198,7 @@ func TestCrud(t *testing.T) {
 		t.Fatal("unexpected create response", worldRoutine, worldRoutineCreate)
 	}
 
-	worldRoutineUpdate := UpdateChangeRoutineRequest{Id: worldRoutine.Id, Code: "var foo = 'world2'", Interval: 4 * time.Second}
+	worldRoutineUpdate := UpdateChangeRoutineRequest{Id: worldRoutine.Id, Code: "var foo = 'world2'", Interval: 4}
 	worldRoutine = ChangeRoutineResponse{}
 	err = httpUserRequest("PUT", integratedServer.URL+"/changeroutine", worldRoutineUpdate, &worldRoutine)
 	if err != nil {
@@ -217,7 +217,7 @@ func TestCrud(t *testing.T) {
 		t.Fatal("unexpected update response", worldRoutine, worldRoutineUpdate)
 	}
 
-	roomRoutineCreate := CreateChangeRoutineRequest{RefType: "room", RefId: room.Room.Id, Code: "var foo = 'room'", Interval: 3 * time.Second}
+	roomRoutineCreate := CreateChangeRoutineRequest{RefType: "room", RefId: room.Room.Id, Code: "var foo = 'room'", Interval: 3}
 	roomRoutine := ChangeRoutineResponse{}
 	err = httpUserRequest("POST", integratedServer.URL+"/changeroutine", roomRoutineCreate, &roomRoutine)
 	if err != nil {
@@ -227,7 +227,7 @@ func TestCrud(t *testing.T) {
 		t.Fatal("unexpected create response", roomRoutineCreate, roomRoutine)
 	}
 
-	roomRoutineUpdate := UpdateChangeRoutineRequest{Id: roomRoutine.Id, Code: "var foo = 'room2'", Interval: 4 * time.Second}
+	roomRoutineUpdate := UpdateChangeRoutineRequest{Id: roomRoutine.Id, Code: "var foo = 'room2'", Interval: 4}
 	roomRoutine = ChangeRoutineResponse{}
 	err = httpUserRequest("PUT", integratedServer.URL+"/changeroutine", roomRoutineUpdate, &roomRoutine)
 	if err != nil {
@@ -246,7 +246,7 @@ func TestCrud(t *testing.T) {
 		t.Fatal("unexpected update response", roomRoutineUpdate, roomRoutine)
 	}
 
-	deviceRoutineCreate := CreateChangeRoutineRequest{RefType: "device", RefId: device.Device.Id, Code: "var foo = 'device'", Interval: 3 * time.Second}
+	deviceRoutineCreate := CreateChangeRoutineRequest{RefType: "device", RefId: device.Device.Id, Code: "var foo = 'device'", Interval: 3}
 	deviceRoutine := ChangeRoutineResponse{}
 	err = httpUserRequest("POST", integratedServer.URL+"/changeroutine", deviceRoutineCreate, &deviceRoutine)
 	if err != nil {
@@ -256,7 +256,7 @@ func TestCrud(t *testing.T) {
 		t.Fatal("unexpected create response", deviceRoutine, deviceRoutineCreate)
 	}
 
-	deviceRoutineUpdate := UpdateChangeRoutineRequest{Id: deviceRoutine.Id, Code: "var foo = 'device2'", Interval: 4 * time.Second}
+	deviceRoutineUpdate := UpdateChangeRoutineRequest{Id: deviceRoutine.Id, Code: "var foo = 'device2'", Interval: 4}
 	deviceRoutine = ChangeRoutineResponse{}
 	err = httpUserRequest("PUT", integratedServer.URL+"/changeroutine", deviceRoutineUpdate, &deviceRoutine)
 	if err != nil {
@@ -414,7 +414,7 @@ moses.service.send(output);
 	}
 
 	routine := ChangeRoutineResponse{}
-	templUse := CreateChangeRoutineByTemplateRequest{TemplId: template.Id, Interval: 1 * time.Second, Parameter: map[string]string{"foobar": "42"}, RefType: "device", RefId: deviceGet.Device.Id}
+	templUse := CreateChangeRoutineByTemplateRequest{TemplId: template.Id, Interval: 1, Parameter: map[string]string{"foobar": "42"}, RefType: "device", RefId: deviceGet.Device.Id}
 	err = httpUserRequest("POST", integratedServer.URL+"/usetemplate", templUse, &routine)
 	if err != nil {
 		t.Fatal("Error", err)
