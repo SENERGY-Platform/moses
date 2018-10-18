@@ -24,6 +24,7 @@ import (
 	"log"
 	"moses/iotmodel"
 	"moses/marshaller"
+	"strings"
 )
 
 func isAdmin(jwt Jwt) bool {
@@ -431,7 +432,7 @@ func (this *StateRepo) createServiceCodeSkeleton(service iotmodel.Service) (resu
 		if err != nil {
 			return result, err
 		}
-		templateParamer["output"] = formatedOutput
+		templateParamer["output"] = strings.TrimSpace(formatedOutput)
 	}
 
 	if len(service.Input) > 0 {
@@ -444,20 +445,15 @@ func (this *StateRepo) createServiceCodeSkeleton(service iotmodel.Service) (resu
 		if err != nil {
 			return result, err
 		}
-		templateParamer["input"] = formatedInput
+		templateParamer["input"] = strings.TrimSpace(formatedInput)
 	}
 
-	template := ` 
-{{#input}} 
-/* {{{input}}} */
+	template := `{{#input}}/*
+{{{input}}}
+*/
 var input = moses.service.input; 
-{{/input}}
-
-{{#output}}
-var output = {{{output}}}
-moses.service.send(output);
-{{/output}}
-`
+{{/input}}{{#output}}var output = {{{output}}};
+moses.service.send(output);{{/output}}`
 	return mustache.Render(template, templateParamer)
 }
 

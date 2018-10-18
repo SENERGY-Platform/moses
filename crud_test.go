@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/ioutil"
+	"log"
 	"moses/iotmodel"
 	"net/http"
 	"net/url"
@@ -338,19 +339,16 @@ func TestCrud(t *testing.T) {
 		t.Fatal("Error", err)
 	}
 
-	expectedCode := `
-/* {
+	expectedCode := `/* 
+{
 	"a": 0
 }
- */
-var input = moses.service.input; 
-        
+*/
+var input = moses.service.input;  
 var output = {
 	"b": "STRING"
-}
-
-moses.service.send(output);
-`
+};
+moses.service.send(output);`
 
 	serviceResult := Service{}
 	for _, service := range device.Device.Services {
@@ -360,6 +358,7 @@ moses.service.send(output);
 	if device.World == "" || device.Device.Id == "" || device.Device.Name != createByDt.Name {
 		t.Fatal("unexpected create response", device.World, device.Device.Id, device.Device.Name)
 	}
+	log.Println("TEST: '" + serviceResult.Code + "'")
 	if strings.Join(strings.Fields(serviceResult.Code), "") != strings.Join(strings.Fields(expectedCode), "") {
 		t.Fatal("unexpected code", "::"+strings.Join(strings.Fields(serviceResult.Code), "")+"::"+strings.Join(strings.Fields(expectedCode), "")+"::")
 	}
