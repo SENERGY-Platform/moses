@@ -77,6 +77,7 @@ func TestCrud(t *testing.T) {
 	if err != nil {
 		t.Fatal("Error", err)
 	}
+	worldCreate.States = getDefaultWorldStates(worldCreate.States)
 	if world.Id == "" || world.Name != worldCreate.Name || !reflect.DeepEqual(world.States, worldCreate.States) {
 		t.Fatal("unexpected create response", worldCreate, world)
 	}
@@ -106,6 +107,7 @@ func TestCrud(t *testing.T) {
 	if err != nil {
 		t.Fatal("Error", err)
 	}
+	roomCreate.States = getDefaultRoomStates(roomCreate.States)
 	if room.World == "" || room.Room.Id == "" || room.Room.Name != roomCreate.Name || !reflect.DeepEqual(room.Room.States, roomCreate.States) {
 		t.Fatal("unexpected create response", roomCreate, room)
 	}

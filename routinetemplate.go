@@ -41,24 +41,3 @@ func GetTemplateParameterList(str string) (result []string, err error) {
 func RenderTempl(templ string, parameter interface{}) (result string, err error) {
 	return mustache.Render(templ, parameter)
 }
-
-var defaultTemplates = map[string]RoutineTemplate{
-	"default_linear": RoutineTemplate{
-		Name: "linear",
-		Description: `default linear template
-compareState is for example world
-compareValue is for example temp
-changeState is for example world.getRoom("room_1")
-changeValue is for example temp
-increment is the value by which the changeValue is incremented ore decremented`,
-		Parameter: []string{"compareState", "compareValue", "changeState", "changeValue", "increment"},
-		Template: `var targetValue = moses.{{compareState}}.state.get("{{compareValue}}");
-var isValue = moses.{{changeState}}.state.get("{{changeValue}}");
-if(targetValue > isValue){
-	isValue = isValue + {{increment}};
-}else if(targetValue < isValue){
-	isValue = isValue - {{increment}};
-}
-moses.{{changeState}}.state.set("{{changeValue}}", isValue);`,
-	},
-}

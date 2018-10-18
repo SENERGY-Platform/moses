@@ -57,7 +57,7 @@ func (this *StateRepo) CreateWorld(jwt Jwt, msg CreateWorldRequest) (world World
 	if err != nil {
 		return world, err
 	}
-	world = WorldMsg{Id: uid.String(), Name: msg.Name, States: msg.States, Owner: jwt.UserId, ChangeRoutines: map[string]ChangeRoutine{}}
+	world = WorldMsg{Id: uid.String(), Name: msg.Name, States: getDefaultWorldStates(msg.States), Owner: jwt.UserId, ChangeRoutines: getDefaultWorldChangeRoutines()}
 	err = this.DevUpdateWorld(world)
 	return
 }
@@ -146,9 +146,12 @@ func (this *StateRepo) CreateRoom(jwt Jwt, msg CreateRoomRequest) (room RoomResp
 	}
 	room.Room.Id = uid.String()
 	room.Room.Name = msg.Name
-	room.Room.States = msg.States
+	room.Room.States = getDefaultRoomStates(msg.States)
 	room.World = worldMsg.Id
-	room.Room.ChangeRoutines = map[string]ChangeRoutine{}
+	room.Room.ChangeRoutines, err = getDefaultRoomChangeRoutines()
+	if err != nil {
+		return room, true, true, err
+	}
 	err = this.DevUpdateRoom(room.World, room.Room)
 	return room, true, true, err
 }
