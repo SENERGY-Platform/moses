@@ -74,6 +74,7 @@ type Device struct {
 	Id             string                   `json:"id" bson:"id"`
 	Name           string                   `json:"name" bson:"name"`
 	ImageUrl       string                   `json:"image_url" bson:"image_url"`
+	ExternalTypeId string                   `json:"external_type_id" bson:"external_type_id"`
 	ExternalRef    string                   `json:"external_ref" bson:"external_ref"` //platform intern device id; 1:1
 	States         map[string]interface{}   `json:"states" bson:"states"`
 	ChangeRoutines map[string]ChangeRoutine `json:"change_routines" bson:"change_routines"`

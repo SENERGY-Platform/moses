@@ -177,6 +177,7 @@ type DeviceMsg struct {
 	Id             string                   `json:"id"`
 	Name           string                   `json:"name"`
 	ImageUrl       string                   `json:"image_url"`
+	ExternalTypeId string                   `json:"external_type_id"`
 	ExternalRef    string                   `json:"external_ref"` //platform intern device id; 1:1
 	States         map[string]interface{}   `json:"states"`
 	ChangeRoutines map[string]ChangeRoutine `json:"change_routines"`

@@ -399,6 +399,7 @@ func (this *StateRepo) CreateDeviceByType(jwt Jwt, msg CreateDeviceByTypeRequest
 	}
 	result.Device.Id = uid.String()
 	result.Device.Name = msg.Name
+	result.Device.ExternalTypeId = externalDevice.DeviceType
 	result.Device.ImageUrl = externalDevice.ImgUrl
 	result.Device.ExternalRef = externalDevice.Id
 	result.World = room.World
