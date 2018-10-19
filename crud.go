@@ -234,6 +234,14 @@ func (this *StateRepo) UpdateDevice(jwt Jwt, msg UpdateDeviceRequest) (device De
 	device.Device.ExternalRef = msg.ExternalRef
 	device.Device.ChangeRoutines = msg.ChangeRoutines
 	device.Device.Services = msg.Services
+	for key, value := range msg.Services {
+		device.Device.Services[key], err = this.PopulateServiceService(jwt, UpdateServiceRequest{Id: value.Id, Code: value.Code, SensorInterval: value.SensorInterval, ExternalRef: value.ExternalRef, Name: value.Name})
+		if err != nil {
+			log.Println("ERROR:", err)
+			return device, true, true, err
+		}
+		log.Println("DEBUG: marshaller: ", device.Device.Services[key].Marshaller)
+	}
 	err = this.DevUpdateDevice(device.World, device.Room, device.Device)
 	return device, true, true, err
 }

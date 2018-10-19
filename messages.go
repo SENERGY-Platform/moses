@@ -194,11 +194,25 @@ func jsonCopy(from interface{}, to interface{}) (err error) {
 func (this WorldMsg) ToModel() (result World, err error) {
 	err = jsonCopy(this, &result)
 	result.Owner = this.Owner
+	for key, room := range this.Rooms {
+		roomModel, err := room.ToModel()
+		if err != nil {
+			return result, err
+		}
+		result.Rooms[key] = &roomModel
+	}
 	return
 }
 
 func (this RoomMsg) ToModel() (result Room, err error) {
 	err = jsonCopy(this, &result)
+	for key, device := range this.Devices {
+		deviceModel, err := device.ToModel()
+		if err != nil {
+			return result, err
+		}
+		result.Devices[key] = &deviceModel
+	}
 	return
 }
 
@@ -213,11 +227,25 @@ func (this DeviceMsg) ToModel() (result Device, err error) {
 func (this World) ToMsg() (result WorldMsg, err error) {
 	err = jsonCopy(this, &result)
 	result.Owner = this.Owner
+	for key, room := range this.Rooms {
+		roomMsg, err := room.ToMsg()
+		if err != nil {
+			return result, err
+		}
+		result.Rooms[key] = roomMsg
+	}
 	return
 }
 
 func (this Room) ToMsg() (result RoomMsg, err error) {
 	err = jsonCopy(this, &result)
+	for key, device := range this.Devices {
+		deviceMsg, err := device.ToMsg()
+		if err != nil {
+			return result, err
+		}
+		result.Devices[key] = deviceMsg
+	}
 	return
 }
 
