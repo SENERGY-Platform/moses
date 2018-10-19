@@ -332,3 +332,34 @@ func (this *StateRepo) HandleCommand(externalDeviceRef string, externalServiceRe
 	}
 	log.Println("WARNING: no matching service for device found ", externalServiceRef)
 }
+
+func (this *StateRepo) RunService(serviceId string, cmdMsg interface{}) (resp interface{}, err error) {
+	this.mux.RLock()
+	defer this.mux.RUnlock()
+	device, ok := this.serviceDeviceIndex[serviceId]
+	if !ok {
+		log.Println("WARNING: no device with ref found ", serviceId)
+		return
+	}
+
+	service, ok := device.Services[serviceId]
+	if !ok {
+		log.Println("WARNING: no service with id found ", serviceId)
+		return
+	}
+
+	world, ok := this.deviceWorldIndex[device.Id]
+	if !ok {
+		log.Println("WARNING: no world for device found ", device.Id, " ", serviceId)
+		return
+	}
+	room, ok := this.deviceRoomIndex[device.Id]
+	if !ok {
+		log.Println("WARNING: no room for device found ", device.Id, " ", serviceId)
+		return
+	}
+	err = run(service.Code, this.getJsCommandApi(world, room, device, cmdMsg, func(respMsg interface{}) {
+		resp = respMsg
+	}), this.Config.JsTimeout, &world.mux)
+	return
+}

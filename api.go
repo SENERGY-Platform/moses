@@ -624,6 +624,57 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		fmt.Fprint(resp, "ok")
 	})
 
+	router.POST("/run/service/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
+		id := params.ByName("id")
+		jwt, err := GetJwt(request)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 400)
+			return
+		}
+		_, access, exists, err := state.ReadService(jwt, id)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+			return
+		}
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+			return
+		}
+		if !access {
+			log.Println("WARNING: user access denied")
+			http.Error(resp, "access denied", http.StatusUnauthorized)
+			return
+		}
+		if !exists {
+			log.Println("WARNING: 404")
+			http.Error(resp, "unknown id", http.StatusNotFound)
+			return
+		}
+		var msg interface{}
+		err = json.NewDecoder(request.Body).Decode(&msg)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 400)
+			return
+		}
+		result, err := state.RunService(id, msg)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 400)
+			return
+		}
+		b, err := json.Marshal(result)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			http.Error(resp, err.Error(), 500)
+		} else {
+			fmt.Fprint(resp, string(b))
+		}
+	})
+
 	// POST /device/bydevicetype
 	router.POST("/device/bydevicetype", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
