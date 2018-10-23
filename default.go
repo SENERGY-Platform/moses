@@ -86,6 +86,7 @@ if(targetValue > isValue){
 }else if(targetValue < isValue){
 	isValue = isValue - {{increment}};
 }
+isValue = Number(isValue.toFixed(1));
 moses.{{changeState}}.state.set("{{changeValue}}", isValue);`,
 	},
 }
@@ -97,6 +98,7 @@ if(temperature > room_temperature){
 }else if(temperature < room_temperature){
 	room_temperature = room_temperature - 1;
 }
+room_temperature = Number(room_temperature.toFixed(1));
 moses.room.state.set("temperature", room_temperature);
 `
 
@@ -107,5 +109,6 @@ if(humidity > room_humidity){
 }else if(humidity < room_humidity){
 	room_humidity = room_humidity - 1;
 }
+room_humidity = Number(room_humidity.toFixed(1));
 moses.room.state.set("humidity", room_humidity);
 `
