@@ -27,6 +27,7 @@ func getDefaultWorldStates(states map[string]interface{}) (result map[string]int
 		"temperature": float64(20),
 		"humidity":    float64(50),
 		"lux":         float64(10000),
+		"co-ppm":      float64(1.5),
 	}
 	for key, value := range states {
 		result[key] = value
@@ -43,6 +44,10 @@ func getDefaultRoomChangeRoutines() (result map[string]ChangeRoutine, err error)
 	if err != nil {
 		return result, err
 	}
+	coId, err := uuid.NewRandom()
+	if err != nil {
+		return result, err
+	}
 	return map[string]ChangeRoutine{
 		tempId.String(): ChangeRoutine{
 			Id:       tempId.String(),
@@ -53,6 +58,11 @@ func getDefaultRoomChangeRoutines() (result map[string]ChangeRoutine, err error)
 			Id:       tempId.String(),
 			Interval: 10,
 			Code:     default_room_hum_code,
+		},
+		coId.String(): ChangeRoutine{
+			Id:       coId.String(),
+			Interval: 10,
+			Code:     default_room_co_code,
 		},
 	}, nil
 }
@@ -112,4 +122,15 @@ if(humidity > room_humidity){
 }
 room_humidity = Number(room_humidity.toFixed(1));
 moses.room.state.set("humidity", room_humidity);
+`
+
+const default_room_co_code = `var co = moses.world.state.get("co-ppm");
+var room_co = moses.room.state.get("co-ppm");
+if(co > room_co){
+	room_co = room_co + 0.1;
+}else if(co < room_co){
+	room_co = room_co - 0.1;
+}
+room_co = Number(room_co.toFixed(2));
+moses.room.state.set("co-ppm", room_co);
 `
