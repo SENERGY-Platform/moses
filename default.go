@@ -55,7 +55,7 @@ func getDefaultRoomChangeRoutines() (result map[string]ChangeRoutine, err error)
 			Code:     default_room_temp_code,
 		},
 		humitId.String(): ChangeRoutine{
-			Id:       tempId.String(),
+			Id:       humitId.String(),
 			Interval: 10,
 			Code:     default_room_hum_code,
 		},
