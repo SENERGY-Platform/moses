@@ -106,13 +106,13 @@ func (this *StateRepo) ReadRoom(jwt Jwt, id string) (room RoomResponse, access b
 	admin := isAdmin(jwt)
 	world, exists := this.roomWorldIndex[id]
 	if !exists {
-		log.Println("DEBUG: room world index id not found", id, this.roomWorldIndex)
+		log.Println("WARNING: room world index id not found", id, this.roomWorldIndex)
 		return room, admin, exists, nil
 	}
 	world.mux.Lock()
 	defer world.mux.Unlock()
 	if !admin && world.Owner != jwt.UserId {
-		log.Println("DEBUG: room access denied", world.Owner, " != ", jwt.UserId)
+		log.Println("WARNING: room access denied", world.Owner, " != ", jwt.UserId)
 		return room, false, exists, nil
 	}
 	room.World = world.Id
@@ -123,7 +123,7 @@ func (this *StateRepo) ReadRoom(jwt Jwt, id string) (room RoomResponse, access b
 func (this *StateRepo) UpdateRoom(jwt Jwt, msg UpdateRoomRequest) (room RoomResponse, access bool, exists bool, err error) {
 	room, access, exists, err = this.ReadRoom(jwt, msg.Id)
 	if err != nil || !access || !exists {
-		log.Println("DEBUG: update world", access, exists, err)
+		log.Println("WARNING: update world", access, exists, err)
 		return
 	}
 	room.Room.States = msg.States
@@ -240,7 +240,6 @@ func (this *StateRepo) UpdateDevice(jwt Jwt, msg UpdateDeviceRequest) (device De
 			log.Println("ERROR:", err)
 			return device, true, true, err
 		}
-		log.Println("DEBUG: marshaller: ", device.Device.Services[key].Marshaller)
 	}
 	err = this.DevUpdateDevice(device.World, device.Room, device.Device)
 	return device, true, true, err
@@ -651,7 +650,7 @@ func (this *StateRepo) CreateTemplate(jwt Jwt, request CreateTemplateRequest) (r
 func (this *StateRepo) UpdateTemplate(jwt Jwt, request UpdateTemplateRequest) (result RoutineTemplate, exists bool, err error) {
 	result, err = this.Persistence.GetTemplate(request.Id)
 	if err == mgo.ErrNotFound {
-		log.Println("DEBUG: template not found", request.Id)
+		log.Println("WARNING: template not found", request.Id)
 		return result, false, nil
 	}
 	if err != nil {

@@ -49,6 +49,6 @@ func InitProducer(zkurl string) (producer *Producer, err error) {
 }
 
 func (this *Producer) Produce(topic string, message string) {
-	log.Println("DEBUG: Produce", topic, message)
+	//log.Println("DEBUG: Produce", topic, message)
 	this.producer.Input() <- &sarama.ProducerMessage{Topic: topic, Key: nil, Value: sarama.StringEncoder(message), Timestamp: time.Now()}
 }
