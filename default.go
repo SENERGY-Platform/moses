@@ -62,6 +62,7 @@ func getDefaultRoomStates(states map[string]interface{}) (result map[string]inte
 		"temperature": float64(20),
 		"humidity":    float64(50),
 		"lux":         float64(50),
+		"co-ppm":      float64(1.5),
 	}
 	for key, value := range states {
 		result[key] = value
