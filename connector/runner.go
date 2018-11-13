@@ -33,7 +33,6 @@ type RunnerTask struct {
 func RunTask(handler RunnerHandlerFunc) (task *RunnerTask) {
 	task = &RunnerTask{}
 	go func() {
-		task.mux.Lock()
 		err := handler(func() bool {
 			task.mux.RLock()
 			shouldStop := task.stop
@@ -43,7 +42,6 @@ func RunTask(handler RunnerHandlerFunc) (task *RunnerTask) {
 		if err != nil {
 			log.Println("ERROR: ", err)
 		}
-		task.mux.Unlock()
 	}()
 	return
 }

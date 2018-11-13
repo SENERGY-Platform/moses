@@ -29,7 +29,8 @@ const KAFKA_TIMEOUT = 60
 
 func InitKafkaConsumer(producer *Producer, zookeeperUrl string, topic string, msgHandler func(string) error) *RunnerTask {
 	return RunTask(func(shouldStop StopCheckFunc) error {
-		log.Println("Start KAFKA-Consumer")
+		log.Println("Start KAFKA-Consumer", topic)
+		defer log.Println("DEBUG: stop kafka consumer")
 		producer.Produce(topic, "topic_init")
 
 		zk, chroot := kazoo.ParseConnectionString(zookeeperUrl)
@@ -77,7 +78,11 @@ func InitKafkaConsumer(producer *Producer, zookeeperUrl string, topic string, ms
 					log.Fatal("empty kafka consumer")
 				} else {
 					if string(msg.Value) != "topic_init" {
+						log.Println("DEBUG: receive data: ", msg)
 						err = msgHandler(string(msg.Value))
+						if err != nil {
+							log.Println("WARNING: error while handling kafka msg", err)
+						}
 					}
 					timeout = false
 					if err != nil {
@@ -88,5 +93,6 @@ func InitKafkaConsumer(producer *Producer, zookeeperUrl string, topic string, ms
 				}
 			}
 		}
+		return nil
 	})
 }
