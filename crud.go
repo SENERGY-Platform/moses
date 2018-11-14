@@ -39,9 +39,8 @@ func isAdmin(jwt Jwt) bool {
 func (this *StateRepo) ReadWorlds(jwt Jwt) (worlds []WorldMsg, err error) {
 	this.mux.RLock()
 	defer this.mux.RUnlock()
-	isAdmin := isAdmin(jwt)
 	for _, world := range this.Worlds {
-		if isAdmin || world.Owner == jwt.UserId {
+		if world.Owner == jwt.UserId {
 			msg, err := world.ToMsg()
 			if err != nil {
 				return worlds, err
@@ -67,7 +66,7 @@ func (this *StateRepo) ReadWorld(jwt Jwt, id string) (world WorldMsg, access boo
 	if err != nil || !exists {
 		return
 	}
-	if !isAdmin(jwt) && world.Owner != jwt.UserId {
+	if world.Owner != jwt.UserId {
 		return WorldMsg{}, false, exists, err
 	}
 	return world, true, true, err
@@ -92,7 +91,7 @@ func (this *StateRepo) DeleteWorld(jwt Jwt, id string) (access bool, exists bool
 		log.Println("ERROR:", err, exists)
 		return access, exists, err
 	}
-	if !isAdmin(jwt) && world.Owner != jwt.UserId {
+	if world.Owner != jwt.UserId {
 		log.Println("ERROR: access denied", world.Owner, jwt.UserId)
 		return false, exists, err
 	}
@@ -103,15 +102,14 @@ func (this *StateRepo) DeleteWorld(jwt Jwt, id string) (access bool, exists bool
 func (this *StateRepo) ReadRoom(jwt Jwt, id string) (room RoomResponse, access bool, exists bool, err error) {
 	this.mux.RLock()
 	defer this.mux.RUnlock()
-	admin := isAdmin(jwt)
 	world, exists := this.roomWorldIndex[id]
 	if !exists {
 		log.Println("WARNING: room world index id not found", id, this.roomWorldIndex)
-		return room, admin, exists, nil
+		return room, false, exists, nil
 	}
 	world.mux.Lock()
 	defer world.mux.Unlock()
-	if !admin && world.Owner != jwt.UserId {
+	if world.Owner != jwt.UserId {
 		log.Println("WARNING: room access denied", world.Owner, " != ", jwt.UserId)
 		return room, false, exists, nil
 	}
@@ -178,20 +176,19 @@ func (this *StateRepo) DeleteRoom(jwt Jwt, id string) (room RoomResponse, access
 func (this *StateRepo) ReadDevice(jwt Jwt, id string) (device DeviceResponse, access bool, exists bool, err error) {
 	this.mux.RLock()
 	defer this.mux.RUnlock()
-	admin := isAdmin(jwt)
 	world, exists := this.deviceWorldIndex[id]
 	if !exists {
-		return device, admin, exists, nil
+		return device, false, exists, nil
 	}
 	world.mux.Lock()
 	defer world.mux.Unlock()
-	if !admin && world.Owner != jwt.UserId {
+	if world.Owner != jwt.UserId {
 		return device, false, exists, nil
 	}
 
 	room, exists := this.deviceRoomIndex[id]
 	if !exists {
-		return device, admin, exists, errors.New("inconsistent deviceRoomIndex")
+		return device, false, exists, errors.New("inconsistent deviceRoomIndex")
 	}
 
 	device.World = world.Id
@@ -270,24 +267,23 @@ func (this *StateRepo) DeleteDevice(jwt Jwt, id string) (device DeviceResponse, 
 func (this *StateRepo) ReadService(jwt Jwt, id string) (service ServiceResponse, access bool, exists bool, err error) {
 	this.mux.RLock()
 	defer this.mux.RUnlock()
-	admin := isAdmin(jwt)
 	devicep, exists := this.serviceDeviceIndex[id]
 	if !exists {
-		return service, admin, exists, nil
+		return service, false, exists, nil
 	}
 	world, exists := this.deviceWorldIndex[devicep.Id]
 	if !exists {
-		return service, admin, exists, errors.New("inconsistent deviceWorldIndex")
+		return service, false, exists, errors.New("inconsistent deviceWorldIndex")
 	}
 	world.mux.Lock()
 	defer world.mux.Unlock()
-	if !admin && world.Owner != jwt.UserId {
+	if world.Owner != jwt.UserId {
 		return service, false, exists, nil
 	}
 
 	room, exists := this.deviceRoomIndex[devicep.Id]
 	if !exists {
-		return service, admin, exists, errors.New("inconsistent deviceRoomIndex")
+		return service, false, exists, errors.New("inconsistent deviceRoomIndex")
 	}
 
 	service.World = world.Id

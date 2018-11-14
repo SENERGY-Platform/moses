@@ -177,7 +177,7 @@ func TestMain(m *testing.M) {
 	defer dockerrabbitmq.Close()
 
 	log.Println("start elasticsearch")
-	dockerelastic, err := pool.Run("elasticsearch", "latest", []string{})
+	dockerelastic, err := pool.Run("docker.elastic.co/elasticsearch/elasticsearch", "6.4.3", []string{"discovery.type=single-node"})
 	if err != nil {
 		log.Fatalf("Could not start dockerelastic: %s", err)
 	}
