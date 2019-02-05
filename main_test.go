@@ -175,6 +175,7 @@ func TestMain(m *testing.M) {
 		log.Fatalf("Could not start dockerrabbitmq: %s", err)
 	}
 	defer dockerrabbitmq.Close()
+	integratedConfig.AmqpUrl = "amqp://user:pw@localhost:"+dockerrabbitmq.GetPort("5672/tcp")+"/"
 
 	log.Println("start elasticsearch")
 	dockerelastic, err := pool.Run("docker.elastic.co/elasticsearch/elasticsearch", "6.4.3", []string{"discovery.type=single-node"})

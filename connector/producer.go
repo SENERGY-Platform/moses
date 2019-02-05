@@ -17,38 +17,10 @@
 package connector
 
 import (
-	"github.com/wvanbergen/kazoo-go"
-	"log"
-	"time"
-
-	"github.com/Shopify/sarama"
+	"github.com/SENERGY-Platform/iot-broker-client"
 )
 
-type Producer struct {
-	producer sarama.AsyncProducer
-}
 
-func InitProducer(zkurl string) (producer *Producer, err error) {
-	var kz *kazoo.Kazoo
-	kz, err = kazoo.NewKazooFromConnectionString(zkurl, nil)
-	if err != nil {
-		log.Fatal("error in kazoo.NewKazooFromConnectionString()", err)
-	}
-	broker, err := kz.BrokerList()
-	kz.Close()
-
-	if err != nil {
-		log.Fatal("error in kz.BrokerList()", err)
-	}
-
-	sarama_conf := sarama.NewConfig()
-	sarama_conf.Version = sarama.V0_10_0_1
-	producer = &Producer{}
-	producer.producer, err = sarama.NewAsyncProducer(broker, sarama_conf)
-	return
-}
-
-func (this *Producer) Produce(topic string, message string) {
-	//log.Println("DEBUG: Produce", topic, message)
-	this.producer.Input() <- &sarama.ProducerMessage{Topic: topic, Key: nil, Value: sarama.StringEncoder(message), Timestamp: time.Now()}
+func InitProducer(amqpUrl string) (producer *iot_broker_client.Publisher,err error){
+	return iot_broker_client.NewPublisher(amqpUrl)
 }

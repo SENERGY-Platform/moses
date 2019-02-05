@@ -21,4 +21,5 @@ type Config struct {
 	KafkaEventTopic    string
 	ProtocolTopic      string
 	KafkaResponseTopic string
+	AmqpUrl			string
 }

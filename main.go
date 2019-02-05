@@ -34,6 +34,7 @@ func main() {
 		KafkaEventTopic:    config.KafkaEventTopic,
 		ProtocolTopic:      config.KafkaProtocolTopic,
 		KafkaResponseTopic: config.KafkaResponseTopic,
+		AmqpUrl:			config.AmqpUrl,
 	})
 	if err != nil {
 		log.Fatal("unable to initialize protocol: ", err)

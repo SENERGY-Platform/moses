@@ -10,5 +10,6 @@
     "js_timeout": 2000000000,
     "kafka_event_topic": "eventfilter",
     "kafka_protocol_topic": "moses",
-    "kafka_response_topic": "response"
+    "kafka_response_topic": "response",
+    "amqp_url": "amqp://user:pw@rabbitmq:5672/"
 }

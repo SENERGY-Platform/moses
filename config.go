@@ -42,6 +42,7 @@ type Config struct {
 	KafkaResponseTopic     string        `json:"kafka_response_topic"`
 	IotUrl                 string        `json:"iot_url"`
 	DevApi                 string        `json:"dev_api"`
+	AmqpUrl                string		 `json:"amqp_url"`
 }
 
 func LoadConfig() (result Config, err error) {

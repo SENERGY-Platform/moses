@@ -19,6 +19,7 @@ package connector
 import (
 	"encoding/json"
 	"errors"
+	"github.com/SENERGY-Platform/iot-broker-client"
 	"log"
 	"moses/marshaller"
 	"strings"
@@ -27,8 +28,9 @@ import (
 type MosesProtocolConnector struct {
 	Config   Config
 	receiver func(deviceId string, serviceId string, cmdMsg interface{}, responder func(respMsg interface{}))
-	producer *Producer
-	consumer *RunnerTask
+	producer *iot_broker_client.Publisher
+	consumer *iot_broker_client.Consumer
+	kafkaproducer *KafkaProducer
 }
 
 func NewMosesProtocolConnector(config Config) (result *MosesProtocolConnector, err error) {
@@ -38,7 +40,19 @@ func NewMosesProtocolConnector(config Config) (result *MosesProtocolConnector, e
 }
 
 func (this *MosesProtocolConnector) init() (err error) {
-	this.producer, err = InitProducer(this.Config.ZookeeperUrl)
+	this.kafkaproducer, err = InitKafkaProducer(this.Config.ZookeeperUrl)
+	if err != nil {
+		log.Println("ERROR: unable to init kafka producer")
+		return err
+	}
+	//for tests amqp may not be used
+	if this.Config.AmqpUrl != "" {
+		this.producer, err = InitProducer(this.Config.AmqpUrl)
+		if err != nil {
+			log.Println("ERROR: unable to init amqp producer")
+			return err
+		}
+	}
 	return
 }
 
@@ -65,8 +79,8 @@ func (this *MosesProtocolConnector) Send(deviceId string, serviceId string, tran
 	if err != nil {
 		return err
 	}
-	this.producer.Produce(serviceTopic, string(jsonMsg))
-	this.producer.Produce(this.Config.KafkaEventTopic, string(jsonMsg))
+	this.kafkaproducer.Produce(serviceTopic, string(jsonMsg))
+	err = this.producer.Publish(this.Config.KafkaEventTopic, jsonMsg, deviceId, serviceId)
 	return
 }
 
@@ -75,7 +89,7 @@ func (this *MosesProtocolConnector) SetReceiver(receiver func(deviceId string, s
 }
 
 func (this *MosesProtocolConnector) Start() (err error) {
-	this.consumer = InitKafkaConsumer(this.producer, this.Config.ZookeeperUrl, this.Config.ProtocolTopic, func(msg string) (err error) {
+	this.consumer, err = InitConsumer(this.Config.AmqpUrl, this.Config.ProtocolTopic, func(msg string) (err error) {
 		if this.receiver == nil {
 			return errors.New("ERROR: missing receiver in MosesProtocolConnector; use MosesProtocolConnector.SetReceiver()")
 		}
@@ -109,7 +123,7 @@ func (this *MosesProtocolConnector) Start() (err error) {
 		this.receiver(envelope.DeviceId, envelope.ServiceId, input, func(respMsg interface{}) {
 			output, err := json.Marshal(respMsg)
 			if err != nil {
-				log.Println("ERROR: while marshaling response")
+				log.Println("ERROR: while marshaling response", err)
 				return
 			}
 			protocolmsg.ProtocolParts = []marshaller.ProtocolPart{{Name: "payload", Value: string(output)}}
@@ -118,7 +132,11 @@ func (this *MosesProtocolConnector) Start() (err error) {
 				log.Println("ERROR in MosesProtocolConnector.Start().receiver() json.Marshal(): ", err)
 				return
 			}
-			this.producer.Produce(this.Config.KafkaResponseTopic, string(response))
+			err = this.producer.Publish(this.Config.KafkaResponseTopic, response)
+			if err != nil {
+				log.Println("ERROR: while Publish()", err)
+				return
+			}
 		})
 		return
 	})
