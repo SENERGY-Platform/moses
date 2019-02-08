@@ -19,7 +19,7 @@ package connector
 import (
 	"encoding/json"
 	"errors"
-	"github.com/SENERGY-Platform/iot-broker-client"
+	"github.com/SENERGY-Platform/iot-broker-client-lib"
 	"log"
 	"moses/marshaller"
 	"strings"
@@ -28,8 +28,8 @@ import (
 type MosesProtocolConnector struct {
 	Config   Config
 	receiver func(deviceId string, serviceId string, cmdMsg interface{}, responder func(respMsg interface{}))
-	producer *iot_broker_client.Publisher
-	consumer *iot_broker_client.Consumer
+	producer *iot_broker_client_lib.Publisher
+	consumer *iot_broker_client_lib.Consumer
 	kafkaproducer *KafkaProducer
 }
 

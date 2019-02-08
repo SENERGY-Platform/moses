@@ -17,10 +17,10 @@
 package connector
 
 import (
-	"github.com/SENERGY-Platform/iot-broker-client"
+	"github.com/SENERGY-Platform/iot-broker-client-lib"
 )
 
 
-func InitProducer(amqpUrl string) (producer *iot_broker_client.Publisher,err error){
-	return iot_broker_client.NewPublisher(amqpUrl)
+func InitProducer(amqpUrl string) (producer *iot_broker_client_lib.Publisher,err error){
+	return iot_broker_client_lib.NewPublisher(amqpUrl)
 }
