@@ -22,7 +22,7 @@ import (
 )
 
 func InitConsumer(amqpUrl string, topic string, msgHandler func(string) error) (consumer *iot_broker_client_lib.Consumer, err error) {
-	consumer, err = iot_broker_client_lib.NewConsumer(amqpUrl, "queue_"+topic, topic, false, func(msg []byte) error {
+	consumer, err = iot_broker_client_lib.NewConsumer(amqpUrl, "queue_"+topic, topic, false, 10, func(msg []byte) error {
 		return msgHandler(string(msg))
 	})
 	if err != nil {

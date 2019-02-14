@@ -3,7 +3,7 @@ module moses
 require (
 	github.com/Azure/go-ansiterm v0.0.0-20170929234023-d6e3b3328b78 // indirect
 	github.com/Microsoft/go-winio v0.4.11 // indirect
-	github.com/SENERGY-Platform/iot-broker-client-lib v0.0.0-20190208074750-ac832f94c68b
+	github.com/SENERGY-Platform/iot-broker-client-lib v0.0.0-20190214075228-2ea6e40498cd
 	github.com/Shopify/sarama v1.18.0
 	github.com/Shopify/toxiproxy v2.1.4+incompatible // indirect
 	github.com/cbroglie/mustache v1.0.1
