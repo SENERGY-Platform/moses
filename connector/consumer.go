@@ -18,13 +18,21 @@ package connector
 
 import (
 	"github.com/SENERGY-Platform/iot-broker-client-lib"
+	"log"
 )
 
 func InitConsumer(amqpUrl string, topic string, msgHandler func(string) error) (consumer *iot_broker_client_lib.Consumer, err error) {
 	consumer, err = iot_broker_client_lib.NewConsumer(amqpUrl, "queue_"+topic, topic, false, func(msg []byte) error {
-		go msgHandler(string(msg))
-		return nil
+		return msgHandler(string(msg))
 	})
-	consumer.BindAll()
+	if err != nil {
+		log.Println("ERROR: unable to create amqp consumer", err)
+		return
+	}
+	err = consumer.BindAll()
+	if err != nil {
+		log.Println("ERROR: unable to bind consumer to all devices", err)
+		return
+	}
 	return
 }
