@@ -18,6 +18,7 @@ package main
 
 import (
 	"errors"
+	"github.com/satori/go.uuid"
 	"log"
 	"moses/iotmodel"
 	"net/url"
@@ -97,7 +98,12 @@ func (this *StateRepo) GetDeviceTypesIds(jwt Jwt) (result []string, err error) {
 }
 
 func (this *StateRepo) GenerateExternalDevice(jwt Jwt, request CreateDeviceByTypeRequest) (device iotmodel.DeviceInstance, err error) {
-	deviceInp := iotmodel.DeviceInstance{Name: request.Name, UserTags: []string{"moses"}, DeviceType: request.DeviceTypeId, Url: "moses_will_be_ignored"}
+	id, err := uuid.NewV4()
+	if err != nil {
+		log.Println("ERROR!", err, device)
+		return device, err
+	}
+	deviceInp := iotmodel.DeviceInstance{Name: request.Name, UserTags: []string{"moses"}, DeviceType: request.DeviceTypeId, Url: id.String()}
 	err = jwt.Impersonate.PostJSON(this.Config.IotUrl+"/deviceInstance", deviceInp, &device)
 	if err != nil {
 		log.Println("ERROR: unable to create device in iot repository: ", err, device)
