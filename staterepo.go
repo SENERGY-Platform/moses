@@ -50,7 +50,7 @@ func (this *StateRepo) DevUpdateWorld(worldMsg WorldMsg) (err error) {
 	defer this.mux.Unlock()
 	world, err := worldMsg.ToModel()
 	if err != nil {
-		log.Println("ERROR: ", err)
+		log.Println("ERROR: DevUpdateWorld()::worldMsg.ToModel()", err)
 		return err
 	}
 	if this.Worlds == nil {
@@ -59,19 +59,19 @@ func (this *StateRepo) DevUpdateWorld(worldMsg WorldMsg) (err error) {
 	if world.Id == "" {
 		uid, err := uuid.NewRandom()
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: DevUpdateWorld():: uuid.NewRandom()", err)
 			return err
 		}
 		world.Id = uid.String()
 	}
 	err = this.persistWorld(world)
 	if err != nil {
-		log.Println("ERROR: ", err)
+		log.Println("ERROR: DevUpdateWorld()::this.persistWorld(world)", err)
 		return err
 	}
 	err = this.Stop()
 	if err != nil {
-		log.Println("ERROR: ", err)
+		log.Println("ERROR: DevUpdateWorld()::this.Stop()", err)
 		return err
 	}
 	this.Worlds[world.Id] = &world
@@ -101,7 +101,7 @@ func (this *StateRepo) DevDeleteWorld(id string) (err error) {
 	}
 	err = this.Stop()
 	if err != nil {
-		log.Println("ERROR: ", err)
+		log.Println("ERROR: DevDeleteWorld()", err)
 		return err
 	}
 	delete(this.Worlds, id)
@@ -113,10 +113,6 @@ func (this *StateRepo) DevDeleteWorld(id string) (err error) {
 //Stops all change routines and redeploys new world with new room
 //requests a mutex lock on the state repo
 func (this *StateRepo) DevUpdateRoom(worldId string, room RoomMsg) (err error) {
-	if err != nil {
-		log.Println("ERROR: ", err)
-		return err
-	}
 	if worldId == "" {
 		return errors.New("missing world id")
 	}
@@ -130,7 +126,7 @@ func (this *StateRepo) DevUpdateRoom(worldId string, room RoomMsg) (err error) {
 	if room.Id == "" {
 		uid, err := uuid.NewRandom()
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: DevUpdateRoom::", err)
 			return err
 		}
 		room.Id = uid.String()
@@ -185,7 +181,7 @@ func (this *StateRepo) DevUpdateDevice(worldId string, roomId string, device Dev
 	if device.Id == "" {
 		uid, err := uuid.NewRandom()
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: DevUpdateDevice()::NewRandom()", err)
 			return err
 		}
 		device.Id = uid.String()

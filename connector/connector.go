@@ -82,12 +82,12 @@ func (this *MosesProtocolConnector) Start() (err error) {
 		envelope := Envelope{}
 		err = json.Unmarshal([]byte(msg), &envelope)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: Start()::Unmarshal()", err)
 			return nil //ignore marshaling errors --> no repeat; errors would definitely reoccur
 		}
 		payload, err := json.Marshal(envelope.Value)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: Start()::Marshal()", err)
 			return nil //ignore marshaling errors --> no repeat; errors would definitely reoccur
 		}
 		protocolmsg := ProtocolMsg{}

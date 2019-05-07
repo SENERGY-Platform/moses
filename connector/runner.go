@@ -40,7 +40,7 @@ func RunTask(handler RunnerHandlerFunc) (task *RunnerTask) {
 			return shouldStop
 		})
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: RunTask()", err)
 		}
 	}()
 	return

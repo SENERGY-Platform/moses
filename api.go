@@ -47,19 +47,19 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.GET("/worlds", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET/worlds GetJwt()", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		result, err := state.ReadWorlds(jwt)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET/worlds ReadWorlds()", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
 		b, err := json.Marshal(result)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET/worlds  Marshal();", err)
 			http.Error(resp, err.Error(), 500)
 		} else {
 			fmt.Fprint(resp, string(b))
@@ -70,20 +70,20 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.PUT("/world", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT/world GetJwt()", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		msg := UpdateWorldRequest{}
 		err = json.NewDecoder(request.Body).Decode(&msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT/world Decode()", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		result, access, exists, err := state.UpdateWorld(jwt, msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT/world UpdateWorld()", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
@@ -99,7 +99,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		}
 		b, err := json.Marshal(result)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT/world Marshal()", err)
 			http.Error(resp, err.Error(), 500)
 		} else {
 			fmt.Fprint(resp, string(b))
@@ -110,26 +110,26 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.POST("/world", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /world GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		msg := CreateWorldRequest{}
 		err = json.NewDecoder(request.Body).Decode(&msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /world Decode", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		result, err := state.CreateWorld(jwt, msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /world CreateWorld", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
 		b, err := json.Marshal(result)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /world Marshal", err)
 			http.Error(resp, err.Error(), 500)
 		} else {
 			fmt.Fprint(resp, string(b))
@@ -140,14 +140,14 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.GET("/world/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET /world/:id GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		id := params.ByName("id")
 		result, access, exists, err := state.ReadWorld(jwt, id)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET /world/:id ReadWorld", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
@@ -163,7 +163,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		}
 		b, err := json.Marshal(result)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET /world/:id Marshal", err)
 			http.Error(resp, err.Error(), 500)
 		} else {
 			fmt.Fprint(resp, string(b))
@@ -174,14 +174,14 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.DELETE("/world/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: DELETE /world/:id GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		id := params.ByName("id")
 		access, exists, err := state.DeleteWorld(jwt, id)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: DELETE /world/:id DeleteWorld", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
@@ -202,20 +202,20 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.PUT("/room", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT /room GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		msg := UpdateRoomRequest{}
 		err = json.NewDecoder(request.Body).Decode(&msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT /room Decode", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		result, access, exists, err := state.UpdateRoom(jwt, msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT /room UpdateRoom", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
@@ -231,7 +231,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		}
 		b, err := json.Marshal(result)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT /room Marshal", err)
 			http.Error(resp, err.Error(), 500)
 		} else {
 			fmt.Fprint(resp, string(b))
@@ -242,20 +242,20 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.POST("/room", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /room GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		msg := CreateRoomRequest{}
 		err = json.NewDecoder(request.Body).Decode(&msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /room Decode", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		result, access, worldExists, err := state.CreateRoom(jwt, msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /room CreateRoom", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
@@ -271,7 +271,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		}
 		b, err := json.Marshal(result)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /room Marshal", err)
 			http.Error(resp, err.Error(), 500)
 		} else {
 			fmt.Fprint(resp, string(b))
@@ -282,14 +282,14 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.GET("/room/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET /room/:id GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		id := params.ByName("id")
 		result, access, exists, err := state.ReadRoom(jwt, id)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET /room/:id ReadRoom", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
@@ -305,7 +305,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		}
 		b, err := json.Marshal(result)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET /room/:id Marshal", err)
 			http.Error(resp, err.Error(), 500)
 		} else {
 			fmt.Fprint(resp, string(b))
@@ -316,14 +316,14 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.DELETE("/room/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: DELETE /room/:id GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		id := params.ByName("id")
 		_, access, exists, err := state.DeleteRoom(jwt, id)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: DELETE /room/:id DeleteRoom", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
@@ -344,20 +344,20 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.PUT("/device", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT /device GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		msg := UpdateDeviceRequest{}
 		err = json.NewDecoder(request.Body).Decode(&msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT /device Decode", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		result, access, exists, err := state.UpdateDevice(jwt, msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT /device UpdateDevice", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
@@ -373,7 +373,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		}
 		b, err := json.Marshal(result)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT /device Marshal", err)
 			http.Error(resp, err.Error(), 500)
 		} else {
 			fmt.Fprint(resp, string(b))
@@ -384,20 +384,20 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.POST("/device", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /device GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		msg := CreateDeviceRequest{}
 		err = json.NewDecoder(request.Body).Decode(&msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /device Decode", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		result, access, worldAndRoomExists, err := state.CreateDevice(jwt, msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /device CreateDevice", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
@@ -413,7 +413,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		}
 		b, err := json.Marshal(result)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /device Marshal", err)
 			http.Error(resp, err.Error(), 500)
 		} else {
 			fmt.Fprint(resp, string(b))
@@ -424,14 +424,14 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.GET("/device/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET /device/:id GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		id := params.ByName("id")
 		result, access, exists, err := state.ReadDevice(jwt, id)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET /device/:id ReadDevice", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
@@ -447,7 +447,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		}
 		b, err := json.Marshal(result)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET /device/:id Marshal", err)
 			http.Error(resp, err.Error(), 500)
 		} else {
 			fmt.Fprint(resp, string(b))
@@ -458,14 +458,14 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.DELETE("/device/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: DELETE /device/:id GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		id := params.ByName("id")
 		_, access, exists, err := state.DeleteDevice(jwt, id)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: DELETE /device/:id DeleteDevice", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
@@ -486,20 +486,20 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.PUT("/service", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT /service GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		msg := UpdateServiceRequest{}
 		err = json.NewDecoder(request.Body).Decode(&msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT /service Decode", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		result, access, exists, err := state.UpdateService(jwt, msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT /service UpdateService", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
@@ -515,7 +515,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		}
 		b, err := json.Marshal(result)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT /service Marshal", err)
 			http.Error(resp, err.Error(), 500)
 		} else {
 			fmt.Fprint(resp, string(b))
@@ -526,20 +526,20 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.POST("/service", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /service GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		msg := CreateServiceRequest{}
 		err = json.NewDecoder(request.Body).Decode(&msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /service Decode", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		result, access, worldAndRoomExists, err := state.CreateService(jwt, msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /service CreateService", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
@@ -555,7 +555,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		}
 		b, err := json.Marshal(result)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /service Marshal", err)
 			http.Error(resp, err.Error(), 500)
 		} else {
 			fmt.Fprint(resp, string(b))
@@ -566,14 +566,14 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.GET("/service/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET /service/:id GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		id := params.ByName("id")
 		result, access, exists, err := state.ReadService(jwt, id)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET /service/:id ReadService", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
@@ -589,7 +589,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		}
 		b, err := json.Marshal(result)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET /service/:id Marshal", err)
 			http.Error(resp, err.Error(), 500)
 		} else {
 			fmt.Fprint(resp, string(b))
@@ -600,14 +600,14 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.DELETE("/service/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: DELETE /service/:id GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		id := params.ByName("id")
 		_, access, exists, err := state.DeleteService(jwt, id)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: DELETE /service/:id DeleteService", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
@@ -628,18 +628,13 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		id := params.ByName("id")
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /run/service/:id GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		_, access, exists, err := state.ReadService(jwt, id)
 		if err != nil {
-			log.Println("ERROR: ", err)
-			http.Error(resp, err.Error(), 500)
-			return
-		}
-		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /run/service/:id ReadService", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
@@ -656,19 +651,19 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		var msg interface{}
 		err = json.NewDecoder(request.Body).Decode(&msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /run/service/:id Decode", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		result, err := state.RunService(id, msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /run/service/:id RunService", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		b, err := json.Marshal(result)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /run/service/:id Marshal", err)
 			http.Error(resp, err.Error(), 500)
 		} else {
 			fmt.Fprint(resp, string(b))
@@ -679,20 +674,20 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.POST("/device/bydevicetype", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /device/bydevicetype GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		msg := CreateDeviceByTypeRequest{}
 		err = json.NewDecoder(request.Body).Decode(&msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: /device/bydevicetype Decode", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		result, access, worldAndRoomExists, err := state.CreateDeviceByType(jwt, msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: /device/bydevicetype CreateDeviceByType", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
@@ -708,7 +703,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		}
 		b, err := json.Marshal(result)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: /device/bydevicetype Marshal", err)
 			http.Error(resp, err.Error(), 500)
 		} else {
 			fmt.Fprint(resp, string(b))
@@ -721,19 +716,19 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.GET("/devicetypes", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET /devicetypes GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		result, err := state.GetDeviceTypesIds(jwt)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET /devicetypes GetJwt", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
 		b, err := json.Marshal(result)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET /devicetypes Marshal", err)
 			http.Error(resp, err.Error(), 500)
 		} else {
 			fmt.Fprint(resp, string(b))
@@ -744,20 +739,20 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.PUT("/changeroutine", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT /changeroutine GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		msg := UpdateChangeRoutineRequest{}
 		err = json.NewDecoder(request.Body).Decode(&msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT /changeroutine Decode", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		result, access, exists, err := state.UpdateChangeRoutine(jwt, msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT /changeroutine UpdateChangeRoutine", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
@@ -773,7 +768,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		}
 		b, err := json.Marshal(result)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT /changeroutine Marshal", err)
 			http.Error(resp, err.Error(), 500)
 		} else {
 			fmt.Fprint(resp, string(b))
@@ -784,20 +779,20 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.POST("/changeroutine", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /changeroutine GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		msg := CreateChangeRoutineRequest{}
 		err = json.NewDecoder(request.Body).Decode(&msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /changeroutine Decode", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		result, access, exists, err := state.CreateChangeRoutine(jwt, msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /changeroutine CreateChangeRoutine", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
@@ -813,7 +808,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		}
 		b, err := json.Marshal(result)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /changeroutine Marshal", err)
 			http.Error(resp, err.Error(), 500)
 		} else {
 			fmt.Fprint(resp, string(b))
@@ -824,14 +819,14 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.GET("/changeroutine/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET /changeroutine/:id GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		id := params.ByName("id")
 		result, access, exists, err := state.ReadChangeRoutine(jwt, id)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET /changeroutine/:id ReadChangeRoutine", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
@@ -847,7 +842,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		}
 		b, err := json.Marshal(result)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET /changeroutine/:id Marshal", err)
 			http.Error(resp, err.Error(), 500)
 		} else {
 			fmt.Fprint(resp, string(b))
@@ -858,14 +853,14 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.DELETE("/changeroutine/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: DELETE /changeroutine/:id GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		id := params.ByName("id")
 		_, access, exists, err := state.DeleteChangeRoutine(jwt, id)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: DELETE /changeroutine/:id DeleteChangeRoutine", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
@@ -886,7 +881,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.PUT("/routinetemplate", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT /routinetemplate GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
@@ -898,13 +893,13 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		msg := UpdateTemplateRequest{}
 		err = json.NewDecoder(request.Body).Decode(&msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT /routinetemplate Decode", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		result, exists, err := state.UpdateTemplate(jwt, msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT /routinetemplate UpdateTemplate", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
@@ -916,7 +911,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 
 		b, err := json.Marshal(result)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT /routinetemplate Marshal", err)
 			http.Error(resp, err.Error(), 500)
 		} else {
 			fmt.Fprint(resp, string(b))
@@ -962,14 +957,14 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.GET("/routinetemplate/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET /routinetemplate/:id GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		id := params.ByName("id")
 		result, exists, err := state.ReadTemplate(jwt, id)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET /routinetemplate/:id ReadTemplate", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
@@ -980,7 +975,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		}
 		b, err := json.Marshal(result)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET /routinetemplate/:id Marshal", err)
 			http.Error(resp, err.Error(), 500)
 		} else {
 			fmt.Fprint(resp, string(b))
@@ -991,19 +986,19 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.GET("/routinetemplates", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET /routinetemplates GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		result, err := state.ReadTemplates(jwt)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET /routinetemplates ReadTemplates", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
 		b, err := json.Marshal(result)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: GET /routinetemplates Marshal", err)
 			http.Error(resp, err.Error(), 500)
 		} else {
 			fmt.Fprint(resp, string(b))
@@ -1014,7 +1009,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.DELETE("/routinetemplate/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: DELETE /routinetemplate/:id GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
@@ -1026,7 +1021,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		id := params.ByName("id")
 		err = state.DeleteTemplate(jwt, id)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: DELETE /routinetemplate/:id DeleteTemplate", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
@@ -1038,20 +1033,20 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.POST("/usetemplate", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /usetemplate GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		msg := CreateChangeRoutineByTemplateRequest{}
 		err = json.NewDecoder(request.Body).Decode(&msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /usetemplate Decode", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		result, access, exists, err := state.CreateChangeRoutineByTemplate(jwt, msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /usetemplate CreateChangeRoutineByTemplate", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
@@ -1067,7 +1062,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		}
 		b, err := json.Marshal(result)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: POST /usetemplate Marshal", err)
 			http.Error(resp, err.Error(), 500)
 		} else {
 			fmt.Fprint(resp, string(b))
@@ -1078,20 +1073,20 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 	router.PUT("/usetemplate", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := GetJwt(request)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT /usetemplate GetJwt", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		msg := UpdateChangeRoutineByTemplateRequest{}
 		err = json.NewDecoder(request.Body).Decode(&msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT /usetemplate Decode", err)
 			http.Error(resp, err.Error(), 400)
 			return
 		}
 		result, access, exists, err := state.UpdateChangeRoutineByTemplate(jwt, msg)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT /usetemplate UpdateChangeRoutineByTemplate", err)
 			http.Error(resp, err.Error(), 500)
 			return
 		}
@@ -1107,7 +1102,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 		}
 		b, err := json.Marshal(result)
 		if err != nil {
-			log.Println("ERROR: ", err)
+			log.Println("ERROR: PUT /usetemplate Marshal", err)
 			http.Error(resp, err.Error(), 500)
 		} else {
 			fmt.Fprint(resp, string(b))
