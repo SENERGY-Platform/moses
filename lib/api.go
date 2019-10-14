@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 InfAI (CC SES)
+ * Copyright 2019 InfAI (CC SES)
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package main
+package lib
 
 import (
 	"encoding/json"
@@ -720,7 +720,7 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 			http.Error(resp, err.Error(), 400)
 			return
 		}
-		result, err := state.GetDeviceTypesIds(jwt)
+		result, err := state.GetMosesDeviceTypesIds(jwt)
 		if err != nil {
 			log.Println("ERROR: GET /devicetypes GetJwt", err)
 			http.Error(resp, err.Error(), 500)
@@ -1108,223 +1108,5 @@ func getRoutes(config Config, state *StateRepo) *httprouter.Router {
 			fmt.Fprint(resp, string(b))
 		}
 	})
-
-	/////////////////////////////////////////////////////////////////////////////////////////////////////
-	///////////////////////////////////////	 ADMIN - API  ///////////////////////////////////////////////
-	/////////////////////////////////////////////////////////////////////////////////////////////////////
-
-	router.GET("/admin/initiot", func(resp http.ResponseWriter, req *http.Request, ps httprouter.Params) {
-		jwt, err := GetJwt(req)
-		if err != nil {
-			log.Println("ERROR: ", err)
-			http.Error(resp, err.Error(), 400)
-			return
-		}
-		if !isAdmin(jwt) {
-			log.Println("WARNING: access denied")
-			http.Error(resp, "access denied", http.StatusUnauthorized)
-			return
-		}
-		protocol, err := state.EnsureMosesProtocol(jwt.Impersonate)
-		if err != nil {
-			log.Println("ERROR: ", err)
-			http.Error(resp, err.Error(), 500)
-			return
-		}
-
-		b, err := json.Marshal(protocol)
-		if err != nil {
-			log.Println("ERROR: ", err)
-			http.Error(resp, err.Error(), 500)
-		} else {
-			fmt.Fprint(resp, string(b))
-		}
-	})
-
-	/////////////////////////////////////////////////////////////////////////////////////////////////////
-	///////////////////////////////////////	 DEV - API  /////////////////////////////////////////////////
-	/////////////////////////////////////////////////////////////////////////////////////////////////////
-
-	if config.DevApi == "true" {
-		router.GET("/dev/worlds", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-			state.mux.RLock()
-			defer state.mux.RUnlock()
-			b, err := json.Marshal(state.Worlds)
-			if err != nil {
-				log.Println("ERROR: ", err)
-				http.Error(w, err.Error(), 500)
-			} else {
-				fmt.Fprint(w, string(b))
-			}
-		})
-
-		router.GET("/dev/world/:worldid", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-			state.mux.RLock()
-			defer state.mux.RUnlock()
-			world, ok := state.Worlds[ps.ByName("worldid")]
-			if !ok {
-				log.Println("404")
-				http.Error(w, "not found", 404)
-				return
-			}
-			b, err := json.Marshal(world)
-			if err != nil {
-				log.Println("ERROR: ", err)
-				http.Error(w, err.Error(), 500)
-			} else {
-				fmt.Fprint(w, string(b))
-			}
-		})
-
-		router.GET("/dev/world/:worldid/rooms", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-			state.mux.RLock()
-			defer state.mux.RUnlock()
-			world, ok := state.Worlds[ps.ByName("worldid")]
-			if !ok {
-				log.Println("404")
-				http.Error(w, "world not found", 404)
-				return
-			}
-			b, err := json.Marshal(world.Rooms)
-			if err != nil {
-				log.Println("ERROR: ", err)
-				http.Error(w, err.Error(), 500)
-			} else {
-				fmt.Fprint(w, string(b))
-			}
-		})
-
-		router.GET("/dev/world/:worldid/room/:roomid", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-			state.mux.RLock()
-			defer state.mux.RUnlock()
-			world, ok := state.Worlds[ps.ByName("worldid")]
-			if !ok {
-				log.Println("404")
-				http.Error(w, "world not found", 404)
-				return
-			}
-			room, ok := world.Rooms[ps.ByName("roomid")]
-			if !ok {
-				log.Println("404")
-				http.Error(w, "room not found", 404)
-				return
-			}
-			b, err := json.Marshal(room)
-			if err != nil {
-				log.Println("ERROR: ", err)
-				http.Error(w, err.Error(), 500)
-			} else {
-				fmt.Fprint(w, string(b))
-			}
-		})
-
-		router.GET("/dev/world/:worldid/room/:roomid/devices", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-			state.mux.RLock()
-			defer state.mux.RUnlock()
-			world, ok := state.Worlds[ps.ByName("worldid")]
-			if !ok {
-				log.Println("404")
-				http.Error(w, "world not found", 404)
-				return
-			}
-			room, ok := world.Rooms[ps.ByName("roomid")]
-			if !ok {
-				log.Println("404")
-				http.Error(w, "room not found", 404)
-				return
-			}
-			b, err := json.Marshal(room.Devices)
-			if err != nil {
-				log.Println("ERROR: ", err)
-				http.Error(w, err.Error(), 500)
-			} else {
-				fmt.Fprint(w, string(b))
-			}
-		})
-
-		router.GET("/dev/world/:worldid/room/:roomid/device/:deviceid", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-			state.mux.RLock()
-			defer state.mux.RUnlock()
-			world, ok := state.Worlds[ps.ByName("worldid")]
-			if !ok {
-				log.Println("404")
-				http.Error(w, "world not found", 404)
-				return
-			}
-			room, ok := world.Rooms[ps.ByName("roomid")]
-			if !ok {
-				log.Println("404")
-				http.Error(w, "room not found", 404)
-				return
-			}
-			device, ok := room.Devices[ps.ByName("deviceid")]
-			if !ok {
-				log.Println("404")
-				http.Error(w, "device not found", 404)
-				return
-			}
-			b, err := json.Marshal(device)
-			if err != nil {
-				log.Println("ERROR: ", err)
-				http.Error(w, err.Error(), 500)
-			} else {
-				fmt.Fprint(w, string(b))
-			}
-		})
-
-		router.PUT("/dev/world", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-			world := WorldMsg{}
-			err := json.NewDecoder(r.Body).Decode(&world)
-			if err != nil {
-				log.Println("ERROR: ", err)
-				http.Error(w, err.Error(), 400)
-				return
-			}
-			err = state.DevUpdateWorld(world)
-			if err != nil {
-				log.Println("ERROR: ", err)
-				http.Error(w, err.Error(), 500)
-				return
-			}
-			fmt.Fprint(w, "ok")
-		})
-
-		router.PUT("/dev/world/:worldid/room", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-			room := RoomMsg{}
-			err := json.NewDecoder(r.Body).Decode(&room)
-			if err != nil {
-				log.Println("ERROR: ", err)
-				http.Error(w, err.Error(), 400)
-				return
-			}
-			err = state.DevUpdateRoom(ps.ByName("worldid"), room)
-			if err != nil {
-				log.Println("ERROR: ", err)
-				http.Error(w, err.Error(), 500)
-				return
-			}
-			fmt.Fprint(w, "ok")
-		})
-
-		router.PUT("/dev/world/:worldid/room/:roomid/device", func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-			device := DeviceMsg{}
-			err := json.NewDecoder(r.Body).Decode(&device)
-			if err != nil {
-				log.Println("ERROR: ", err)
-				http.Error(w, err.Error(), 400)
-				return
-			}
-			err = state.DevUpdateDevice(ps.ByName("worldid"), ps.ByName("roomid"), device)
-			if err != nil {
-				log.Println("ERROR: ", err)
-				http.Error(w, err.Error(), 500)
-				return
-			}
-			fmt.Fprint(w, "ok")
-		})
-	}
-
-	/////////////////////////////////////////////////////////////////////////
-
 	return router
 }

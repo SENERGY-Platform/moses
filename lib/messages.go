@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 InfAI (CC SES)
+ * Copyright 2019 InfAI (CC SES)
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package main
+package lib
 
 import (
 	"encoding/json"
@@ -59,7 +59,6 @@ type DeviceResponse struct {
 type UpdateDeviceRequest struct {
 	Id             string                   `json:"id"`
 	Name           string                   `json:"name"`
-	ImageUrl       string                   `json:"image_url"`
 	States         map[string]interface{}   `json:"states"`
 	ChangeRoutines map[string]ChangeRoutine `json:"change_routines"`
 	Services       map[string]Service       `json:"services"`
@@ -69,7 +68,6 @@ type UpdateDeviceRequest struct {
 type CreateDeviceRequest struct {
 	Room        string                 `json:"room"`
 	Name        string                 `json:"name"`
-	ImageUrl    string                 `json:"image_url"`
 	States      map[string]interface{} `json:"states"`
 	ExternalRef string                 `json:"external_ref"` //platform intern device id; 1:1
 }
@@ -98,7 +96,7 @@ type ServiceResponse struct {
 type CreateServiceRequest struct {
 	Device         string `json:"device"`
 	Name           string `json:"name"`
-	ExternalRef    string `json:"external_ref"` //platform intern service id, will be used to populate Service.Marshaller and as endpoint for the connector
+	ExternalRef    string `json:"external_ref"` //platform intern service id, will be used to populate Service.Marshaller and as endpoint for the Connector
 	SensorInterval int64  `json:"sensor_interval"`
 	Code           string `json:"code"`
 }
@@ -176,7 +174,6 @@ type RoomMsg struct {
 type DeviceMsg struct {
 	Id             string                   `json:"id"`
 	Name           string                   `json:"name"`
-	ImageUrl       string                   `json:"image_url"`
 	ExternalTypeId string                   `json:"external_type_id"`
 	ExternalRef    string                   `json:"external_ref"` //platform intern device id; 1:1
 	States         map[string]interface{}   `json:"states"`

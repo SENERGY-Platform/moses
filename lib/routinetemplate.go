@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 InfAI (CC SES)
+ * Copyright 2019 InfAI (CC SES)
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,40 +14,30 @@
  * limitations under the License.
  */
 
-package connector
+package lib
 
 import (
-	"log"
-	"sync"
+	"github.com/cbroglie/mustache"
 )
 
-type StopCheckFunc func() bool
-
-type RunnerHandlerFunc func(StopCheckFunc) error
-
-type RunnerTask struct {
-	mux  sync.RWMutex
-	stop bool
-}
-
-func RunTask(handler RunnerHandlerFunc) (task *RunnerTask) {
-	task = &RunnerTask{}
-	go func() {
-		err := handler(func() bool {
-			task.mux.RLock()
-			shouldStop := task.stop
-			task.mux.RUnlock()
-			return shouldStop
-		})
-		if err != nil {
-			log.Println("ERROR: RunTask()", err)
+func GetTemplateParameterList(str string) (result []string, err error) {
+	templ, err := mustache.ParseString(str)
+	if err != nil {
+		return result, err
+	}
+	tags := append([]mustache.Tag{}, templ.Tags()...)
+	index := 0
+	for index < len(tags) {
+		tag := tags[index]
+		if tag.Type() != mustache.Variable {
+			tags = append(tags, tag.Tags()...)
 		}
-	}()
+		result = append(result, tag.Name())
+		index++
+	}
 	return
 }
 
-func (t *RunnerTask) Stop() {
-	t.mux.Lock()
-	t.stop = true
-	t.mux.Unlock()
+func RenderTempl(templ string, parameter interface{}) (result string, err error) {
+	return mustache.Render(templ, parameter)
 }

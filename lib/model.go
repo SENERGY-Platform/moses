@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 InfAI (CC SES)
+ * Copyright 2019 InfAI (CC SES)
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,10 +14,9 @@
  * limitations under the License.
  */
 
-package main
+package lib
 
 import (
-	"moses/marshaller"
 	"sync"
 )
 
@@ -82,10 +81,9 @@ type Device struct {
 }
 
 type Service struct {
-	Id             string                `json:"id" bson:"id"`
-	Name           string                `json:"name" bson:"name"`
-	ExternalRef    string                `json:"external_ref" bson:"external_ref"` //platform intern service id, will be used to populate Service.Marshaller and as endpoint for the connector
-	SensorInterval int64                 `json:"sensor_interval" bson:"sensor_interval"`
-	Code           string                `json:"code"`
-	Marshaller     marshaller.Marshaller `json:"-" bson:"marshaller"`
+	Id             string `json:"id" bson:"id"`
+	Name           string `json:"name" bson:"name"`
+	ExternalRef    string `json:"external_ref" bson:"external_ref"` //platform intern service id, will be used to populate Service.Marshaller and as endpoint for the Connector
+	SensorInterval int64  `json:"sensor_interval" bson:"sensor_interval"`
+	Code           string `json:"code"`
 }

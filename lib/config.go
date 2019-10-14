@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 InfAI (CC SES)
+ * Copyright 2019 InfAI (CC SES)
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package main
+package lib
 
 import (
 	"encoding/json"
@@ -29,19 +29,36 @@ import (
 )
 
 type Config struct {
-	ServerPort             string        `json:"server_port"`
-	LogLevel               string        `json:"log_level"`
-	WorldCollectionName    string        `json:"world_collection_name"`
-	GraphCollectionName    string        `json:"graph_collection_name"`
-	TemplateCollectionName string        `json:"template_collection_name"`
-	MongoUrl               string        `json:"mongo_url"`
-	JsTimeout              time.Duration `json:"js_timeout"`
-	ZookeeperUrl           string        `json:"zookeeper_url"`
-	KafkaEventTopic        string        `json:"kafka_event_topic"`
-	KafkaProtocolTopic     string        `json:"kafka_protocol_topic"`
-	KafkaResponseTopic     string        `json:"kafka_response_topic"`
-	IotUrl                 string        `json:"iot_url"`
-	DevApi                 string        `json:"dev_api"`
+	ServerPort               string        `json:"server_port"`
+	LogLevel                 string        `json:"log_level"`
+	WorldCollectionName      string        `json:"world_collection_name"`
+	GraphCollectionName      string        `json:"graph_collection_name"`
+	TemplateCollectionName   string        `json:"template_collection_name"`
+	MongoUrl                 string        `json:"mongo_url"`
+	JsTimeout                time.Duration `json:"js_timeout"`
+	ZookeeperUrl             string        `json:"zookeeper_url"`
+	KafkaResponseTopic       string        `json:"kafka_response_topic"`
+	PermSearchUrl            string        `json:"perm_search_url"`
+	KafkaGroupName           string        `json:"kafka_group_name"`
+	FatalKafkaError          bool          `json:"fatal_kafka_error"` // "true" || "false"; "" -> "true", else -> "false"
+	Protocol                 string        `json:"protocol"`
+	DeviceManagerUrl         string        `json:"device_manager_url"`
+	DeviceRepoUrl            string        `json:"device_repo_url"`
+	AuthClientId             string        `json:"auth_client_id"`     //keycloak-client
+	AuthClientSecret         string        `json:"auth_client_secret"` //keycloak-secret
+	AuthExpirationTimeBuffer float64       `json:"auth_expiration_time_buffer"`
+	AuthEndpoint             string        `json:"auth_endpoint"`
+	JwtPrivateKey            string        `json:"jwt_private_key"`
+	JwtExpiration            int64         `json:"jwt_expiration"`
+	JwtIssuer                string        `json:"jwt_issuer"`
+	Debug                    bool          `json:"debug"`
+	IotCacheUrls             string        `json:"iot_cache_urls"`
+	DeviceExpiration         int64         `json:"device_expiration"`
+	DeviceTypeExpiration     int64         `json:"device_type_expiration"`
+	TokenCacheUrls           string        `json:"token_cache_urls"`
+	TokenCacheExpiration     int64         `json:"token_cache_expiration"`
+	SyncKafka                bool          `json:"sync_kafka"`
+	SyncKafkaIdempotent      bool          `json:"sync_kafka_idempotent"`
 }
 
 func LoadConfig() (result Config, err error) {
@@ -101,6 +118,10 @@ func handleEnvironmentVars(config interface{}) {
 			}
 			if configValue.FieldByName(fieldName).Kind() == reflect.String {
 				configValue.FieldByName(fieldName).SetString(envValue)
+			}
+			if configValue.FieldByName(fieldName).Kind() == reflect.Bool {
+				b, _ := strconv.ParseBool(envValue)
+				configValue.FieldByName(fieldName).SetBool(b)
 			}
 			if configValue.FieldByName(fieldName).Kind() == reflect.Slice {
 				val := []string{}

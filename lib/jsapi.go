@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 InfAI (CC SES)
+ * Copyright 2019 InfAI (CC SES)
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,9 +14,11 @@
  * limitations under the License.
  */
 
-package main
+package lib
 
-import "log"
+import (
+	"log"
+)
 
 func (this *StateRepo) getJsWorldApi(world *World) map[string]interface{} {
 	return map[string]interface{}{

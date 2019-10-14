@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 InfAI (CC SES)
+ * Copyright 2019 InfAI (CC SES)
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,12 +14,19 @@
  * limitations under the License.
  */
 
-package main
+package lib
 
-import "moses/marshaller"
+import "fmt"
 
-type ProtocolInterface interface {
-	Send(deviceId string, serviceId string, marshaller marshaller.Marshaller, value interface{}) (err error)
-	SetReceiver(receiver func(deviceId string, serviceId string, cmdMsg interface{}, responder func(respMsg interface{}))) //receives and sends json objects (not marshaled)
-	Start() (err error)
+func ExampleGetTemplateParameterList() {
+	templ := `
+Hello {{name}}
+You have just won {{value}} dollars!
+{{#in_ca}}
+Well, {{taxed_value}} dollars, after taxes.
+{{/in_ca}}
+`
+	fmt.Println(GetTemplateParameterList(templ))
+	//output:
+	//[name value in_ca taxed_value] <nil>
 }

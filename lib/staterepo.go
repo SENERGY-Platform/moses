@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 InfAI (CC SES)
+ * Copyright 2019 InfAI (CC SES)
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,11 +14,15 @@
  * limitations under the License.
  */
 
-package main
+package lib
 
 import (
+	"encoding/json"
 	"errors"
+	platform_connector_lib "github.com/SENERGY-Platform/platform-connector-lib"
+	"github.com/SENERGY-Platform/platform-connector-lib/model"
 	"log"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -29,7 +33,7 @@ type StateRepo struct {
 	Worlds                 map[string]*World
 	Graphs                 map[string]*Graph
 	Persistence            PersistenceInterface
-	Protocol               ProtocolInterface
+	Connector              *platform_connector_lib.Connector
 	Config                 Config
 	changeRoutineIndex     map[string]ChangeRoutineIndexElement
 	externalRefDeviceIndex map[string]*Device
@@ -40,6 +44,7 @@ type StateRepo struct {
 	changeRoutinesTickers  []*time.Ticker
 	stopChannels           []chan bool
 	mux                    sync.RWMutex
+	MosesProtocolId        string
 }
 
 //Update for HTTP-DEV-API
@@ -214,6 +219,10 @@ func (this *StateRepo) Load() (err error) {
 	if err != nil {
 		return err
 	}
+	this.MosesProtocolId, err = this.EnsureProtocol(this.Config.Protocol, []model.ProtocolSegment{{Name: "body"}})
+	if err != nil {
+		return err
+	}
 	this.Worlds, err = this.Persistence.LoadWorlds()
 	if err != nil {
 		return err
@@ -263,13 +272,64 @@ func (this *StateRepo) Start() {
 		this.changeRoutinesTickers = append(this.changeRoutinesTickers, tickers...)
 		this.stopChannels = append(this.stopChannels, stops...)
 	}
-	if this.Protocol != nil {
-		this.Protocol.SetReceiver(func(deviceId string, serviceId string, cmdMsg interface{}, responder func(respMsg interface{})) {
-			this.HandleCommand(deviceId, serviceId, cmdMsg, responder)
+
+	this.Connector.SetAsyncCommandHandler(func(commandRequest model.ProtocolMsg, requestMsg platform_connector_lib.CommandRequestMsg, t time.Time) (err error) {
+		///*
+		msg := map[string]interface{}{}
+		for key, value := range requestMsg {
+			var msgPart interface{}
+			err = json.Unmarshal([]byte(value), &msgPart)
+			if err != nil {
+				log.Println("ERROR: ", err)
+				debug.PrintStack()
+				return nil
+			}
+			msg[key] = msgPart
+		}
+		this.HandleCommand(commandRequest.DeviceInstanceId, commandRequest.ServiceId, msg, func(respMsg interface{}) {
+			msgMap, ok := respMsg.(map[string]interface{})
+			if !ok {
+				log.Println("ERROR: unable to interprete response", respMsg)
+				debug.PrintStack()
+				return
+			}
+			msg := platform_connector_lib.CommandResponseMsg{}
+			for key, value := range msgMap {
+				part, err := json.Marshal(value)
+				if err != nil {
+					log.Println("ERROR: ", err)
+					debug.PrintStack()
+					return
+				}
+				msg[key] = string(part)
+			}
+			err = this.Connector.HandleCommandResponse(commandRequest, msg)
+			if err != nil {
+				log.Println("ERROR: ", err)
+				debug.PrintStack()
+				return
+			}
 		})
-	} else {
-		log.Println("WARNING: no protocol handler set")
-	}
+		//*/
+		//or
+		/*
+			this.HandleCommand(commandRequest.DeviceInstanceId, commandRequest.ServiceId, requestMsg, func(respMsg interface{}) {
+				msgMap, ok := respMsg.(platform_connector_lib.CommandResponseMsg)
+				if !ok {
+					log.Println("ERROR: unable to interprete response", respMsg)
+					debug.PrintStack()
+					return
+				}
+				err = this.Connector.HandleCommandResponse(commandRequest, msgMap)
+				if err != nil {
+					log.Println("ERROR: ", err)
+					debug.PrintStack()
+					return
+				}
+			})
+		*/
+		return nil
+	})
 	return
 }
 
@@ -279,11 +339,6 @@ func (this *StateRepo) persistWorld(world World) (err error) {
 }
 
 func (this *StateRepo) sendSensorData(device *Device, service Service, value interface{}) {
-	log.Println("DEBUG: send data to connector", device.Id, device.ExternalRef, service.Id, service.ExternalRef, value)
-	if this.Protocol == nil {
-		log.Println("WARNING: not protocol connected")
-		return
-	}
 	if device.ExternalRef == "" {
 		log.Println("WARNING: no external ref for device")
 		return
@@ -292,10 +347,48 @@ func (this *StateRepo) sendSensorData(device *Device, service Service, value int
 		log.Println("WARNING: no external ref for service")
 		return
 	}
-	err := this.Protocol.Send(device.ExternalRef, service.ExternalRef, service.Marshaller, value)
+	token, err := this.Connector.Security().Access()
 	if err != nil {
-		log.Println("ERROR: while sending sensor data", value, device.ExternalRef, service.ExternalRef, err)
+		log.Println("ERROR: ", err)
+		debug.PrintStack()
+		return
 	}
+
+	///*
+	castMsg, ok := value.(map[string]interface{})
+	if !ok {
+		log.Println("ERROR unable to interpret event", value)
+		debug.PrintStack()
+		return
+	}
+	msg := map[string]string{}
+	for key, value := range castMsg {
+		temp, err := json.Marshal(value)
+		if err != nil {
+			log.Println("ERROR: ", err)
+			debug.PrintStack()
+			return
+		}
+		msg[key] = string(temp)
+		err = this.Connector.HandleDeviceEventWithAuthToken(token, device.ExternalRef, service.ExternalRef, msg)
+		if err != nil {
+			log.Println("ERROR: while sending sensor data", value, device.ExternalRef, service.ExternalRef, err)
+		}
+	}
+	//*/
+	//or
+	/*
+		msg, ok := value.(platform_connector_lib.EventMsg)
+		if !ok {
+			log.Println("ERROR unable to interpret event", value)
+			debug.PrintStack()
+			return
+		}
+		err = this.Connector.HandleDeviceEventWithAuthToken(token, device.ExternalRef, service.ExternalRef, msg)
+		if err != nil {
+			log.Println("ERROR: while sending sensor data", value, device.ExternalRef, service.ExternalRef, err)
+		}
+	*/
 }
 
 func (this *StateRepo) HandleCommand(externalDeviceRef string, externalServiceRef string, cmdMsg interface{}, responder func(respMsg interface{})) {

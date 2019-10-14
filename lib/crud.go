@@ -1,5 +1,5 @@
 /*
- * Copyright 2018 InfAI (CC SES)
+ * Copyright 2019 InfAI (CC SES)
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,16 +14,16 @@
  * limitations under the License.
  */
 
-package main
+package lib
 
 import (
+	"encoding/json"
 	"errors"
+	"github.com/SENERGY-Platform/platform-connector-lib/model"
 	"github.com/cbroglie/mustache"
 	"github.com/globalsign/mgo"
 	"github.com/google/uuid"
 	"log"
-	"moses/iotmodel"
-	"moses/marshaller"
 	"strings"
 )
 
@@ -209,7 +209,6 @@ func (this *StateRepo) CreateDevice(jwt Jwt, msg CreateDeviceRequest) (device De
 	}
 	device.Device.Id = uid.String()
 	device.Device.Name = msg.Name
-	device.Device.ImageUrl = msg.ImageUrl
 	device.Device.States = msg.States
 	device.Device.ExternalRef = msg.ExternalRef
 	device.World = room.World
@@ -226,7 +225,6 @@ func (this *StateRepo) UpdateDevice(jwt Jwt, msg UpdateDeviceRequest) (device De
 	}
 	device.Device.States = msg.States
 	device.Device.Name = msg.Name
-	device.Device.ImageUrl = msg.ImageUrl
 	device.Device.Id = msg.Id
 	device.Device.ExternalRef = msg.ExternalRef
 	device.Device.ChangeRoutines = msg.ChangeRoutines
@@ -333,9 +331,6 @@ func (this *StateRepo) PopulateServiceService(jwt Jwt, serviceMsg UpdateServiceR
 	service.SensorInterval = serviceMsg.SensorInterval
 	service.Code = serviceMsg.Code
 	service.ExternalRef = serviceMsg.ExternalRef
-	if service.ExternalRef != "" {
-		service.Marshaller.Service, err = this.GetIotService(jwt, service.ExternalRef)
-	}
 	return
 }
 
@@ -394,8 +389,7 @@ func (this *StateRepo) CreateDeviceByType(jwt Jwt, msg CreateDeviceByTypeRequest
 	}
 	result.Device.Id = uid.String()
 	result.Device.Name = msg.Name
-	result.Device.ExternalTypeId = externalDevice.DeviceType
-	result.Device.ImageUrl = externalDevice.ImgUrl
+	result.Device.ExternalTypeId = externalDevice.DeviceTypeId
 	result.Device.ExternalRef = externalDevice.Id
 	result.World = room.World
 	result.Room = msg.Room
@@ -411,44 +405,34 @@ func (this *StateRepo) prepareServices(jwt Jwt, deviceTypeId string) (result map
 		return result, err
 	}
 	for _, externalService := range devicetype.Services {
-		if externalService.Protocol.ProtocolHandlerUrl == this.Config.KafkaProtocolTopic {
-			uid, err := uuid.NewRandom()
-			if err != nil {
-				return result, err
-			}
-			service := Service{Id: uid.String(), Name: externalService.Name, ExternalRef: externalService.Id, Marshaller: marshaller.Marshaller{Service: externalService}}
-			service.Code, err = this.createServiceCodeSkeleton(externalService)
-			if err != nil {
-				return result, err
-			}
-			result[service.Id] = service
+		uid, err := uuid.NewRandom()
+		if err != nil {
+			return result, err
 		}
+		service := Service{Id: uid.String(), Name: externalService.Name, ExternalRef: externalService.Id}
+		service.Code, err = this.createServiceCodeSkeleton(externalService)
+		if err != nil {
+			return result, err
+		}
+		result[service.Id] = service
 	}
 	return result, err
 }
 
-func (this *StateRepo) createServiceCodeSkeleton(service iotmodel.Service) (result string, err error) {
+func (this *StateRepo) createServiceCodeSkeleton(service model.Service) (result string, err error) {
 	templateParamer := map[string]string{}
-	if len(service.Output) > 0 {
-		output := service.Output[0]
-		io, err := marshaller.SkeletonFromAssignment(output, iotmodel.GetAllowedValuesBase())
-		if err != nil {
-			return result, err
-		}
-		formatedOutput, err := marshaller.FormatToJson(io)
+	if len(service.Outputs) > 0 {
+		output := service.Outputs[0]
+		formatedOutput, err := inputOutputSkeletonString(output.ContentVariable)
 		if err != nil {
 			return result, err
 		}
 		templateParamer["output"] = strings.TrimSpace(formatedOutput)
 	}
 
-	if len(service.Input) > 0 {
-		input := service.Input[0]
-		io, err := marshaller.SkeletonFromAssignment(input, iotmodel.GetAllowedValuesBase())
-		if err != nil {
-			return result, err
-		}
-		formatedInput, err := marshaller.FormatToJson(io)
+	if len(service.Inputs) > 0 {
+		input := service.Inputs[0]
+		formatedInput, err := inputOutputSkeletonString(input.ContentVariable)
 		if err != nil {
 			return result, err
 		}
@@ -708,4 +692,51 @@ func (this *StateRepo) CreateChangeRoutineByTemplate(jwt Jwt, msg CreateChangeRo
 	createRequest := CreateChangeRoutineRequest{RefId: msg.RefId, RefType: msg.RefType, Interval: msg.Interval}
 	createRequest.Code, err = RenderTempl(templ.Template, msg.Parameter)
 	return this.CreateChangeRoutine(jwt, createRequest)
+}
+
+func inputOutputSkeletonString(variable model.ContentVariable) (result string, err error) {
+	temp := &map[string]interface{}{}
+	err = inputOutputSkeletonObj(variable, temp)
+	if err != nil {
+		return result, err
+	}
+	b, err := json.Marshal(temp)
+	return string(b), err
+}
+
+func inputOutputSkeletonObj(variable model.ContentVariable, result *map[string]interface{}) (err error) {
+	switch variable.Type {
+	case model.String:
+		(*result)[variable.Name] = ""
+	case model.Integer:
+		(*result)[variable.Name] = 0
+	case model.Float:
+		(*result)[variable.Name] = 0.0
+	case model.Boolean:
+		(*result)[variable.Name] = false
+	case model.Structure:
+		temp := map[string]interface{}{}
+		for _, sub := range variable.SubContentVariables {
+			err = inputOutputSkeletonObj(sub, &temp)
+			if err != nil {
+				return err
+			}
+		}
+		(*result)[variable.Name] = temp
+
+	case model.List:
+		temp := map[string]interface{}{}
+		for _, sub := range variable.SubContentVariables {
+			err = inputOutputSkeletonObj(sub, &temp)
+			if err != nil {
+				return err
+			}
+		}
+		list := []interface{}{}
+		for _, element := range temp {
+			list = append(list, element)
+		}
+		(*result)[variable.Name] = list
+	}
+	return nil
 }
