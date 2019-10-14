@@ -26,7 +26,7 @@ import (
 	"sync"
 )
 
-func New(startConfig lib.Config) (config lib.Config, shutdown func(), err error) {
+func New(startConfig lib.Config, keyxcloakExportLocation string) (config lib.Config, shutdown func(), err error) {
 	config = startConfig
 
 	pool, err := dockertest.NewPool("")
@@ -247,6 +247,12 @@ func New(startConfig lib.Config) (config lib.Config, shutdown func(), err error)
 		config.AuthClientId = "connector"
 		closerList = append(closerList, closer)
 		if err != nil {
+			globalError = err
+			return
+		}
+		err = ConfigKeycloak(config.AuthEndpoint, keyxcloakExportLocation, "connector")
+		if err != nil {
+			log.Println("ConfigKeycloak: ", err)
 			globalError = err
 			return
 		}

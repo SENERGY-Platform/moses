@@ -17,7 +17,7 @@ func TestStartup(t *testing.T) {
 	}
 
 	log.Println("startup")
-	config, stop, err := server.New(defaultConfig)
+	config, stop, err := server.New(defaultConfig, "./server/keycloak-export.json")
 	defer stop()
 	if err != nil {
 		t.Fatal(err)
@@ -26,7 +26,7 @@ func TestStartup(t *testing.T) {
 	log.Println("wait")
 	time.Sleep(5 * time.Second)
 
-	t.Log("check moses protocol init")
+	log.Println("check moses protocol init")
 	protocols := []model.Protocol{}
 	err = helper.AdminGet(t, config.DeviceRepoUrl+"/protocols", &protocols)
 	if err != nil {

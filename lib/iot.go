@@ -160,6 +160,7 @@ func (this *StateRepo) CreateProtocol(handler string, segments []model.ProtocolS
 	}, &protocol)
 	if err != nil {
 		log.Println("ERROR:", err)
+		log.Println("DEBUG: token=", token)
 		debug.PrintStack()
 	}
 	return
