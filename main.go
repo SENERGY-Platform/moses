@@ -17,11 +17,12 @@
 package main
 
 import (
+	"context"
 	"github.com/SENERGY-Platform/moses/lib"
-	platform_connector_lib "github.com/SENERGY-Platform/platform-connector-lib"
 	"log"
 	"os"
-	"strings"
+	"os/signal"
+	"syscall"
 	"time"
 )
 
@@ -32,76 +33,24 @@ func main() {
 		log.Fatal("unable to load config: ", err)
 	}
 
-	log.Println("init protocol handler")
-	connector := platform_connector_lib.New(platform_connector_lib.Config{
-		FatalKafkaError:          config.FatalKafkaError,
-		Protocol:                 config.Protocol,
-		KafkaGroupName:           config.KafkaGroupName,
-		ZookeeperUrl:             config.ZookeeperUrl,
-		AuthExpirationTimeBuffer: config.AuthExpirationTimeBuffer,
-		JwtExpiration:            config.JwtExpiration,
-		JwtPrivateKey:            config.JwtPrivateKey,
-		JwtIssuer:                config.JwtIssuer,
-		AuthClientSecret:         config.AuthClientSecret,
-		AuthClientId:             config.AuthClientId,
-		AuthEndpoint:             config.AuthEndpoint,
-		DeviceManagerUrl:         config.DeviceManagerUrl,
-		DeviceRepoUrl:            config.DeviceRepoUrl,
-		KafkaResponseTopic:       config.KafkaResponseTopic,
-
-		IotCacheUrl:          StringToList(config.IotCacheUrls),
-		DeviceExpiration:     int32(config.DeviceExpiration),
-		DeviceTypeExpiration: int32(config.DeviceTypeExpiration),
-
-		TokenCacheUrl:        StringToList(config.TokenCacheUrls),
-		TokenCacheExpiration: int32(config.TokenCacheExpiration),
-
-		SyncKafka:           config.SyncKafka,
-		SyncKafkaIdempotent: config.SyncKafkaIdempotent,
-		Debug:               config.Debug,
-	})
-
-	if config.Debug {
-		connector.SetKafkaLogger(log.New(os.Stdout, "[CONNECTOR-KAFKA] ", 0))
-		connector.IotCache.Debug = true
-	}
-
 	time.Sleep(5 * time.Second) //wait for routing tables in cluster
 
-	log.Println("connect to database")
-	persistence, err := lib.NewMongoPersistence(config)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	err = lib.New(config, ctx)
 	if err != nil {
-		log.Fatal("unable to connect to database: ", err)
+		log.Println(err)
+		cancel()
 	}
 
-	log.Println("load states from database")
-	staterepo := &lib.StateRepo{Persistence: persistence, Config: config, Connector: connector}
-	err = staterepo.Load()
-	if err != nil {
-		log.Fatal("unable to load state repo: ", err)
-	}
+	go func() {
+		shutdown := make(chan os.Signal, 1)
+		signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
+		sig := <-shutdown
+		log.Println("received shutdown signal", sig)
+		cancel()
+	}()
 
-	log.Println("start state routines")
-	staterepo.Start()
-
-	err = connector.Start()
-	if err != nil {
-		log.Fatal("unable to start protocol: ", err)
-	}
-
-	log.Println("start api on port: ", config.ServerPort)
-	lib.StartApi(config, staterepo)
-
-}
-
-func StringToList(str string) []string {
-	temp := strings.Split(str, ",")
-	result := []string{}
-	for _, e := range temp {
-		trimmed := strings.TrimSpace(e)
-		if trimmed != "" {
-			result = append(result, trimmed)
-		}
-	}
-	return result
+	<-ctx.Done()                //waiting for context end; may happen by shutdown signal
+	time.Sleep(1 * time.Second) //give go routines time for cleanup
 }

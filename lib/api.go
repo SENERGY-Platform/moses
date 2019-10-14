@@ -17,18 +17,31 @@
 package lib
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/julienschmidt/httprouter"
 )
 
-func StartApi(config Config, staterepo *StateRepo) {
+func StartApi(ctx context.Context, config Config, staterepo *StateRepo) {
 	httpHandler := getRoutes(config, staterepo)
 	logger := Logger(httpHandler, config.LogLevel)
-	log.Println(http.ListenAndServe(":"+config.ServerPort, logger))
+	server := &http.Server{Addr: ":" + config.ServerPort, Handler: logger, WriteTimeout: 10 * time.Second, ReadTimeout: 2 * time.Second, ReadHeaderTimeout: 2 * time.Second}
+	go func() {
+		log.Println("Listening on ", server.Addr)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Println("ERROR: api server error", err)
+			log.Fatal(err)
+		}
+	}()
+	go func() {
+		<-ctx.Done()
+		log.Println("DEBUG: api shutdown", server.Shutdown(context.Background()))
+	}()
 }
 
 func getRoutes(config Config, state *StateRepo) *httprouter.Router {

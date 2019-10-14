@@ -219,7 +219,7 @@ func (this *StateRepo) Load() (err error) {
 	if err != nil {
 		return err
 	}
-	this.MosesProtocolId, err = this.EnsureProtocol(this.Config.Protocol, []model.ProtocolSegment{{Name: "body"}})
+	this.MosesProtocolId, err = this.EnsureProtocol(this.Config.Protocol, []model.ProtocolSegment{{Name: "payload"}})
 	if err != nil {
 		return err
 	}
@@ -286,7 +286,7 @@ func (this *StateRepo) Start() {
 			}
 			msg[key] = msgPart
 		}
-		this.HandleCommand(commandRequest.DeviceInstanceId, commandRequest.ServiceId, msg, func(respMsg interface{}) {
+		this.HandleCommand(commandRequest.Metadata.Device.Id, commandRequest.Metadata.Service.Id, msg, func(respMsg interface{}) {
 			msgMap, ok := respMsg.(map[string]interface{})
 			if !ok {
 				log.Println("ERROR: unable to interprete response", respMsg)
