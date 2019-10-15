@@ -32,6 +32,46 @@ func init() {
 }
 
 func DeviceEndpoints(config config.Config, states *state.StateRepo, router *httprouter.Router) {
+	// POST /device/bydevicetype
+	router.POST("/device/bydevicetype", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
+		jwt, err := jwt.GetJwt(request)
+		if err != nil {
+			log.Println("ERROR: POST /device/bydevicetype GetJwt", err)
+			http.Error(resp, err.Error(), 400)
+			return
+		}
+		msg := state.CreateDeviceByTypeRequest{}
+		err = json.NewDecoder(request.Body).Decode(&msg)
+		if err != nil {
+			log.Println("ERROR: /device/bydevicetype Decode", err)
+			http.Error(resp, err.Error(), 400)
+			return
+		}
+		result, access, worldAndRoomExists, err := states.CreateDeviceByType(jwt, msg)
+		if err != nil {
+			log.Println("ERROR: /device/bydevicetype CreateDeviceByType", err)
+			http.Error(resp, err.Error(), 500)
+			return
+		}
+		if !access {
+			log.Println("WARNING: user access denied")
+			http.Error(resp, "access denied", http.StatusUnauthorized)
+			return
+		}
+		if !worldAndRoomExists {
+			log.Println("WARNING: 404")
+			http.Error(resp, "unknown world or room id", http.StatusNotFound)
+			return
+		}
+		b, err := json.Marshal(result)
+		if err != nil {
+			log.Println("ERROR: /device/bydevicetype Marshal", err)
+			http.Error(resp, err.Error(), 500)
+		} else {
+			fmt.Fprint(resp, string(b))
+		}
+	})
+
 	// PUT /device
 	router.PUT("/device", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
 		jwt, err := jwt.GetJwt(request)

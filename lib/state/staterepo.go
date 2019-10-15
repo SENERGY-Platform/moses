@@ -290,7 +290,7 @@ func (this *StateRepo) Start() {
 		this.HandleCommand(commandRequest.Metadata.Device.Id, commandRequest.Metadata.Service.Id, msg, func(respMsg interface{}) {
 			msgMap, ok := respMsg.(map[string]interface{})
 			if !ok {
-				log.Println("ERROR: unable to interprete response", respMsg)
+				log.Println("ERROR: unable to interpret response", respMsg)
 				debug.PrintStack()
 				return
 			}

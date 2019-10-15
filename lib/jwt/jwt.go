@@ -157,7 +157,7 @@ func (this JwtImpersonate) Get(url string) (resp *http.Response, err error) {
 		err = errors.New("access denied")
 	}
 	if err == nil && (resp.StatusCode != 200) {
-		err = errors.New("unexpected statuscode in response for POST " + url)
+		err = errors.New("unexpected statuscode in response for GET " + url)
 	}
 	return
 }
@@ -178,7 +178,7 @@ func (this JwtImpersonate) Delete(url string) (resp *http.Response, err error) {
 		err = errors.New("access denied")
 	}
 	if err == nil && (resp.StatusCode != 200) {
-		err = errors.New("unexpected statuscode in response for POST " + url)
+		err = errors.New("unexpected statuscode in response for DELETE " + url)
 	}
 	return
 }
