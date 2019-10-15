@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
-package lib
+package state
 
 import (
 	"encoding/json"
 	"errors"
+	"github.com/SENERGY-Platform/moses/lib/config"
 	platform_connector_lib "github.com/SENERGY-Platform/platform-connector-lib"
 	"github.com/SENERGY-Platform/platform-connector-lib/model"
 	"log"
@@ -34,7 +35,7 @@ type StateRepo struct {
 	Graphs                 map[string]*Graph
 	Persistence            PersistenceInterface
 	Connector              *platform_connector_lib.Connector
-	Config                 Config
+	Config                 config.Config
 	changeRoutineIndex     map[string]ChangeRoutineIndexElement
 	externalRefDeviceIndex map[string]*Device
 	serviceDeviceIndex     map[string]*Device

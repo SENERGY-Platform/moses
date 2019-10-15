@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package lib
+package state
 
 import "github.com/google/uuid"
 

@@ -14,10 +14,11 @@
  * limitations under the License.
  */
 
-package lib
+package state
 
 import (
 	"errors"
+	"github.com/SENERGY-Platform/moses/lib/jwt"
 	"github.com/SENERGY-Platform/platform-connector-lib/model"
 	"github.com/satori/go.uuid"
 	"log"
@@ -26,7 +27,7 @@ import (
 	"strconv"
 )
 
-func (this *StateRepo) GetIotDeviceType(jwt Jwt, id string) (dt model.DeviceType, err error) {
+func (this *StateRepo) GetIotDeviceType(jwt jwt.Jwt, id string) (dt model.DeviceType, err error) {
 	err = jwt.Impersonate.GetJSON(this.Config.DeviceManagerUrl+"/device-types/"+url.PathEscape(id), &dt)
 	if err != nil {
 		log.Println("ERROR: unable to get device type", err)
@@ -34,7 +35,7 @@ func (this *StateRepo) GetIotDeviceType(jwt Jwt, id string) (dt model.DeviceType
 	return
 }
 
-func (this *StateRepo) GetIotDeviceTypes(jwt Jwt) (result []model.DeviceType, err error) {
+func (this *StateRepo) GetIotDeviceTypes(jwt jwt.Jwt) (result []model.DeviceType, err error) {
 	err = jwt.Impersonate.GetJSON(this.Config.DeviceManagerUrl+"/device-types", &result)
 	if err != nil {
 		log.Println("ERROR: unable to query service", err)
@@ -42,7 +43,7 @@ func (this *StateRepo) GetIotDeviceTypes(jwt Jwt) (result []model.DeviceType, er
 	return
 }
 
-func (this *StateRepo) GetIotDeviceTypesIds(jwt Jwt) (result []string, err error) {
+func (this *StateRepo) GetIotDeviceTypesIds(jwt jwt.Jwt) (result []string, err error) {
 	steps := 1000
 	limit := 0
 	offset := 0
@@ -67,7 +68,7 @@ func (this *StateRepo) GetIotDeviceTypesIds(jwt Jwt) (result []string, err error
 	return
 }
 
-func (this *StateRepo) GetMosesDeviceTypesIds(jwt Jwt) (result []string, err error) {
+func (this *StateRepo) GetMosesDeviceTypesIds(jwt jwt.Jwt) (result []string, err error) {
 	steps := 1000
 	limit := 0
 	offset := 0
@@ -92,7 +93,7 @@ func (this *StateRepo) GetMosesDeviceTypesIds(jwt Jwt) (result []string, err err
 	return
 }
 
-func (this *StateRepo) GenerateExternalDevice(jwt Jwt, request CreateDeviceByTypeRequest) (device model.Device, err error) {
+func (this *StateRepo) GenerateExternalDevice(jwt jwt.Jwt, request CreateDeviceByTypeRequest) (device model.Device, err error) {
 	deviceInp := model.Device{Name: request.Name, DeviceTypeId: request.DeviceTypeId, LocalId: uuid.NewV4().String()}
 	err = jwt.Impersonate.PostJSON(this.Config.DeviceManagerUrl+"/devices", deviceInp, &device)
 	if err != nil {
@@ -101,7 +102,7 @@ func (this *StateRepo) GenerateExternalDevice(jwt Jwt, request CreateDeviceByTyp
 	return
 }
 
-func (this *StateRepo) DeleteExternalDevice(jwt Jwt, id string) (err error) {
+func (this *StateRepo) DeleteExternalDevice(jwt jwt.Jwt, id string) (err error) {
 	if id != "" {
 		_, err = jwt.Impersonate.Delete(this.Config.DeviceManagerUrl + "/devices/" + url.PathEscape(id))
 	}

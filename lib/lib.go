@@ -1,14 +1,33 @@
+/*
+ * Copyright 2019 InfAI (CC SES)
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package lib
 
 import (
 	"context"
+	"github.com/SENERGY-Platform/moses/lib/api"
+	"github.com/SENERGY-Platform/moses/lib/config"
+	"github.com/SENERGY-Platform/moses/lib/state"
 	platform_connector_lib "github.com/SENERGY-Platform/platform-connector-lib"
 	"log"
 	"os"
 	"strings"
 )
 
-func New(config Config, ctx context.Context) (err error) {
+func New(config config.Config, ctx context.Context) (err error) {
 	log.Println("init protocol handler")
 	connector := platform_connector_lib.New(platform_connector_lib.Config{
 		FatalKafkaError:          config.FatalKafkaError,
@@ -44,14 +63,14 @@ func New(config Config, ctx context.Context) (err error) {
 	}
 
 	log.Println("connect to database")
-	persistence, err := NewMongoPersistence(config)
+	persistence, err := state.NewMongoPersistence(config)
 	if err != nil {
 		log.Println("ERROR: unable to connect to database: ", err)
 		return err
 	}
 
 	log.Println("load states from database")
-	staterepo := &StateRepo{Persistence: persistence, Config: config, Connector: connector}
+	staterepo := &state.StateRepo{Persistence: persistence, Config: config, Connector: connector}
 	err = staterepo.Load()
 	if err != nil {
 		log.Println("ERROR: unable to load state repo: ", err)
@@ -69,12 +88,12 @@ func New(config Config, ctx context.Context) (err error) {
 
 	log.Println("start api on port: ", config.ServerPort)
 
-	StartApi(ctx, config, staterepo)
+	api.Start(ctx, config, staterepo)
 	go func() {
 		<-ctx.Done()
 		connector.Stop()
 		staterepo.Stop()
-		persistence.session.Close()
+		persistence.Close()
 	}()
 	return nil
 }

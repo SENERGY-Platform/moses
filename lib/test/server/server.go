@@ -19,6 +19,7 @@ package server
 import (
 	"context"
 	"github.com/SENERGY-Platform/moses/lib"
+	"github.com/SENERGY-Platform/moses/lib/config"
 	"github.com/ory/dockertest"
 	"log"
 	"net"
@@ -26,7 +27,7 @@ import (
 	"sync"
 )
 
-func New(startConfig lib.Config, keyxcloakExportLocation string) (config lib.Config, shutdown func(), err error) {
+func New(startConfig config.Config, keyxcloakExportLocation string) (config config.Config, shutdown func(), err error) {
 	config = startConfig
 
 	pool, err := dockertest.NewPool("")

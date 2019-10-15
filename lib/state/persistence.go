@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 
-package lib
+package state
 
 import (
+	"github.com/SENERGY-Platform/moses/lib/config"
 	"github.com/globalsign/mgo"
 	"github.com/globalsign/mgo/bson"
 )
@@ -42,7 +43,7 @@ type MongoPersistence struct {
 	tableName              string
 }
 
-func NewMongoPersistence(config Config) (result MongoPersistence, err error) {
+func NewMongoPersistence(config config.Config) (result MongoPersistence, err error) {
 	result.worldCollectionName = config.WorldCollectionName
 	result.graphCollectionName = config.GraphCollectionName
 	result.templateCollectionName = config.TemplateCollectionName
@@ -51,6 +52,10 @@ func NewMongoPersistence(config Config) (result MongoPersistence, err error) {
 		result.session.SetMode(mgo.Monotonic, true)
 	}
 	return
+}
+
+func (this *MongoPersistence) Close() {
+	this.session.Close()
 }
 
 func (this MongoPersistence) getWorldCollection() (session *mgo.Session, collection *mgo.Collection) {

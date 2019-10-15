@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"github.com/SENERGY-Platform/moses/lib"
+	"github.com/SENERGY-Platform/moses/lib/config"
 	"log"
 	"os"
 	"os/signal"
@@ -28,7 +29,7 @@ import (
 
 func main() {
 	log.Println("load config")
-	config, err := lib.LoadConfig()
+	config, err := config.LoadConfig()
 	if err != nil {
 		log.Fatal("unable to load config: ", err)
 	}
