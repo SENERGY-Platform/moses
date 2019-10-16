@@ -12,6 +12,7 @@
     "kafka_group_name":"moses",
     "fatal_kafka_error":true,
     "protocol":"moses",
+    "protocol_segment_name": "body",
     "device_manager_url":"http://device-manager.device-management:8080",
     "device_repo_url":"http://device-repository.device-management:8080",
     "auth_client_id":"",

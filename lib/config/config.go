@@ -42,6 +42,7 @@ type Config struct {
 	KafkaGroupName           string        `json:"kafka_group_name"`
 	FatalKafkaError          bool          `json:"fatal_kafka_error"` // "true" || "false"; "" -> "true", else -> "false"
 	Protocol                 string        `json:"protocol"`
+	ProtocolSegmentName      string        `json:"protocol_segment_name"`
 	DeviceManagerUrl         string        `json:"device_manager_url"`
 	DeviceRepoUrl            string        `json:"device_repo_url"`
 	AuthClientId             string        `json:"auth_client_id"`     //keycloak-client

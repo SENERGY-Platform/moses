@@ -692,7 +692,7 @@ func inputOutputSkeletonString(variable model.ContentVariable) (result string, e
 	if err != nil {
 		return result, err
 	}
-	b, err := json.Marshal(temp)
+	b, err := json.Marshal((*temp)[variable.Name])
 	return string(b), err
 }
 

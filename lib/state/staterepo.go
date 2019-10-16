@@ -220,7 +220,7 @@ func (this *StateRepo) Load() (err error) {
 	if err != nil {
 		return err
 	}
-	this.MosesProtocolId, err = this.EnsureProtocol(this.Config.Protocol, []model.ProtocolSegment{{Name: "payload"}})
+	this.MosesProtocolId, err = this.EnsureProtocol(this.Config.Protocol, []model.ProtocolSegment{{Name: this.Config.ProtocolSegmentName}})
 	if err != nil {
 		return err
 	}
@@ -288,22 +288,14 @@ func (this *StateRepo) Start() {
 			msg[key] = msgPart
 		}
 		this.HandleCommand(commandRequest.Metadata.Device.Id, commandRequest.Metadata.Service.Id, msg, func(respMsg interface{}) {
-			msgMap, ok := respMsg.(map[string]interface{})
-			if !ok {
-				log.Println("ERROR: unable to interpret response", respMsg)
+			msg := platform_connector_lib.CommandResponseMsg{}
+			msgStr, err := json.Marshal(respMsg)
+			if err != nil {
+				log.Println("ERROR: ", err)
 				debug.PrintStack()
 				return
 			}
-			msg := platform_connector_lib.CommandResponseMsg{}
-			for key, value := range msgMap {
-				part, err := json.Marshal(value)
-				if err != nil {
-					log.Println("ERROR: ", err)
-					debug.PrintStack()
-					return
-				}
-				msg[key] = string(part)
-			}
+			msg[this.Config.ProtocolSegmentName] = string(msgStr)
 			err = this.Connector.HandleCommandResponse(commandRequest, msg)
 			if err != nil {
 				log.Println("ERROR: ", err)
@@ -311,24 +303,6 @@ func (this *StateRepo) Start() {
 				return
 			}
 		})
-		//*/
-		//or
-		/*
-			this.HandleCommand(commandRequest.DeviceInstanceId, commandRequest.ServiceId, requestMsg, func(respMsg interface{}) {
-				msgMap, ok := respMsg.(platform_connector_lib.CommandResponseMsg)
-				if !ok {
-					log.Println("ERROR: unable to interprete response", respMsg)
-					debug.PrintStack()
-					return
-				}
-				err = this.Connector.HandleCommandResponse(commandRequest, msgMap)
-				if err != nil {
-					log.Println("ERROR: ", err)
-					debug.PrintStack()
-					return
-				}
-			})
-		*/
 		return nil
 	})
 	return
@@ -355,7 +329,6 @@ func (this *StateRepo) sendSensorData(device *Device, service Service, value int
 		return
 	}
 
-	///*
 	castMsg, ok := value.(map[string]interface{})
 	if !ok {
 		log.Println("ERROR unable to interpret event", value)
@@ -371,25 +344,11 @@ func (this *StateRepo) sendSensorData(device *Device, service Service, value int
 			return
 		}
 		msg[key] = string(temp)
-		err = this.Connector.HandleDeviceEventWithAuthToken(token, device.ExternalRef, service.ExternalRef, msg)
-		if err != nil {
-			log.Println("ERROR: while sending sensor data", value, device.ExternalRef, service.ExternalRef, err)
-		}
 	}
-	//*/
-	//or
-	/*
-		msg, ok := value.(platform_connector_lib.EventMsg)
-		if !ok {
-			log.Println("ERROR unable to interpret event", value)
-			debug.PrintStack()
-			return
-		}
-		err = this.Connector.HandleDeviceEventWithAuthToken(token, device.ExternalRef, service.ExternalRef, msg)
-		if err != nil {
-			log.Println("ERROR: while sending sensor data", value, device.ExternalRef, service.ExternalRef, err)
-		}
-	*/
+	err = this.Connector.HandleDeviceEventWithAuthToken(token, device.ExternalRef, service.ExternalRef, msg)
+	if err != nil {
+		log.Println("ERROR: while sending sensor data", value, device.ExternalRef, service.ExternalRef, err)
+	}
 }
 
 func (this *StateRepo) HandleCommand(externalDeviceRef string, externalServiceRef string, cmdMsg interface{}, responder func(respMsg interface{})) {
