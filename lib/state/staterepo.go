@@ -275,7 +275,6 @@ func (this *StateRepo) Start() {
 	}
 
 	this.Connector.SetAsyncCommandHandler(func(commandRequest model.ProtocolMsg, requestMsg platform_connector_lib.CommandRequestMsg, t time.Time) (err error) {
-		///*
 		msg := map[string]interface{}{}
 		for key, value := range requestMsg {
 			var msgPart interface{}
@@ -287,7 +286,7 @@ func (this *StateRepo) Start() {
 			}
 			msg[key] = msgPart
 		}
-		this.HandleCommand(commandRequest.Metadata.Device.Id, commandRequest.Metadata.Service.Id, msg, func(respMsg interface{}) {
+		this.HandleCommand(commandRequest.Metadata.Device.Id, commandRequest.Metadata.Service.Id, msg[this.Config.ProtocolSegmentName], func(respMsg interface{}) {
 			msg := platform_connector_lib.CommandResponseMsg{}
 			msgStr, err := json.Marshal(respMsg)
 			if err != nil {
