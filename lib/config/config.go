@@ -35,6 +35,7 @@ type Config struct {
 	GraphCollectionName      string        `json:"graph_collection_name"`
 	TemplateCollectionName   string        `json:"template_collection_name"`
 	MongoUrl                 string        `json:"mongo_url"`
+	MongoTable               string        `json:"mongo_table"`
 	JsTimeout                time.Duration `json:"js_timeout"`
 	ZookeeperUrl             string        `json:"zookeeper_url"`
 	KafkaResponseTopic       string        `json:"kafka_response_topic"`

@@ -47,6 +47,7 @@ func NewMongoPersistence(config config.Config) (result MongoPersistence, err err
 	result.worldCollectionName = config.WorldCollectionName
 	result.graphCollectionName = config.GraphCollectionName
 	result.templateCollectionName = config.TemplateCollectionName
+	result.tableName = config.MongoTable
 	result.session, err = mgo.Dial(config.MongoUrl)
 	if err == nil {
 		result.session.SetMode(mgo.Monotonic, true)

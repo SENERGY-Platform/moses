@@ -5,6 +5,7 @@
     "graph_collection_name":"graphs",
     "template_collection_name":"templates",
     "mongo_url":"mongodb://db",
+    "mongo_table": "moses",
     "js_timeout":2000000000,
     "zookeeper_url":"zk",
     "kafka_response_topic":"response",
