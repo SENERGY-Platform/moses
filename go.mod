@@ -3,12 +3,13 @@ module github.com/SENERGY-Platform/moses
 go 1.13
 
 require (
-	github.com/SENERGY-Platform/platform-connector-lib v0.0.0-20191205115143-3f920fdcd755
+	github.com/SENERGY-Platform/platform-connector-lib v0.0.0-20200430101809-f24f693b2ced
 	github.com/bradfitz/gomemcache v0.0.0-20180710155616-bc664df96737
 	github.com/cbroglie/mustache v1.0.1
 	github.com/globalsign/mgo v0.0.0-20180905125535-1ca0a4f7cbcb
 	github.com/google/uuid v1.0.0
-	github.com/julienschmidt/httprouter v0.0.0-20180715161854-348b672cd90d
+	github.com/julienschmidt/httprouter v1.3.0
+	github.com/kr/pretty v0.1.0 // indirect
 	github.com/ory/dockertest v3.3.4+incompatible
 	github.com/robertkrimen/otto v0.0.0-20180617131154-15f95af6e78d
 	github.com/satori/go.uuid v1.2.0
