@@ -32,7 +32,7 @@ func New(startConfig config.Config, keyxcloakExportLocation string) (config conf
 
 	pool, err := dockertest.NewPool("")
 	if err != nil {
-		log.Println("Could not connect to docker: %s", err)
+		log.Println("Could not connect to docker: ", err)
 		return config, func() {}, err
 	}
 

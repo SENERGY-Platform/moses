@@ -17,6 +17,7 @@
 package server
 
 import (
+	"context"
 	"github.com/ory/dockertest"
 	"log"
 	"net/http"
@@ -24,7 +25,7 @@ import (
 
 func Elasticsearch(pool *dockertest.Pool) (closer func(), hostPort string, ipAddress string, err error) {
 	log.Println("start elasticsearch")
-	repo, err := pool.Run("docker.elastic.co/elasticsearch/elasticsearch", "6.4.3", []string{"discovery.type=single-node"})
+	repo, err := pool.Run("docker.elastic.co/elasticsearch/elasticsearch", "7.6.1", []string{"discovery.type=single-node"})
 	if err != nil {
 		return func() {}, "", "", err
 	}
@@ -49,6 +50,8 @@ func PermSearch(pool *dockertest.Pool, zk string, elasticIp string) (closer func
 	if err != nil {
 		return func() {}, "", "", err
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go Dockerlog(pool, ctx, repo, "PERMISSION-SEARCH")
 	hostPort = repo.GetPort("8080/tcp")
 	err = pool.Retry(func() error {
 		log.Println("try permsearch connection...")
@@ -58,5 +61,13 @@ func PermSearch(pool *dockertest.Pool, zk string, elasticIp string) (closer func
 		}
 		return err
 	})
-	return func() { repo.Close() }, hostPort, repo.Container.NetworkSettings.IPAddress, err
+	if err != nil {
+		cancel()
+		return func() { repo.Close() }, hostPort, repo.Container.NetworkSettings.IPAddress, err
+	} else {
+		return func() {
+			repo.Close()
+			cancel()
+		}, hostPort, repo.Container.NetworkSettings.IPAddress, err
+	}
 }
