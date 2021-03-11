@@ -20,7 +20,7 @@
     "auth_client_secret":"",
     "auth_expiration_time_buffer":1,
     "auth_endpoint":"http://keycloak:8080",
-    "debug":true,
+    "debug":false,
     "iot_cache_urls":"memcahed:11211",
     "device_expiration":60,
     "device_type_expiration":60,
