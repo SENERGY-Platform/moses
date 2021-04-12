@@ -112,7 +112,7 @@ func tryCommandToDevice(t *testing.T, config config.Config, protocol model.Proto
 	}
 	defer consumer.Stop()
 
-	producer, err := kafka.PrepareProducer(config.ZookeeperUrl, config.SyncKafka, config.SyncKafkaIdempotent)
+	producer, err := kafka.PrepareProducer(config.ZookeeperUrl, config.SyncKafka, config.SyncKafkaIdempotent, 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -134,3 +134,150 @@ moses.room.state.set("temp", temp);
 moses.service.send({"newtemp":temp});
 ```
 
+
+# Service Example:
+
+## Moses-Device:
+```
+{
+   "world":"bf8d36ec-cb3d-45a5-92c5-06a8f3234271",
+   "room":"1711976a-9ed6-4833-8d9b-68f0740f3a4f",
+   "device":{
+      "id":"30ea7ee1-041a-41ca-8813-ebc770ca6524",
+      "name":"test-lamp-1",
+      "external_type_id":"urn:infai:ses:device-type:34a4b8d2-4e65-45a1-8c34-06a0c4294ed9",
+      "external_ref":"urn:infai:ses:device:ce4d0300-6c3d-47c4-821f-323c3b9d1f55",
+      "states":{
+         "level":"off"
+      },
+      "change_routines":{
+         
+      },
+      "services":{
+         "52f1c328-e7ae-4b79-bf10-c57038378ed6":{
+            "id":"52f1c328-e7ae-4b79-bf10-c57038378ed6",
+            "name":"setOn",
+            "external_ref":"urn:infai:ses:service:346d6397-9e0e-4d6f-a418-1540ea8cb5ae",
+            "sensor_interval":0,
+            "code":"moses.device.state.set(\"level\", \"on\");\nmoses.service.send({\"executed\": true });"
+         },
+         "589f6d84-7b7d-4583-917d-28f9ff52875a":{
+            "id":"589f6d84-7b7d-4583-917d-28f9ff52875a",
+            "name":"getState",
+            "external_ref":"urn:infai:ses:service:34df4d8d-fdfe-42e5-88a5-74076decd534",
+            "sensor_interval":15,
+            "code":"var level = moses.device.state.get(\"level\");\nvar output = {\"payload\": {\"on\":level == \"on\"}};\nmoses.service.send(output);"
+         },
+         "f2b4492b-84a9-478f-8ec0-12c02f076e64":{
+            "id":"f2b4492b-84a9-478f-8ec0-12c02f076e64",
+            "name":"setOff",
+            "external_ref":"urn:infai:ses:service:ce7f5435-d09e-4d9b-b066-5f81d07c5d94",
+            "sensor_interval":0,
+            "code":"moses.device.state.set(\"level\", \"off\");\nmoses.service.send({\"executed\": true });"
+         }
+      }
+   }
+}
+```
+
+## Device-Type:
+```
+{
+   "id":"urn:infai:ses:device-type:34a4b8d2-4e65-45a1-8c34-06a0c4294ed9",
+   "name":"Test Lamp Moses",
+   "description":"",
+   "services":[
+      {
+         "id":"urn:infai:ses:service:34df4d8d-fdfe-42e5-88a5-74076decd534",
+         "local_id":"getState",
+         "name":"getState",
+         "description":"",
+         "interaction":"event+request",
+         "aspect_ids":[
+            "urn:infai:ses:aspect:861227f6-1523-46a7-b8ab-a4e76f0bdd32",
+            "urn:infai:ses:aspect:a7470d73-dde3-41fc-92bd-f16bb28f2da6"
+         ],
+         "protocol_id":"urn:infai:ses:protocol:3b59ea31-da98-45fd-a354-1b9bd06b837e",
+         "inputs":[
+            
+         ],
+         "outputs":[
+            {
+               "id":"urn:infai:ses:content:c579c816-de2e-4d99-9f35-fb4068d43c98",
+               "content_variable":{
+                  "id":"urn:infai:ses:content-variable:9d32286d-ec99-48bd-b581-f23d3fd6f9dd",
+                  "name":"state",
+                  "type":"https://schema.org/StructuredValue",
+                  "sub_content_variables":[
+                     {
+                        "id":"urn:infai:ses:content-variable:ca0e3ef5-7194-4fc8-85fa-e27a89e1d28d",
+                        "name":"on",
+                        "type":"https://schema.org/Boolean",
+                        "sub_content_variables":null,
+                        "characteristic_id":"urn:infai:ses:characteristic:7dc1bb7e-b256-408a-a6f9-044dc60fdcf5",
+                        "value":null,
+                        "serialization_options":null
+                     }
+                  ],
+                  "characteristic_id":"",
+                  "value":null,
+                  "serialization_options":null
+               },
+               "serialization":"json",
+               "protocol_segment_id":"urn:infai:ses:protocol-segment:05f1467c-95c8-4a83-a1ed-1c8369fd158a"
+            }
+         ],
+         "function_ids":[
+            "urn:infai:ses:measuring-function:20d3c1d3-77d7-4181-a9f3-b487add58cd0"
+         ],
+         "rdf_type":""
+      },
+      {
+         "id":"urn:infai:ses:service:ce7f5435-d09e-4d9b-b066-5f81d07c5d94",
+         "local_id":"setOff",
+         "name":"setOff",
+         "description":"",
+         "interaction":"request",
+         "aspect_ids":[
+            "urn:infai:ses:aspect:a7470d73-dde3-41fc-92bd-f16bb28f2da6",
+            "urn:infai:ses:aspect:861227f6-1523-46a7-b8ab-a4e76f0bdd32"
+         ],
+         "protocol_id":"urn:infai:ses:protocol:3b59ea31-da98-45fd-a354-1b9bd06b837e",
+         "inputs":[
+            
+         ],
+         "outputs":[
+            
+         ],
+         "function_ids":[
+            "urn:infai:ses:controlling-function:2f35150b-9df7-4cad-95bc-165fa00219fd"
+         ],
+         "rdf_type":""
+      },
+      {
+         "id":"urn:infai:ses:service:346d6397-9e0e-4d6f-a418-1540ea8cb5ae",
+         "local_id":"setOn",
+         "name":"setOn",
+         "description":"",
+         "interaction":"request",
+         "aspect_ids":[
+            "urn:infai:ses:aspect:861227f6-1523-46a7-b8ab-a4e76f0bdd32",
+            "urn:infai:ses:aspect:a7470d73-dde3-41fc-92bd-f16bb28f2da6"
+         ],
+         "protocol_id":"urn:infai:ses:protocol:3b59ea31-da98-45fd-a354-1b9bd06b837e",
+         "inputs":[
+            
+         ],
+         "outputs":[
+            
+         ],
+         "function_ids":[
+            "urn:infai:ses:controlling-function:79e7914b-f303-4a7d-90af-dee70db05fd9"
+         ],
+         "rdf_type":""
+      }
+   ],
+   "device_class_id":"urn:infai:ses:device-class:14e56881-16f9-4120-bb41-270a43070c86",
+   "rdf_type":""
+}
+```
