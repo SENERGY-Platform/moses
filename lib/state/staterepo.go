@@ -313,6 +313,9 @@ func (this *StateRepo) persistWorld(world World) (err error) {
 }
 
 func (this *StateRepo) sendSensorData(device *Device, service Service, value interface{}) {
+	if this.Config.Debug {
+		log.Println("DEBUG: send sensor data for", device.Id, service.Id, value)
+	}
 	if device.ExternalRef == "" {
 		log.Println("WARNING: no external ref for device")
 		return
