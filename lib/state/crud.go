@@ -411,8 +411,12 @@ func (this *StateRepo) prepareServices(jwt jwt.Jwt, deviceTypeId string) (result
 	return result, err
 }
 
+const PAYLOADNAME = "payload"
+
 func (this *StateRepo) createServiceCodeSkeleton(service model.Service) (result string, err error) {
-	templateParamer := map[string]string{}
+	templateParamer := map[string]string{
+		"payloadname": PAYLOADNAME,
+	}
 	if len(service.Outputs) > 0 {
 		output := service.Outputs[0]
 		formatedOutput, err := inputOutputSkeletonString(output.ContentVariable)
@@ -435,7 +439,7 @@ func (this *StateRepo) createServiceCodeSkeleton(service model.Service) (result 
 {{{input}}}
 */
 var input = moses.service.input; 
-{{/input}}{{#output}}var output = {{{output}}};
+{{/input}}{{#output}}var output = {"{{payloadname}}": {{{output}}}};
 moses.service.send(output);{{/output}}`
 	return mustache.Render(template, templateParamer)
 }

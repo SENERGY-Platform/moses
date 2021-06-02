@@ -53,6 +53,8 @@ func New(startConfig config.Config, keyxcloakExportLocation string) (config conf
 	var globalError error
 	wait := sync.WaitGroup{}
 
+	kafkaurl := ""
+
 	//zookeeper
 	zkWait := sync.WaitGroup{}
 	zkWait.Add(1)
@@ -82,7 +84,8 @@ func New(startConfig config.Config, keyxcloakExportLocation string) (config conf
 		if globalError != nil {
 			return
 		}
-		closer, err := Kafka(pool, config.ZookeeperUrl)
+		var closer func()
+		kafkaurl, closer, err = Kafka(pool, config.ZookeeperUrl)
 		mux.Lock()
 		defer mux.Unlock()
 		closerList = append(closerList, closer)
@@ -149,7 +152,7 @@ func New(startConfig config.Config, keyxcloakExportLocation string) (config conf
 		if globalError != nil {
 			return
 		}
-		closer, _, permIp, err := PermSearch(pool, config.ZookeeperUrl, elasticIp)
+		closer, _, permIp, err := PermSearch(pool, kafkaurl, elasticIp)
 		mux.Lock()
 		defer mux.Unlock()
 		permissionUrl = "http://" + permIp + ":8080"
@@ -175,7 +178,7 @@ func New(startConfig config.Config, keyxcloakExportLocation string) (config conf
 		if globalError != nil {
 			return
 		}
-		closer, _, ip, err := DeviceRepo(pool, mongoIp, config.ZookeeperUrl, permissionUrl)
+		closer, _, ip, err := DeviceRepo(pool, mongoIp, kafkaurl, permissionUrl)
 		mux.Lock()
 		defer mux.Unlock()
 		config.DeviceRepoUrl = "http://" + ip + ":8080"
@@ -198,7 +201,7 @@ func New(startConfig config.Config, keyxcloakExportLocation string) (config conf
 		if globalError != nil {
 			return
 		}
-		closer, _, ip, err := DeviceManager(pool, config.ZookeeperUrl, config.DeviceRepoUrl, "-", permissionUrl)
+		closer, _, ip, err := DeviceManager(pool, kafkaurl, config.DeviceRepoUrl, "-", permissionUrl)
 		mux.Lock()
 		defer mux.Unlock()
 		config.DeviceManagerUrl = "http://" + ip + ":8080"

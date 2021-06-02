@@ -38,7 +38,11 @@ func TestCommand(t *testing.T) {
 
 	log.Println("startup")
 	config, stop, err := server.New(defaultConfig, "./server/keycloak-export.json")
-	defer stop()
+	defer func() {
+		if stop != nil {
+			stop()
+		}
+	}()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +149,7 @@ func tryCommandToDevice(t *testing.T, config config.Config, protocol model.Proto
 	if len(responses) != 1 {
 		t.Fatal("unexpected response count", responses)
 	}
-	if responses[0].Response.Output[config.ProtocolSegmentName] != "{\"level\":0,\"title\":\"\",\"updateTime\":0}" {
+	if responses[0].Response.Output[config.ProtocolSegmentName] != `{"payload":{"level":0,"title":"","updateTime":0}}` {
 		t.Fatal("unexpected response msg", responses[0].Response.Output)
 	}
 }

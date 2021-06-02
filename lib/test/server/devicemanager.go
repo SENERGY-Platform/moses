@@ -24,8 +24,8 @@ import (
 
 func DeviceManager(pool *dockertest.Pool, zk string, deviceRepoUrl string, semanticRepoUrl string, permsearchUrl string) (closer func(), hostPort string, ipAddress string, err error) {
 	log.Println("start device repo")
-	repo, err := pool.Run("fgseitsrancher.wifa.intern.uni-leipzig.de:5000/device-manager", "dev", []string{
-		"ZOOKEEPER_URL=" + zk,
+	repo, err := pool.Run("ghcr.io/senergy-platform/device-manager", "dev", []string{
+		"KAFKA_URL=" + zk,
 		"PERMISSIONS_URL=" + permsearchUrl,
 		"DEVICE_REPO_URL=" + deviceRepoUrl,
 		"SEMANTIC_REPO_URL=" + semanticRepoUrl,
@@ -35,7 +35,7 @@ func DeviceManager(pool *dockertest.Pool, zk string, deviceRepoUrl string, seman
 	}
 	hostPort = repo.GetPort("8080/tcp")
 	err = pool.Retry(func() error {
-		log.Println("try repo connection...")
+		log.Println("try manager connection...")
 		_, err := http.Get("http://" + repo.Container.NetworkSettings.IPAddress + ":8080/")
 		if err != nil {
 			log.Println(err)
