@@ -378,7 +378,7 @@ func (this *StateRepo) HandleCommand(externalDeviceRef string, externalServiceRe
 		if service.ExternalRef == externalServiceRef {
 			err := run(service.Code, this.getJsCommandApi(world, room, device, cmdMsg, responder), this.Config.JsTimeout, &world.mux)
 			if err != nil {
-				log.Println("ERROR: while handling command in jsvm", err)
+				log.Println("ERROR: while handling command in jsvm", err, device.Name, service.Name)
 			}
 			return
 		}
