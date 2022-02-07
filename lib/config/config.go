@@ -19,6 +19,7 @@ package config
 import (
 	"encoding/json"
 	"flag"
+	"github.com/segmentio/kafka-go"
 	"log"
 	"os"
 	"reflect"
@@ -29,38 +30,79 @@ import (
 )
 
 type Config struct {
-	ServerPort               string        `json:"server_port"`
-	LogLevel                 string        `json:"log_level"`
-	WorldCollectionName      string        `json:"world_collection_name"`
-	GraphCollectionName      string        `json:"graph_collection_name"`
-	TemplateCollectionName   string        `json:"template_collection_name"`
-	MongoUrl                 string        `json:"mongo_url"`
-	MongoTable               string        `json:"mongo_table"`
-	JsTimeout                time.Duration `json:"js_timeout"`
-	ZookeeperUrl             string        `json:"zookeeper_url"`
-	KafkaResponseTopic       string        `json:"kafka_response_topic"`
-	PermSearchUrl            string        `json:"perm_search_url"`
-	KafkaGroupName           string        `json:"kafka_group_name"`
-	FatalKafkaError          bool          `json:"fatal_kafka_error"` // "true" || "false"; "" -> "true", else -> "false"
-	Protocol                 string        `json:"protocol"`
-	ProtocolSegmentName      string        `json:"protocol_segment_name"`
-	DeviceManagerUrl         string        `json:"device_manager_url"`
-	DeviceRepoUrl            string        `json:"device_repo_url"`
-	AuthClientId             string        `json:"auth_client_id"`     //keycloak-client
-	AuthClientSecret         string        `json:"auth_client_secret"` //keycloak-secret
-	AuthExpirationTimeBuffer float64       `json:"auth_expiration_time_buffer"`
-	AuthEndpoint             string        `json:"auth_endpoint"`
-	JwtPrivateKey            string        `json:"jwt_private_key"`
-	JwtExpiration            int64         `json:"jwt_expiration"`
-	JwtIssuer                string        `json:"jwt_issuer"`
-	Debug                    bool          `json:"debug"`
-	IotCacheUrls             string        `json:"iot_cache_urls"`
-	DeviceExpiration         int64         `json:"device_expiration"`
-	DeviceTypeExpiration     int64         `json:"device_type_expiration"`
-	TokenCacheUrls           string        `json:"token_cache_urls"`
-	TokenCacheExpiration     int64         `json:"token_cache_expiration"`
-	SyncKafka                bool          `json:"sync_kafka"`
-	SyncKafkaIdempotent      bool          `json:"sync_kafka_idempotent"`
+	ServerPort             string        `json:"server_port"`
+	LogLevel               string        `json:"log_level"`
+	WorldCollectionName    string        `json:"world_collection_name"`
+	GraphCollectionName    string        `json:"graph_collection_name"`
+	TemplateCollectionName string        `json:"template_collection_name"`
+	MongoUrl               string        `json:"mongo_url"`
+	MongoTable             string        `json:"mongo_table"`
+	JsTimeout              time.Duration `json:"js_timeout"`
+	ProtocolSegmentName    string        `json:"protocol_segment_name"`
+
+	KafkaUrl           string `json:"kafka_url"`
+	KafkaResponseTopic string `json:"kafka_response_topic"`
+	KafkaGroupName     string `json:"kafka_group_name"`
+	FatalKafkaError    bool   `json:"fatal_kafka_error"` // "true" || "false"; "" -> "true", else -> "false"
+	Protocol           string `json:"protocol"`
+
+	DeviceManagerUrl string `json:"device_manager_url"`
+	DeviceRepoUrl    string `json:"device_repo_url"`
+	SemanticRepoUrl  string `json:"semantic_repo_url"`
+
+	AuthClientId             string  `json:"auth_client_id"`     //keycloak-client
+	AuthClientSecret         string  `json:"auth_client_secret"` //keycloak-secret
+	AuthExpirationTimeBuffer float64 `json:"auth_expiration_time_buffer"`
+	AuthEndpoint             string  `json:"auth_endpoint"`
+
+	JwtPrivateKey string `json:"jwt_private_key"`
+	JwtExpiration int64  `json:"jwt_expiration"`
+	JwtIssuer     string `json:"jwt_issuer"`
+
+	GatewayLogTopic string `json:"gateway_log_topic"`
+	DeviceLogTopic  string `json:"device_log_topic"`
+
+	Debug bool `json:"debug"`
+
+	DeviceExpiration         int64 `json:"device_expiration"`
+	DeviceTypeExpiration     int64 `json:"device_type_expiration"`
+	CharacteristicExpiration int64 `json:"characteristic_expiration"`
+
+	KafkaPartitionNum      int `json:"kafka_partition_num"`
+	KafkaReplicationFactor int `json:"kafka_replication_factor"`
+
+	PublishToPostgres bool   `json:"publish_to_postgres"`
+	PostgresHost      string `json:"postgres_host"`
+	PostgresPort      int    `json:"postgres_port"`
+	PostgresUser      string `json:"postgres_user"`
+	PostgresPw        string `json:"postgres_pw"`
+	PostgresDb        string `json:"postgres_db"`
+
+	AsyncPgThreadMax    int64  `json:"async_pg_thread_max"`
+	AsyncFlushMessages  int64  `json:"async_flush_messages"`
+	AsyncFlushFrequency string `json:"async_flush_frequency"`
+	AsyncCompression    string `json:"async_compression"`
+	SyncCompression     string `json:"sync_compression"`
+
+	KafkaConsumerMaxWait  string `json:"kafka_consumer_max_wait"`
+	KafkaConsumerMinBytes int64  `json:"kafka_consumer_min_bytes"`
+	KafkaConsumerMaxBytes int64  `json:"kafka_consumer_max_bytes"`
+
+	IotCacheUrls         string `json:"iot_cache_urls"`
+	IotCacheMaxIdleConns int64  `json:"iot_cache_max_idle_conns"`
+	IotCacheTimeout      string `json:"iot_cache_timeout"`
+
+	TokenCacheUrls       string `json:"token_cache_urls"`
+	TokenCacheExpiration int64  `json:"token_cache_expiration"`
+
+	StatisticsInterval string `json:"statistics_interval"`
+
+	DeviceTypeTopic string `json:"device_type_topic"`
+
+	NotificationUrl string `json:"notification_url"`
+	PermQueryUrl    string `json:"perm_query_url"`
+
+	KafkaTopicConfigs map[string][]kafka.ConfigEntry `json:"kafka_topic_configs"`
 }
 
 func LoadConfig() (result Config, err error) {

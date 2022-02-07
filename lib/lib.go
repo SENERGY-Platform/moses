@@ -22,18 +22,28 @@ import (
 	"github.com/SENERGY-Platform/moses/lib/config"
 	"github.com/SENERGY-Platform/moses/lib/state"
 	platform_connector_lib "github.com/SENERGY-Platform/platform-connector-lib"
+	"github.com/SENERGY-Platform/platform-connector-lib/connectionlog"
+	"github.com/Shopify/sarama"
 	"log"
-	"os"
 	"strings"
+	"time"
 )
 
 func New(config config.Config, ctx context.Context) (err error) {
 	log.Println("init protocol handler")
+
+	asyncFlushFrequency, err := time.ParseDuration(config.AsyncFlushFrequency)
+	if err != nil {
+		return err
+	}
+
 	connector := platform_connector_lib.New(platform_connector_lib.Config{
+		PartitionsNum:            config.KafkaPartitionNum,
+		ReplicationFactor:        config.KafkaReplicationFactor,
 		FatalKafkaError:          config.FatalKafkaError,
 		Protocol:                 config.Protocol,
 		KafkaGroupName:           config.KafkaGroupName,
-		ZookeeperUrl:             config.ZookeeperUrl,
+		KafkaUrl:                 config.KafkaUrl,
 		AuthExpirationTimeBuffer: config.AuthExpirationTimeBuffer,
 		JwtExpiration:            config.JwtExpiration,
 		JwtPrivateKey:            config.JwtPrivateKey,
@@ -43,23 +53,75 @@ func New(config config.Config, ctx context.Context) (err error) {
 		AuthEndpoint:             config.AuthEndpoint,
 		DeviceManagerUrl:         config.DeviceManagerUrl,
 		DeviceRepoUrl:            config.DeviceRepoUrl,
+		SemanticRepositoryUrl:    config.SemanticRepoUrl,
 		KafkaResponseTopic:       config.KafkaResponseTopic,
 
+		DeviceExpiration:         int32(config.DeviceExpiration),
+		DeviceTypeExpiration:     int32(config.DeviceTypeExpiration),
+		CharacteristicExpiration: int32(config.CharacteristicExpiration),
+
+		Debug: config.Debug,
+
+		Validate:                  false,
+		ValidateAllowMissingField: true,
+		ValidateAllowUnknownField: true,
+
+		PublishToPostgres: config.PublishToPostgres,
+		PostgresHost:      config.PostgresHost,
+		PostgresPort:      config.PostgresPort,
+		PostgresUser:      config.PostgresUser,
+		PostgresPw:        config.PostgresPw,
+		PostgresDb:        config.PostgresDb,
+
+		SyncCompression:     getKafkaCompression(config.SyncCompression),
+		AsyncCompression:    getKafkaCompression(config.AsyncCompression),
+		AsyncFlushFrequency: asyncFlushFrequency,
+		AsyncFlushMessages:  int(config.AsyncFlushMessages),
+		AsyncPgThreadMax:    int(config.AsyncPgThreadMax),
+
+		KafkaConsumerMinBytes: int(config.KafkaConsumerMinBytes),
+		KafkaConsumerMaxBytes: int(config.KafkaConsumerMaxBytes),
+		KafkaConsumerMaxWait:  config.KafkaConsumerMaxWait,
+
+		IotCacheTimeout:      config.IotCacheTimeout,
+		IotCacheMaxIdleConns: int(config.IotCacheMaxIdleConns),
 		IotCacheUrl:          StringToList(config.IotCacheUrls),
-		DeviceExpiration:     int32(config.DeviceExpiration),
-		DeviceTypeExpiration: int32(config.DeviceTypeExpiration),
 
 		TokenCacheUrl:        StringToList(config.TokenCacheUrls),
 		TokenCacheExpiration: int32(config.TokenCacheExpiration),
 
-		SyncKafka:           config.SyncKafka,
-		SyncKafkaIdempotent: config.SyncKafkaIdempotent,
-		Debug:               config.Debug,
+		StatisticsInterval: config.StatisticsInterval,
+
+		DeviceTypeTopic: config.DeviceTypeTopic,
+
+		NotificationUrl: config.NotificationUrl,
+		PermQueryUrl:    config.PermQueryUrl,
+
+		KafkaTopicConfigs: config.KafkaTopicConfigs,
 	})
 
+	connector.StatisticsLogger(ctx)
+
 	if config.Debug {
-		connector.SetKafkaLogger(log.New(os.Stdout, "[CONNECTOR-KAFKA] ", 0))
+		connector.SetKafkaLogger(log.New(log.Writer(), "[CONNECTOR-KAFKA] ", 0))
 		connector.IotCache.Debug = true
+	}
+
+	err = connector.InitProducer(ctx, []platform_connector_lib.Qos{platform_connector_lib.Sync})
+	if err != nil {
+		log.Println("ERROR: producer ", err)
+		return err
+	}
+
+	logProducer, err := connector.GetProducer(platform_connector_lib.Sync)
+	if err != nil {
+		log.Println("ERROR: logger ", err)
+		return err
+	}
+	logger, err := connectionlog.NewWithProducer(logProducer, config.DeviceLogTopic, config.GatewayLogTopic)
+	if err != nil {
+		log.Println("ERROR: logger ", err)
+		return err
 	}
 
 	log.Println("connect to database")
@@ -70,7 +132,7 @@ func New(config config.Config, ctx context.Context) (err error) {
 	}
 
 	log.Println("load states from database")
-	staterepo := &state.StateRepo{Persistence: persistence, Config: config, Connector: connector}
+	staterepo := &state.StateRepo{Persistence: persistence, Config: config, Connector: connector, StateLogger: logger}
 	err = staterepo.Load()
 	if err != nil {
 		log.Println("ERROR: unable to load state repo: ", err)
@@ -80,7 +142,7 @@ func New(config config.Config, ctx context.Context) (err error) {
 	log.Println("start state routines")
 	staterepo.Start()
 
-	err = connector.Start()
+	err = connector.Start(ctx, platform_connector_lib.Sync)
 	if err != nil {
 		log.Println("ERROR: unable to start protocol: ", err)
 		return err
@@ -91,7 +153,6 @@ func New(config config.Config, ctx context.Context) (err error) {
 	api.Start(ctx, config, staterepo)
 	go func() {
 		<-ctx.Done()
-		connector.Stop()
 		staterepo.Stop()
 		persistence.Close()
 	}()
@@ -108,4 +169,21 @@ func StringToList(str string) []string {
 		}
 	}
 	return result
+}
+
+func getKafkaCompression(compression string) sarama.CompressionCodec {
+	switch strings.ToLower(compression) {
+	case "":
+		return sarama.CompressionNone
+	case "-":
+		return sarama.CompressionNone
+	case "none":
+		return sarama.CompressionNone
+	case "gzip":
+		return sarama.CompressionGZIP
+	case "snappy":
+		return sarama.CompressionSnappy
+	}
+	log.Println("WARNING: unknown compression", compression, "fallback to none")
+	return sarama.CompressionNone
 }

@@ -17,6 +17,7 @@
 package state
 
 import (
+	"log"
 	"time"
 )
 
@@ -62,6 +63,10 @@ func (this *StateRepo) StartRoom(world *World, room *Room) (tickers []*time.Tick
 }
 
 func (this *StateRepo) StartDevice(world *World, room *Room, device *Device) (tickers []*time.Ticker, stops []chan bool, err error) {
+	err = this.StateLogger.LogDeviceConnect(device.ExternalRef)
+	if err != nil {
+		log.Println("WARNING: unable to log device as online", err)
+	}
 	this.externalRefDeviceIndex[device.ExternalRef] = device
 	this.deviceRoomIndex[device.Id] = room
 	this.deviceWorldIndex[device.Id] = world

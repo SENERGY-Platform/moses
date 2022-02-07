@@ -87,6 +87,8 @@ func TestSensor(t *testing.T) {
 }
 
 func trySensorFromDevice(t *testing.T, config config.Config, protocol model.Protocol, deviceType model.DeviceType, device state.DeviceMsg) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	t.Run("set sensor time", func(t *testing.T) {
 		setSensorTime(t, config, device, 1)
 	})
@@ -99,7 +101,16 @@ func trySensorFromDevice(t *testing.T, config config.Config, protocol model.Prot
 	}
 	mux := sync.Mutex{}
 	events := []model.Envelope{}
-	consumer, err := kafka.NewConsumer(config.ZookeeperUrl, "testing_"+uuid.NewV4().String(), model.ServiceIdToTopic(service.Id), func(topic string, msg []byte, time time.Time) error {
+
+	err := kafka.NewConsumer(ctx, kafka.ConsumerConfig{
+		KafkaUrl:       config.KafkaUrl,
+		GroupId:        "testing_" + uuid.NewV4().String(),
+		Topic:          model.ServiceIdToTopic(service.Id),
+		MinBytes:       int(config.KafkaConsumerMinBytes),
+		MaxBytes:       int(config.KafkaConsumerMaxBytes),
+		MaxWait:        100 * time.Millisecond,
+		TopicConfigMap: config.KafkaTopicConfigs,
+	}, func(topic string, msg []byte, time time.Time) error {
 		mux.Lock()
 		defer mux.Unlock()
 		resp := model.Envelope{}
@@ -110,13 +121,12 @@ func trySensorFromDevice(t *testing.T, config config.Config, protocol model.Prot
 		}
 		events = append(events, resp)
 		return nil
-	}, func(err error, consumer *kafka.Consumer) {
+	}, func(err error) {
 		t.Fatal(err)
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer consumer.Stop()
 
 	time.Sleep(5 * time.Second)
 

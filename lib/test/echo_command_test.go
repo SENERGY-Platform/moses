@@ -94,6 +94,8 @@ func TestEchoCommand(t *testing.T) {
 }
 
 func tryEchoCommandToDevice(t *testing.T, config config.Config, protocol model.Protocol, deviceType model.DeviceType, device state.DeviceMsg) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	service := model.Service{}
 	for _, s := range deviceType.Services {
 		if s.LocalId == "echo" {
@@ -101,13 +103,21 @@ func tryEchoCommandToDevice(t *testing.T, config config.Config, protocol model.P
 			break
 		}
 	}
-	err := kafka.InitTopic(config.ZookeeperUrl, model.ServiceIdToTopic(service.Id))
+	err := kafka.InitTopic(config.KafkaUrl, config.KafkaTopicConfigs, model.ServiceIdToTopic(service.Id))
 	if err != nil {
 		t.Fatal(err)
 	}
 	mux := sync.Mutex{}
 	responses := []model.ProtocolMsg{}
-	consumer, err := kafka.NewConsumer(config.ZookeeperUrl, "testing_"+uuid.NewV4().String(), config.KafkaResponseTopic, func(topic string, msg []byte, time time.Time) error {
+	err = kafka.NewConsumer(ctx, kafka.ConsumerConfig{
+		KafkaUrl:       config.KafkaUrl,
+		GroupId:        "testing_" + uuid.NewV4().String(),
+		Topic:          config.KafkaResponseTopic,
+		MinBytes:       int(config.KafkaConsumerMinBytes),
+		MaxBytes:       int(config.KafkaConsumerMaxBytes),
+		MaxWait:        100 * time.Millisecond,
+		TopicConfigMap: config.KafkaTopicConfigs,
+	}, func(topic string, msg []byte, time time.Time) error {
 		mux.Lock()
 		defer mux.Unlock()
 		resp := model.ProtocolMsg{}
@@ -118,15 +128,14 @@ func tryEchoCommandToDevice(t *testing.T, config config.Config, protocol model.P
 		}
 		responses = append(responses, resp)
 		return nil
-	}, func(err error, consumer *kafka.Consumer) {
+	}, func(err error) {
 		t.Fatal(err)
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer consumer.Stop()
 
-	producer, err := kafka.PrepareProducer(config.ZookeeperUrl, config.SyncKafka, config.SyncKafkaIdempotent, 1, 1)
+	producer, err := kafka.PrepareProducer(ctx, config.KafkaUrl, true, false, 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

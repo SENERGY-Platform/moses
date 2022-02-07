@@ -17,6 +17,7 @@
 package test
 
 import (
+	"context"
 	"encoding/json"
 	"github.com/SENERGY-Platform/moses/lib/config"
 	"github.com/SENERGY-Platform/moses/lib/state"
@@ -84,6 +85,9 @@ func TestCommand(t *testing.T) {
 }
 
 func tryCommandToDevice(t *testing.T, config config.Config, protocol model.Protocol, deviceType model.DeviceType, deviceMsg state.DeviceMsg) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	service := model.Service{}
 	for _, s := range deviceType.Services {
 		if s.LocalId == "sepl_get" {
@@ -91,13 +95,17 @@ func tryCommandToDevice(t *testing.T, config config.Config, protocol model.Proto
 			break
 		}
 	}
-	err := kafka.InitTopic(config.ZookeeperUrl, model.ServiceIdToTopic(service.Id))
-	if err != nil {
-		t.Fatal(err)
-	}
 	mux := sync.Mutex{}
 	responses := []model.ProtocolMsg{}
-	consumer, err := kafka.NewConsumer(config.ZookeeperUrl, "testing_"+uuid.NewV4().String(), config.KafkaResponseTopic, func(topic string, msg []byte, time time.Time) error {
+	err := kafka.NewConsumer(ctx, kafka.ConsumerConfig{
+		KafkaUrl:       config.KafkaUrl,
+		GroupId:        "testing_" + uuid.NewV4().String(),
+		Topic:          config.KafkaResponseTopic,
+		MinBytes:       int(config.KafkaConsumerMinBytes),
+		MaxBytes:       int(config.KafkaConsumerMaxBytes),
+		MaxWait:        100 * time.Millisecond,
+		TopicConfigMap: config.KafkaTopicConfigs,
+	}, func(topic string, msg []byte, time time.Time) error {
 		mux.Lock()
 		defer mux.Unlock()
 		resp := model.ProtocolMsg{}
@@ -108,15 +116,14 @@ func tryCommandToDevice(t *testing.T, config config.Config, protocol model.Proto
 		}
 		responses = append(responses, resp)
 		return nil
-	}, func(err error, consumer *kafka.Consumer) {
+	}, func(err error) {
 		t.Fatal(err)
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer consumer.Stop()
 
-	producer, err := kafka.PrepareProducer(config.ZookeeperUrl, config.SyncKafka, config.SyncKafkaIdempotent, 1, 1)
+	producer, err := kafka.PrepareProducer(ctx, config.KafkaUrl, true, false, 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

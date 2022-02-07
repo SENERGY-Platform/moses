@@ -21,6 +21,7 @@ import (
 	"errors"
 	"github.com/SENERGY-Platform/moses/lib/config"
 	platform_connector_lib "github.com/SENERGY-Platform/platform-connector-lib"
+	"github.com/SENERGY-Platform/platform-connector-lib/connectionlog"
 	"github.com/SENERGY-Platform/platform-connector-lib/model"
 	"log"
 	"runtime/debug"
@@ -46,6 +47,7 @@ type StateRepo struct {
 	stopChannels           []chan bool
 	mux                    sync.RWMutex
 	MosesProtocolId        string
+	StateLogger            connectionlog.Logger
 }
 
 //Update for HTTP-DEV-API
@@ -295,7 +297,7 @@ func (this *StateRepo) Start() {
 				return
 			}
 			msg[this.Config.ProtocolSegmentName] = string(msgStr)
-			err = this.Connector.HandleCommandResponse(commandRequest, msg)
+			err = this.Connector.HandleCommandResponse(commandRequest, msg, platform_connector_lib.Sync)
 			if err != nil {
 				log.Println("ERROR: ", err)
 				debug.PrintStack()
@@ -347,7 +349,7 @@ func (this *StateRepo) sendSensorData(device *Device, service Service, value int
 		}
 		msg[key] = string(temp)
 	}
-	err = this.Connector.HandleDeviceEventWithAuthToken(token, device.ExternalRef, service.ExternalRef, msg)
+	err = this.Connector.HandleDeviceEventWithAuthToken(token, device.ExternalRef, service.ExternalRef, msg, platform_connector_lib.Sync)
 	if err != nil {
 		log.Println("ERROR: while sending sensor data", value, device.ExternalRef, service.ExternalRef, err)
 	}

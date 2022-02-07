@@ -7,25 +7,159 @@
     "mongo_url":"mongodb://db",
     "mongo_table": "moses",
     "js_timeout":2000000000,
-    "zookeeper_url":"zk",
+    "protocol_segment_name": "body",
+    "protocol":"moses",
+
     "kafka_response_topic":"response",
+
+    "kafka_url":"kafka:9092",
+
     "perm_search_url":"http://query.permissions:8080",
     "kafka_group_name":"moses",
     "fatal_kafka_error":true,
-    "protocol":"moses",
-    "protocol_segment_name": "body",
+
+    "gateway_log_topic": "gateway_log",
+    "device_log_topic":  "device_log",
+
     "device_manager_url":"http://device-manager.device-management:8080",
     "device_repo_url":"http://device-repository.device-management:8080",
+    "semantic_repo_url": "http://semantic-repository.device-management:8080",
     "auth_client_id":"",
     "auth_client_secret":"",
     "auth_expiration_time_buffer":1,
     "auth_endpoint":"http://keycloak:8080",
     "debug":false,
-    "iot_cache_urls":"memcahed:11211",
     "device_expiration":60,
     "device_type_expiration":60,
+    "characteristic_expiration": 60,
+    "sync_kafka":true,
+    "sync_kafka_idempotent":false,
+
+    "kafka_partition_num": 1,
+    "kafka_replication_factor": 1,
+
+    "publish_to_postgres": false,
+    "postgres_host": "localhost",
+    "postgres_port": 5432,
+    "postgres_user": "postgres",
+    "postgres_pw": "postgrespw",
+    "postgres_db": "postgres",
+
+    "async_pg_thread_max": 1000,
+    "async_flush_messages": 200,
+    "async_flush_frequency": "500ms",
+    "async_compression": "snappy",
+    "sync_compression": "snappy",
+
+    "kafka_consumer_max_wait": "100ms",
+    "kafka_consumer_min_bytes": 1000,
+    "kafka_consumer_max_bytes": 1000000,
+
+    "iot_cache_urls": "memcahed:11211",
+    "iot_cache_timeout": "200ms",
+    "iot_cache_max_idle_conns": 100,
+
     "token_cache_urls":"memcahed:11211",
     "token_cache_expiration":3600,
-    "sync_kafka":true,
-    "sync_kafka_idempotent":false
+
+    "device_type_topic": "device-types",
+
+    "kafka_topic_configs": {
+        "device-types": [
+            {
+                "ConfigName":  "retention.ms",
+                "ConfigValue": "-1"
+            },
+            {
+                "ConfigName":  "retention.bytes",
+                "ConfigValue": "-1"
+            },
+            {
+                "ConfigName":  "cleanup.policy",
+                "ConfigValue": "compact"
+            },
+            {
+                "ConfigName":  "delete.retention.ms",
+                "ConfigValue": "86400000"
+            },
+            {
+                "ConfigName":  "segment.ms",
+                "ConfigValue": "604800000"
+            },
+            {
+                "ConfigName":  "min.cleanable.dirty.ratio",
+                "ConfigValue": "0.1"
+            }
+        ],
+        "response": [
+            {
+                "ConfigName":  "retention.ms",
+                "ConfigValue": "86400000"
+            }
+        ],
+        "moses": [
+            {
+                "ConfigName":  "retention.ms",
+                "ConfigValue": "86400000"
+            }
+        ],
+        "urn_infai_ses_service_": [
+            {
+                "ConfigName":  "retention.ms",
+                "ConfigValue": "31536000000"
+            }
+        ],
+        "device_log":[
+            {
+                "ConfigName":  "retention.ms",
+                "ConfigValue": "-1"
+            },
+            {
+                "ConfigName":  "retention.bytes",
+                "ConfigValue": "-1"
+            },
+            {
+                "ConfigName":  "cleanup.policy",
+                "ConfigValue": "compact"
+            },
+            {
+                "ConfigName":  "delete.retention.ms",
+                "ConfigValue": "86400000"
+            },
+            {
+                "ConfigName":  "segment.ms",
+                "ConfigValue": "604800000"
+            },
+            {
+                "ConfigName":  "min.cleanable.dirty.ratio",
+                "ConfigValue": "0.1"
+            }
+        ],
+        "gateway_log":[
+            {
+                "ConfigName":  "retention.ms",
+                "ConfigValue": "-1"
+            },
+            {
+                "ConfigName":  "retention.bytes",
+                "ConfigValue": "-1"
+            },
+            {
+                "ConfigName":  "cleanup.policy",
+                "ConfigValue": "compact"
+            },
+            {
+                "ConfigName":  "delete.retention.ms",
+                "ConfigValue": "86400000"
+            },
+            {
+                "ConfigName":  "segment.ms",
+                "ConfigValue": "604800000"
+            },
+            {
+                "ConfigName":  "min.cleanable.dirty.ratio",
+                "ConfigValue": "0.1"
+            }
+        ]
+    }
 }

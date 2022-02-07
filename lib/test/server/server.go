@@ -53,12 +53,11 @@ func New(startConfig config.Config, keyxcloakExportLocation string) (config conf
 	var globalError error
 	wait := sync.WaitGroup{}
 
-	kafkaurl := ""
-
 	//zookeeper
 	zkWait := sync.WaitGroup{}
 	zkWait.Add(1)
 	wait.Add(1)
+	zookeeperUrl := ""
 	go func() {
 		defer wait.Done()
 		defer zkWait.Done()
@@ -70,7 +69,7 @@ func New(startConfig config.Config, keyxcloakExportLocation string) (config conf
 			globalError = err
 			return
 		}
-		config.ZookeeperUrl = zkIp + ":2181"
+		zookeeperUrl = zkIp + ":2181"
 	}()
 
 	//kafka
@@ -85,7 +84,7 @@ func New(startConfig config.Config, keyxcloakExportLocation string) (config conf
 			return
 		}
 		var closer func()
-		kafkaurl, closer, err = Kafka(pool, config.ZookeeperUrl)
+		config.KafkaUrl, closer, err = Kafka(pool, zookeeperUrl)
 		mux.Lock()
 		defer mux.Unlock()
 		closerList = append(closerList, closer)
@@ -152,11 +151,11 @@ func New(startConfig config.Config, keyxcloakExportLocation string) (config conf
 		if globalError != nil {
 			return
 		}
-		closer, _, permIp, err := PermSearch(pool, kafkaurl, elasticIp)
+		closer, _, permIp, err := PermSearch(pool, config.KafkaUrl, elasticIp)
 		mux.Lock()
 		defer mux.Unlock()
 		permissionUrl = "http://" + permIp + ":8080"
-		config.PermSearchUrl = permissionUrl
+		config.PermQueryUrl = permissionUrl
 		closerList = append(closerList, closer)
 		if err != nil {
 			globalError = err
@@ -178,7 +177,7 @@ func New(startConfig config.Config, keyxcloakExportLocation string) (config conf
 		if globalError != nil {
 			return
 		}
-		closer, _, ip, err := DeviceRepo(pool, mongoIp, kafkaurl, permissionUrl)
+		closer, _, ip, err := DeviceRepo(pool, mongoIp, config.KafkaUrl, permissionUrl)
 		mux.Lock()
 		defer mux.Unlock()
 		config.DeviceRepoUrl = "http://" + ip + ":8080"
@@ -201,7 +200,7 @@ func New(startConfig config.Config, keyxcloakExportLocation string) (config conf
 		if globalError != nil {
 			return
 		}
-		closer, _, ip, err := DeviceManager(pool, kafkaurl, config.DeviceRepoUrl, "-", permissionUrl)
+		closer, _, ip, err := DeviceManager(pool, config.KafkaUrl, config.DeviceRepoUrl, "-", permissionUrl)
 		mux.Lock()
 		defer mux.Unlock()
 		config.DeviceManagerUrl = "http://" + ip + ":8080"
