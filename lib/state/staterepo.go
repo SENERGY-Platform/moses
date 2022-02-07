@@ -333,22 +333,14 @@ func (this *StateRepo) sendSensorData(device *Device, service Service, value int
 		return
 	}
 
-	castMsg, ok := value.(map[string]interface{})
-	if !ok {
-		log.Println("ERROR unable to interpret event", value)
+	msg := platform_connector_lib.CommandResponseMsg{}
+	msgStr, err := json.Marshal(value)
+	if err != nil {
+		log.Println("ERROR: ", err)
 		debug.PrintStack()
 		return
 	}
-	msg := map[string]string{}
-	for key, value := range castMsg {
-		temp, err := json.Marshal(value)
-		if err != nil {
-			log.Println("ERROR: ", err)
-			debug.PrintStack()
-			return
-		}
-		msg[key] = string(temp)
-	}
+	msg[this.Config.ProtocolSegmentName] = string(msgStr)
 	err = this.Connector.HandleDeviceEventWithAuthToken(token, device.ExternalRef, service.ExternalRef, msg, platform_connector_lib.Sync)
 	if err != nil {
 		log.Println("ERROR: while sending sensor data", value, device.ExternalRef, service.ExternalRef, err)
