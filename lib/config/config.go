@@ -46,6 +46,7 @@ type Config struct {
 	FatalKafkaError    bool   `json:"fatal_kafka_error"` // "true" || "false"; "" -> "true", else -> "false"
 	Protocol           string `json:"protocol"`
 
+	PermSearchUrl    string `json:"perm_search_url"`
 	DeviceManagerUrl string `json:"device_manager_url"`
 	DeviceRepoUrl    string `json:"device_repo_url"`
 	SemanticRepoUrl  string `json:"semantic_repo_url"`
@@ -100,7 +101,6 @@ type Config struct {
 	DeviceTypeTopic string `json:"device_type_topic"`
 
 	NotificationUrl string `json:"notification_url"`
-	PermQueryUrl    string `json:"perm_query_url"`
 
 	KafkaTopicConfigs map[string][]kafka.ConfigEntry `json:"kafka_topic_configs"`
 }

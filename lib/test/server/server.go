@@ -155,7 +155,7 @@ func New(startConfig config.Config, keyxcloakExportLocation string) (config conf
 		mux.Lock()
 		defer mux.Unlock()
 		permissionUrl = "http://" + permIp + ":8080"
-		config.PermQueryUrl = permissionUrl
+		config.PermSearchUrl = permissionUrl
 		closerList = append(closerList, closer)
 		if err != nil {
 			globalError = err

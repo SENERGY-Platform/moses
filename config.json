@@ -12,15 +12,15 @@
 
     "kafka_response_topic":"response",
 
-    "kafka_url":"kafka:9092",
+    "kafka_url":"kafka.kafka:9092",
 
-    "perm_search_url":"http://query.permissions:8080",
     "kafka_group_name":"moses",
     "fatal_kafka_error":true,
 
     "gateway_log_topic": "gateway_log",
     "device_log_topic":  "device_log",
 
+    "perm_search_url":"http://query.permissions:8080",
     "device_manager_url":"http://device-manager.device-management:8080",
     "device_repo_url":"http://device-repository.device-management:8080",
     "semantic_repo_url": "http://semantic-repository.device-management:8080",

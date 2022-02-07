@@ -51,7 +51,7 @@ func (this *StateRepo) GetIotDeviceTypesIds(jwt jwt.Jwt) (result []string, err e
 	for len(temp) == limit {
 		limit = steps
 		temp = []map[string]interface{}{}
-		err = jwt.Impersonate.GetJSON(this.Config.PermQueryUrl+"/jwt/list/device-types/r/"+strconv.Itoa(limit)+"/"+strconv.Itoa(offset), &temp)
+		err = jwt.Impersonate.GetJSON(this.Config.PermSearchUrl+"/jwt/list/device-types/r/"+strconv.Itoa(limit)+"/"+strconv.Itoa(offset), &temp)
 		if err != nil {
 			return result, err
 		}
@@ -76,7 +76,7 @@ func (this *StateRepo) GetMosesDeviceTypesIds(jwt jwt.Jwt) (result []string, err
 	for len(temp) == limit {
 		limit = steps
 		temp = []map[string]interface{}{}
-		err = jwt.Impersonate.GetJSON(this.Config.PermQueryUrl+"/jwt/select/device-types/protocols/"+url.PathEscape(this.MosesProtocolId)+"/r/"+strconv.Itoa(limit)+"/"+strconv.Itoa(offset)+"/name/asc", &temp)
+		err = jwt.Impersonate.GetJSON(this.Config.PermSearchUrl+"/jwt/select/device-types/protocols/"+url.PathEscape(this.MosesProtocolId)+"/r/"+strconv.Itoa(limit)+"/"+strconv.Itoa(offset)+"/name/asc", &temp)
 		if err != nil {
 			return result, err
 		}
@@ -114,7 +114,7 @@ func (this *StateRepo) GetProtocolList(handler string) (result []map[string]inte
 	if err != nil {
 		return result, err
 	}
-	err = token.GetJSON(this.Config.PermQueryUrl+"/jwt/select/protocols/handler/"+url.PathEscape(handler)+"/r/1000/0/name/asc", &result)
+	err = token.GetJSON(this.Config.PermSearchUrl+"/jwt/select/protocols/handler/"+url.PathEscape(handler)+"/r/1000/0/name/asc", &result)
 	return result, err
 }
 
