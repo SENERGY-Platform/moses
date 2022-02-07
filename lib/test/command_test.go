@@ -156,7 +156,7 @@ func tryCommandToDevice(t *testing.T, config config.Config, protocol model.Proto
 	if len(responses) != 1 {
 		t.Fatal("unexpected response count", responses)
 	}
-	if responses[0].Response.Output[config.ProtocolSegmentName] != `{"payload":{"level":0,"title":"","updateTime":0}}` {
+	if responses[0].Response.Output[config.ProtocolSegmentName] != `{"level":0,"title":"","updateTime":0}` {
 		t.Fatal("unexpected response msg", responses[0].Response.Output)
 	}
 }

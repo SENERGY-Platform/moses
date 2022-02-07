@@ -7,7 +7,7 @@
     "mongo_url":"mongodb://db",
     "mongo_table": "moses",
     "js_timeout":2000000000,
-    "protocol_segment_name": "body",
+    "protocol_segment_name": "payload",
     "protocol":"moses",
 
     "kafka_response_topic":"response",
