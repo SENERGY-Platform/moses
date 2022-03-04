@@ -18,7 +18,10 @@ package state
 
 import (
 	"errors"
+	"io"
 	"log"
+	"net/http"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -70,10 +73,32 @@ func run(code string, moses interface{}, timeout time.Duration, mux sync.Locker)
 	if err != nil {
 		return
 	}
+
+	err = vm.Set("httpGet", httpGet)
+	if err != nil {
+		log.Println("ERROR", err)
+		debug.PrintStack()
+		return
+	}
+
 	if mux != nil {
 		mux.Lock()
 		defer mux.Unlock()
 	}
 	_, err = vm.Run(code) // Here be dragons (risky code)
 	return
+}
+
+func httpGet(endpoint string) string {
+	resp, err := http.Get(endpoint)
+	if err != nil {
+		log.Println("ERROR: httpGet", endpoint, err)
+		return ""
+	}
+	temp, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Println("ERROR: httpGet::ReadAll", endpoint, err)
+		return ""
+	}
+	return string(temp)
 }
