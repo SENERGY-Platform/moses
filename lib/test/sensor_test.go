@@ -149,7 +149,7 @@ func trySensorFromDevice(t *testing.T, config config.Config, protocol model.Prot
 		t.Fatal(err)
 	}
 
-	if reflect.DeepEqual(event.Value, expected) {
+	if !reflect.DeepEqual(event.Value, expected) {
 		t.Fatal(event.Value, "\n\n!=\n\n", expected)
 	}
 }
