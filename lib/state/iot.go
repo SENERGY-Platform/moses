@@ -112,6 +112,7 @@ func (this *StateRepo) DeleteExternalDevice(jwt jwt.Jwt, id string) (err error) 
 func (this *StateRepo) GetProtocolList(handler string) (result []map[string]interface{}, err error) {
 	token, err := this.Connector.Security().Access()
 	if err != nil {
+		debug.PrintStack()
 		return result, err
 	}
 	err = token.GetJSON(this.Config.PermSearchUrl+"/jwt/select/protocols/handler/"+url.PathEscape(handler)+"/r/1000/0/name/asc", &result)
@@ -121,6 +122,7 @@ func (this *StateRepo) GetProtocolList(handler string) (result []map[string]inte
 func (this *StateRepo) EnsureProtocol(handler string, segments []model.ProtocolSegment) (protocolId string, err error) {
 	protocols, err := this.GetProtocolList(handler)
 	if err != nil {
+		debug.PrintStack()
 		return protocolId, err
 	}
 	if len(protocols) == 1 {

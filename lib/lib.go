@@ -53,7 +53,6 @@ func New(config config.Config, ctx context.Context) (err error) {
 		AuthEndpoint:             config.AuthEndpoint,
 		DeviceManagerUrl:         config.DeviceManagerUrl,
 		DeviceRepoUrl:            config.DeviceRepoUrl,
-		SemanticRepositoryUrl:    config.SemanticRepoUrl,
 		KafkaResponseTopic:       config.KafkaResponseTopic,
 
 		DeviceExpiration:         int32(config.DeviceExpiration),

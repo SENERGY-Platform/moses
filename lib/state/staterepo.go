@@ -220,14 +220,17 @@ func (this *StateRepo) DevUpdateDevice(worldId string, roomId string, device Dev
 func (this *StateRepo) Load() (err error) {
 	err = this.Stop()
 	if err != nil {
+		debug.PrintStack()
 		return err
 	}
 	this.MosesProtocolId, err = this.EnsureProtocol(this.Config.Protocol, []model.ProtocolSegment{{Name: this.Config.ProtocolSegmentName}})
 	if err != nil {
+		debug.PrintStack()
 		return err
 	}
 	this.Worlds, err = this.Persistence.LoadWorlds()
 	if err != nil {
+		debug.PrintStack()
 		return err
 	}
 	this.Graphs, err = this.Persistence.LoadGraphs()

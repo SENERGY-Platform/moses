@@ -49,7 +49,6 @@ type Config struct {
 	PermSearchUrl    string `json:"perm_search_url"`
 	DeviceManagerUrl string `json:"device_manager_url"`
 	DeviceRepoUrl    string `json:"device_repo_url"`
-	SemanticRepoUrl  string `json:"semantic_repo_url"`
 
 	AuthClientId             string  `json:"auth_client_id"`     //keycloak-client
 	AuthClientSecret         string  `json:"auth_client_secret"` //keycloak-secret

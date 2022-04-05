@@ -3,7 +3,7 @@ module github.com/SENERGY-Platform/moses
 go 1.17
 
 require (
-	github.com/SENERGY-Platform/platform-connector-lib v0.0.0-20220307123741-4efc0d1f5ef1
+	github.com/SENERGY-Platform/platform-connector-lib v0.0.0-20220405080326-36165fc3b1c1
 	github.com/Shopify/sarama v1.22.0
 	github.com/bradfitz/gomemcache v0.0.0-20180710155616-bc664df96737
 	github.com/cbroglie/mustache v1.0.1
