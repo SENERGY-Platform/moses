@@ -285,9 +285,7 @@ func (this *StateRepo) Start() {
 			var msgPart interface{}
 			err = json.Unmarshal([]byte(value), &msgPart)
 			if err != nil {
-				log.Println("ERROR: ", err)
-				debug.PrintStack()
-				return nil
+				msgPart = value
 			}
 			msg[key] = msgPart
 		}
