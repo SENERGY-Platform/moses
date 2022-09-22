@@ -35,7 +35,7 @@ func MongoTestServer(pool *dockertest.Pool) (closer func(), hostPort string, ipA
 	hostPort = repo.GetPort("27017/tcp")
 	err = pool.Retry(func() error {
 		log.Println("try mongodb connection...")
-		ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, _ := context.WithTimeout(context.Background(), 30*time.Second)
 		client, err := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://localhost:"+hostPort))
 		err = client.Ping(ctx, readpref.Primary())
 		return err

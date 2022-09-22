@@ -34,7 +34,7 @@ import (
 
 func Keycloak(pool *dockertest.Pool) (closer func(), hostPort string, ipAddress string, err error) {
 	log.Println("start keycloak")
-	keycloak, err := pool.Run("fgseitsrancher.wifa.intern.uni-leipzig.de:5000/keycloak", "dev", []string{
+	keycloak, err := pool.Run("fgseitsrancher.wifa.intern.uni-leipzig.de:5000/auth-keycloak", "dev", []string{
 		"KEYCLOAK_USER=sepl",
 		"KEYCLOAK_PASSWORD=sepl",
 		"PROXY_ADDRESS_FORWARDING=true",
