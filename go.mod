@@ -4,7 +4,7 @@ go 1.19
 
 require (
 	github.com/SENERGY-Platform/moses v0.0.0-20220829080736-10af5a7460da
-	github.com/SENERGY-Platform/platform-connector-lib v0.0.0-20220405080326-36165fc3b1c1
+	github.com/SENERGY-Platform/platform-connector-lib v0.0.0-20220921130135-f415be2e5dae
 	github.com/Shopify/sarama v1.22.0
 	github.com/bradfitz/gomemcache v0.0.0-20180710155616-bc664df96737
 	github.com/cbroglie/mustache v1.0.1
@@ -22,8 +22,11 @@ require (
 require (
 	github.com/Azure/go-ansiterm v0.0.0-20170929234023-d6e3b3328b78 // indirect
 	github.com/DataDog/zstd v1.4.0 // indirect
+	github.com/Knetic/govaluate v3.0.0+incompatible // indirect
 	github.com/Microsoft/go-winio v0.5.1 // indirect
 	github.com/Nvveen/Gotty v0.0.0-20120604004816-cd527374f1e5 // indirect
+	github.com/RyanCarrier/dijkstra v1.1.0 // indirect
+	github.com/SENERGY-Platform/converter v0.0.0-20220810123448-27fbbf6ab679 // indirect
 	github.com/cenkalti/backoff v2.2.1+incompatible // indirect
 	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/clbanning/mxj v1.8.4 // indirect
@@ -49,9 +52,11 @@ require (
 	github.com/jackc/puddle v1.1.3 // indirect
 	github.com/klauspost/compress v1.9.8 // indirect
 	github.com/lib/pq v1.10.2 // indirect
+	github.com/lucasb-eyer/go-colorful v1.0.3 // indirect
 	github.com/opencontainers/go-digest v1.0.0-rc1 // indirect
 	github.com/opencontainers/image-spec v1.0.2 // indirect
 	github.com/opencontainers/runc v1.0.3 // indirect
+	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/pierrec/lz4 v2.6.0+incompatible // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20181016184325-3113b8401b8a // indirect
@@ -66,5 +71,6 @@ require (
 	golang.org/x/sync v0.0.0-20201020160332-67f06af15bc9 // indirect
 	golang.org/x/sys v0.0.0-20210615035016-665e8c7367d1 // indirect
 	golang.org/x/text v0.3.6 // indirect
+	gopkg.in/go-playground/colors.v1 v1.2.0 // indirect
 	gopkg.in/sourcemap.v1 v1.0.5 // indirect
 )
