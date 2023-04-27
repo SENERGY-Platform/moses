@@ -1,5 +1,5 @@
 /*
- * Copyright 2019 InfAI (CC SES)
+ * Copyright 2020 InfAI (CC SES)
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,30 +17,48 @@
 package server
 
 import (
-	"github.com/ory/dockertest"
+	"context"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 	"log"
-	"net/http"
+	"sync"
 )
 
-func DeviceRepo(pool *dockertest.Pool, mongoIp string, zk string, permsearchUrl string) (closer func(), hostPort string, ipAddress string, err error) {
-	log.Println("start device repo")
-	repo, err := pool.Run("ghcr.io/senergy-platform/device-repository", "dev", []string{
-		"MONGO_URL=" + "mongodb://" + mongoIp + ":27017",
-		"KAFKA_URL=" + zk,
-		"PERMISSIONS_URL=" + permsearchUrl,
-		"MONGO_REPL_SET=false",
+func DeviceRepo(ctx context.Context, wg *sync.WaitGroup, kafkaUrl string, mongoUrl string, permsearch string) (hostPort string, ipAddress string, err error) {
+	log.Println("start device-repository")
+	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image: "ghcr.io/senergy-platform/device-repository:dev",
+			Env: map[string]string{
+				"KAFKA_URL":       kafkaUrl,
+				"PERMISSIONS_URL": permsearch,
+				"MONGO_URL":       mongoUrl,
+			},
+			ExposedPorts:    []string{"8080/tcp"},
+			WaitingFor:      wait.ForListeningPort("8080/tcp"),
+			AlwaysPullImage: true,
+		},
+		Started: true,
 	})
 	if err != nil {
-		return func() {}, "", "", err
+		return "", "", err
 	}
-	hostPort = repo.GetPort("8080/tcp")
-	err = pool.Retry(func() error {
-		log.Println("try repo connection...")
-		_, err := http.Get("http://" + repo.Container.NetworkSettings.IPAddress + ":8080/")
-		if err != nil {
-			log.Println(err)
-		}
-		return err
-	})
-	return func() { repo.Close() }, hostPort, repo.Container.NetworkSettings.IPAddress, err
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-ctx.Done()
+		log.Println("DEBUG: remove container device-repository", c.Terminate(context.Background()))
+	}()
+
+	ipAddress, err = c.ContainerIP(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	temp, err := c.MappedPort(ctx, "8080/tcp")
+	if err != nil {
+		return "", "", err
+	}
+	hostPort = temp.Port()
+
+	return hostPort, ipAddress, err
 }

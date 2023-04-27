@@ -1,5 +1,5 @@
 /*
- * Copyright 2019 InfAI (CC SES)
+ * Copyright (c) 2023 InfAI (CC SES)
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,41 +24,40 @@ import (
 	"sync"
 )
 
-func DeviceManager(ctx context.Context, wg *sync.WaitGroup, kafkaUrl string, deviceRepoUrl string, permsearch string) (hostPort string, ipAddress string, err error) {
-	log.Println("start device-manager")
+func MongoDB(ctx context.Context, wg *sync.WaitGroup) (hostport string, containerip string, err error) {
+	log.Println("start mongo")
 	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image: "ghcr.io/senergy-platform/device-manager:dev",
-			Env: map[string]string{
-				"KAFKA_URL":       kafkaUrl,
-				"PERMISSIONS_URL": permsearch,
-				"DEVICE_REPO_URL": deviceRepoUrl,
-			},
-			ExposedPorts:    []string{"8080/tcp"},
-			WaitingFor:      wait.ForListeningPort("8080/tcp"),
-			AlwaysPullImage: true,
+			Image:        "mongo:4.1.11",
+			ExposedPorts: []string{"27017/tcp"},
+			WaitingFor: wait.ForAll(
+				wait.ForLog("waiting for connections"),
+				wait.ForListeningPort("27017/tcp"),
+			),
+			Tmpfs: map[string]string{"/data/db": "rw"},
 		},
 		Started: true,
 	})
 	if err != nil {
 		return "", "", err
 	}
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		<-ctx.Done()
-		log.Println("DEBUG: remove container device-manager", c.Terminate(context.Background()))
+		log.Println("DEBUG: remove container mongo", c.Terminate(context.Background()))
 	}()
 
-	ipAddress, err = c.ContainerIP(ctx)
+	containerip, err = c.ContainerIP(ctx)
 	if err != nil {
 		return "", "", err
 	}
-	temp, err := c.MappedPort(ctx, "8080/tcp")
+	temp, err := c.MappedPort(ctx, "27017/tcp")
 	if err != nil {
 		return "", "", err
 	}
-	hostPort = temp.Port()
+	hostport = temp.Port()
 
-	return hostPort, ipAddress, err
+	return hostport, containerip, err
 }

@@ -30,21 +30,28 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 )
 
 func TestStartup(t *testing.T) {
+	wg := &sync.WaitGroup{}
+	defer wg.Wait()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	defaultConfig, err := config.LoadConfigLocation("../../config.json")
 	if err != nil {
-		t.Fatal(err)
+		t.Error(err)
+		return
 	}
 
 	log.Println("startup")
-	config, stop, err := server.New(defaultConfig, "./server/keycloak-export.json")
-	defer stop()
+	config, err := server.New(ctx, wg, defaultConfig, "./server/keycloak-export.json")
 	if err != nil {
-		t.Fatal(err)
+		t.Error(err)
+		return
 	}
 
 	log.Println("wait")

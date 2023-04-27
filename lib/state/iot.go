@@ -20,7 +20,7 @@ import (
 	"errors"
 	"github.com/SENERGY-Platform/moses/lib/jwt"
 	"github.com/SENERGY-Platform/platform-connector-lib/model"
-	"github.com/satori/go.uuid"
+	"github.com/google/uuid"
 	"log"
 	"net/url"
 	"runtime/debug"
@@ -94,7 +94,7 @@ func (this *StateRepo) GetMosesDeviceTypesIds(jwt jwt.Jwt) (result []string, err
 }
 
 func (this *StateRepo) GenerateExternalDevice(jwt jwt.Jwt, request CreateDeviceByTypeRequest) (device model.Device, err error) {
-	deviceInp := model.Device{Name: request.Name, DeviceTypeId: request.DeviceTypeId, LocalId: uuid.NewV4().String()}
+	deviceInp := model.Device{Name: request.Name, DeviceTypeId: request.DeviceTypeId, LocalId: uuid.NewString()}
 	err = jwt.Impersonate.PostJSON(this.Config.DeviceManagerUrl+"/devices", deviceInp, &device)
 	if err != nil {
 		log.Println("ERROR: unable to create device in iot repository: ", err, device)

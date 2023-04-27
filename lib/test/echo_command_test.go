@@ -27,7 +27,7 @@ import (
 	"github.com/SENERGY-Platform/moses/lib/test/server"
 	"github.com/SENERGY-Platform/platform-connector-lib/kafka"
 	"github.com/SENERGY-Platform/platform-connector-lib/model"
-	uuid "github.com/satori/go.uuid"
+	"github.com/google/uuid"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -37,16 +37,22 @@ import (
 )
 
 func TestEchoCommand(t *testing.T) {
+	wg := &sync.WaitGroup{}
+	defer wg.Wait()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	defaultConfig, err := config.LoadConfigLocation("../../config.json")
 	if err != nil {
-		t.Fatal(err)
+		t.Error(err)
+		return
 	}
 
 	log.Println("startup")
-	config, stop, err := server.New(defaultConfig, "./server/keycloak-export.json")
-	defer stop()
+	config, err := server.New(ctx, wg, defaultConfig, "./server/keycloak-export.json")
 	if err != nil {
-		t.Fatal(err)
+		t.Error(err)
+		return
 	}
 
 	log.Println("wait for protocol creation")
@@ -111,7 +117,7 @@ func tryEchoCommandToDevice(t *testing.T, config config.Config, protocol model.P
 	responses := []model.ProtocolMsg{}
 	err = kafka.NewConsumer(ctx, kafka.ConsumerConfig{
 		KafkaUrl:       config.KafkaUrl,
-		GroupId:        "testing_" + uuid.NewV4().String(),
+		GroupId:        "testing_" + uuid.NewString(),
 		Topic:          config.KafkaResponseTopic,
 		MinBytes:       int(config.KafkaConsumerMinBytes),
 		MaxBytes:       int(config.KafkaConsumerMaxBytes),

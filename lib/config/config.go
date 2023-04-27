@@ -95,8 +95,6 @@ type Config struct {
 	TokenCacheUrls       string `json:"token_cache_urls"`
 	TokenCacheExpiration int64  `json:"token_cache_expiration"`
 
-	StatisticsInterval string `json:"statistics_interval"`
-
 	DeviceTypeTopic string `json:"device_type_topic"`
 
 	NotificationUrl string `json:"notification_url"`

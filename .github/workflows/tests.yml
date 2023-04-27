@@ -1,0 +1,35 @@
+name: Tests
+on:
+  push:
+    branches:
+      - master
+      - main
+      - dev
+    pull_request:
+      branches:
+        - master
+        - main
+        - dev
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: '1.20'
+
+      - name: Build
+        run: go build -v ./...
+
+      - name: Test
+        timeout-minutes: 240
+        uses: nick-fields/retry@v2
+        with:
+          max_attempts: 3
+          retry_on: error
+          timeout_minutes: 240
+          command: go test -short -v -timeout 99999s ./...

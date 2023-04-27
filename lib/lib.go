@@ -30,7 +30,6 @@ import (
 )
 
 func New(config config.Config, ctx context.Context) (err error) {
-	log.Println("init protocol handler")
 
 	asyncFlushFrequency, err := time.ParseDuration(config.AsyncFlushFrequency)
 	if err != nil {
@@ -89,8 +88,6 @@ func New(config config.Config, ctx context.Context) (err error) {
 		TokenCacheUrl:        StringToList(config.TokenCacheUrls),
 		TokenCacheExpiration: int32(config.TokenCacheExpiration),
 
-		StatisticsInterval: config.StatisticsInterval,
-
 		DeviceTypeTopic: config.DeviceTypeTopic,
 
 		NotificationUrl: config.NotificationUrl,
@@ -98,8 +95,6 @@ func New(config config.Config, ctx context.Context) (err error) {
 
 		KafkaTopicConfigs: config.KafkaTopicConfigs,
 	})
-
-	connector.StatisticsLogger(ctx)
 
 	if config.Debug {
 		connector.SetKafkaLogger(log.New(log.Writer(), "[CONNECTOR-KAFKA] ", 0))
