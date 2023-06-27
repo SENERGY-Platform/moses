@@ -312,10 +312,6 @@ func (this *StateRepo) Start() {
 
 // persists given world; will not stop any change routines, nor will it request a lock on the world mutex
 func (this *StateRepo) persistWorld(world World) (err error) {
-	if world.mux != nil {
-		world.mux.Lock()
-		defer world.mux.Unlock()
-	}
 	return this.Persistence.PersistWorld(world)
 }
 
