@@ -18,6 +18,7 @@ package state
 
 import (
 	"encoding/json"
+	"sync"
 )
 
 type CreateWorldRequest struct {
@@ -101,7 +102,7 @@ type CreateServiceRequest struct {
 	Code           string `json:"code"`
 }
 
-//{ref_type:"workd|room|device", ref_id: "", interval: 0, code:""}
+// {ref_type:"workd|room|device", ref_id: "", interval: 0, code:""}
 type CreateChangeRoutineRequest struct {
 	RefType  string `json:"ref_type"` // "world" || "room" || "device"
 	RefId    string `json:"ref_id"`
@@ -136,7 +137,7 @@ type UpdateTemplateRequest struct {
 	Template    string `json:"template"`
 }
 
-//  {ref_type:"workd|room|device", ref_id: "", templ_id: "", name: "", desc: "", parameter: {<<param_name>>: <<param_value>>}}
+// {ref_type:"workd|room|device", ref_id: "", templ_id: "", name: "", desc: "", parameter: {<<param_name>>: <<param_value>>}}
 type CreateChangeRoutineByTemplateRequest struct {
 	RefType   string            `json:"ref_type"` // "world" || "room" || "device"
 	RefId     string            `json:"ref_id"`
@@ -192,6 +193,7 @@ func jsonCopy(from interface{}, to interface{}) (err error) {
 func (this WorldMsg) ToModel() (result World, err error) {
 	err = jsonCopy(this, &result)
 	result.Owner = this.Owner
+	result.mux = &sync.Mutex{}
 	for key, room := range this.Rooms {
 		roomModel, err := room.ToModel()
 		if err != nil {

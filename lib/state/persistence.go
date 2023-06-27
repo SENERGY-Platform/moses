@@ -20,6 +20,7 @@ import (
 	"github.com/SENERGY-Platform/moses/lib/config"
 	"github.com/globalsign/mgo"
 	"github.com/globalsign/mgo/bson"
+	"sync"
 )
 
 type PersistenceInterface interface {
@@ -124,6 +125,7 @@ func (this MongoPersistence) LoadWorlds() (result map[string]*World, err error) 
 	for _, world := range worlds {
 		var tempWorld World
 		tempWorld = world
+		tempWorld.mux = &sync.Mutex{}
 		result[tempWorld.Id] = &tempWorld
 	}
 	return

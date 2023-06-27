@@ -18,6 +18,7 @@ package state
 
 import (
 	"log"
+	"runtime/debug"
 )
 
 func (this *StateRepo) getJsWorldApi(world *World) map[string]interface{} {
@@ -34,6 +35,13 @@ func (this *StateRepo) getJsWorldSubApi(world *World) map[string]interface{} {
 					world.States = map[string]interface{}{}
 				}
 				world.States[field] = value
+				if world != nil {
+					err := this.persistWorld(*world)
+					if err != nil {
+						log.Println("ERROR:", err)
+						debug.PrintStack()
+					}
+				}
 			},
 			"get": func(field string) interface{} {
 				return world.States[field]
@@ -45,7 +53,7 @@ func (this *StateRepo) getJsWorldSubApi(world *World) map[string]interface{} {
 				log.Println("WARNING: js-api getRoom(), room not found ", roomid)
 				return map[string]interface{}{}
 			}
-			return this.getJsRoomSubApi(room)
+			return this.getJsRoomSubApi(world, room)
 		},
 	}
 }
@@ -53,11 +61,11 @@ func (this *StateRepo) getJsWorldSubApi(world *World) map[string]interface{} {
 func (this *StateRepo) getJsRoomApi(world *World, room *Room) map[string]interface{} {
 	return map[string]interface{}{
 		"world": this.getJsWorldSubApi(world),
-		"room":  this.getJsRoomSubApi(room),
+		"room":  this.getJsRoomSubApi(world, room),
 	}
 }
 
-func (this *StateRepo) getJsRoomSubApi(room *Room) map[string]interface{} {
+func (this *StateRepo) getJsRoomSubApi(world *World, room *Room) map[string]interface{} {
 	return map[string]interface{}{
 		"state": map[string]interface{}{
 			"set": func(field string, value interface{}) {
@@ -65,6 +73,13 @@ func (this *StateRepo) getJsRoomSubApi(room *Room) map[string]interface{} {
 					room.States = map[string]interface{}{}
 				}
 				room.States[field] = value
+				if world != nil {
+					err := this.persistWorld(*world)
+					if err != nil {
+						log.Println("ERROR:", err)
+						debug.PrintStack()
+					}
+				}
 			},
 			"get": func(field string) interface{} {
 				return room.States[field]
@@ -76,7 +91,7 @@ func (this *StateRepo) getJsRoomSubApi(room *Room) map[string]interface{} {
 				log.Println("WARNING: js-api getDevice(), device not found ", deviceid)
 				return map[string]interface{}{}
 			}
-			return this.getJsDeviceSubApi(device)
+			return this.getJsDeviceSubApi(world, device)
 		},
 	}
 }
@@ -84,12 +99,12 @@ func (this *StateRepo) getJsRoomSubApi(room *Room) map[string]interface{} {
 func (this *StateRepo) getJsDeviceApi(world *World, room *Room, device *Device) map[string]interface{} {
 	return map[string]interface{}{
 		"world":  this.getJsWorldSubApi(world),
-		"room":   this.getJsRoomSubApi(room),
-		"device": this.getJsDeviceSubApi(device),
+		"room":   this.getJsRoomSubApi(world, room),
+		"device": this.getJsDeviceSubApi(world, device),
 	}
 }
 
-func (this *StateRepo) getJsDeviceSubApi(device *Device) map[string]interface{} {
+func (this *StateRepo) getJsDeviceSubApi(world *World, device *Device) map[string]interface{} {
 	return map[string]interface{}{
 		"state": map[string]interface{}{
 			"set": func(field string, value interface{}) {
@@ -97,6 +112,13 @@ func (this *StateRepo) getJsDeviceSubApi(device *Device) map[string]interface{} 
 					device.States = map[string]interface{}{}
 				}
 				device.States[field] = value
+				if world != nil {
+					err := this.persistWorld(*world)
+					if err != nil {
+						log.Println("ERROR:", err)
+						debug.PrintStack()
+					}
+				}
 			},
 			"get": func(field string) interface{} {
 				return device.States[field]
@@ -108,8 +130,8 @@ func (this *StateRepo) getJsDeviceSubApi(device *Device) map[string]interface{} 
 func (this *StateRepo) getJsSensorApi(world *World, room *Room, device *Device, service Service) map[string]interface{} {
 	return map[string]interface{}{
 		"world":   this.getJsWorldSubApi(world),
-		"room":    this.getJsRoomSubApi(room),
-		"device":  this.getJsDeviceSubApi(device),
+		"room":    this.getJsRoomSubApi(world, room),
+		"device":  this.getJsDeviceSubApi(world, device),
 		"service": this.getJsSensorSubApi(device, service),
 	}
 }
@@ -126,8 +148,8 @@ func (this *StateRepo) getJsSensorSubApi(device *Device, service Service) map[st
 func (this *StateRepo) getJsCommandApi(world *World, room *Room, device *Device, cmdMsg interface{}, responder func(respMsg interface{})) map[string]interface{} {
 	return map[string]interface{}{
 		"world":   this.getJsWorldSubApi(world),
-		"room":    this.getJsRoomSubApi(room),
-		"device":  this.getJsDeviceSubApi(device),
+		"room":    this.getJsRoomSubApi(world, room),
+		"device":  this.getJsDeviceSubApi(world, device),
 		"service": this.getJsCommandSubApi(cmdMsg, responder),
 	}
 }

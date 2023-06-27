@@ -58,7 +58,7 @@ type World struct {
 	States         map[string]interface{}   `json:"states" bson:"states"`
 	Rooms          map[string]*Room         `json:"rooms" bson:"rooms"`
 	ChangeRoutines map[string]ChangeRoutine `json:"change_routines" bson:"change_routines"`
-	mux            sync.Mutex               `json:"-" bson:"-"`
+	mux            *sync.Mutex              `json:"-" bson:"-"`
 }
 
 type Room struct {

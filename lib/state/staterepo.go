@@ -50,9 +50,9 @@ type StateRepo struct {
 	StateLogger            connectionlog.Logger
 }
 
-//Update for HTTP-DEV-API
-//Stops all change routines and redeploys new world
-//requests a mutex lock on the state repo
+// Update for HTTP-DEV-API
+// Stops all change routines and redeploys new world
+// requests a mutex lock on the state repo
 func (this *StateRepo) DevUpdateWorld(worldMsg WorldMsg) (err error) {
 	this.mux.Lock()
 	defer this.mux.Unlock()
@@ -117,9 +117,9 @@ func (this *StateRepo) DevDeleteWorld(id string) (err error) {
 	return
 }
 
-//Update for HTTP-DEV-API
-//Stops all change routines and redeploys new world with new room
-//requests a mutex lock on the state repo
+// Update for HTTP-DEV-API
+// Stops all change routines and redeploys new world with new room
+// requests a mutex lock on the state repo
 func (this *StateRepo) DevUpdateRoom(worldId string, room RoomMsg) (err error) {
 	if worldId == "" {
 		return errors.New("missing world id")
@@ -159,9 +159,9 @@ func (this *StateRepo) DevUpdateRoom(worldId string, room RoomMsg) (err error) {
 	return
 }
 
-//Update for HTTP-DEV-API
-//Stops all change routines and redeploys new world with new room and device
-//requests a mutex lock on the state repo
+// Update for HTTP-DEV-API
+// Stops all change routines and redeploys new world with new room and device
+// requests a mutex lock on the state repo
 func (this *StateRepo) DevUpdateDevice(worldId string, roomId string, device DeviceMsg) (err error) {
 	if worldId == "" {
 		return errors.New("missing world id")
@@ -216,7 +216,7 @@ func (this *StateRepo) DevUpdateDevice(worldId string, roomId string, device Dev
 	return
 }
 
-//Stops all change routines if any are running and loads state repo from the database (no restart of change routines)
+// Stops all change routines if any are running and loads state repo from the database (no restart of change routines)
 func (this *StateRepo) Load() (err error) {
 	err = this.Stop()
 	if err != nil {
@@ -237,7 +237,7 @@ func (this *StateRepo) Load() (err error) {
 	return err
 }
 
-//stops all change routines; may be called repeatedly while already stopped ore not started
+// stops all change routines; may be called repeatedly while already stopped ore not started
 func (this *StateRepo) Stop() (err error) {
 	for _, ticker := range this.changeRoutinesTickers {
 		ticker.Stop()
@@ -256,9 +256,9 @@ func (this *StateRepo) Stop() (err error) {
 	return
 }
 
-//starts change routines; will first call stop() to prevent overpopulation of change routines
-//if error occurs, the state repo may be in a partially running state which can not be stopped with Stop()
-//in this case a panic occurs
+// starts change routines; will first call stop() to prevent overpopulation of change routines
+// if error occurs, the state repo may be in a partially running state which can not be stopped with Stop()
+// in this case a panic occurs
 func (this *StateRepo) Start() {
 	err := this.Stop()
 	if err != nil {
@@ -310,8 +310,12 @@ func (this *StateRepo) Start() {
 	return
 }
 
-//persists given world; will not stop any change routines, nor will it request a lock on the world mutex
+// persists given world; will not stop any change routines, nor will it request a lock on the world mutex
 func (this *StateRepo) persistWorld(world World) (err error) {
+	if world.mux != nil {
+		world.mux.Lock()
+		defer world.mux.Unlock()
+	}
 	return this.Persistence.PersistWorld(world)
 }
 
@@ -369,7 +373,7 @@ func (this *StateRepo) HandleCommand(externalDeviceRef string, externalServiceRe
 
 	for _, service := range device.Services {
 		if service.ExternalRef == externalServiceRef {
-			err := run(service.Code, this.getJsCommandApi(world, room, device, cmdMsg, responder), this.Config.JsTimeout, &world.mux)
+			err := run(service.Code, this.getJsCommandApi(world, room, device, cmdMsg, responder), this.Config.JsTimeout, world.mux)
 			if err != nil {
 				log.Println("ERROR: while handling command in jsvm", err, device.Name, service.Name)
 			}
@@ -406,6 +410,6 @@ func (this *StateRepo) RunService(serviceId string, cmdMsg interface{}) (resp in
 	}
 	err = run(service.Code, this.getJsCommandApi(world, room, device, cmdMsg, func(respMsg interface{}) {
 		resp = respMsg
-	}), this.Config.JsTimeout, &world.mux)
+	}), this.Config.JsTimeout, world.mux)
 	return
 }
