@@ -18,12 +18,12 @@ package lib
 
 import (
 	"context"
+	"github.com/IBM/sarama"
 	"github.com/SENERGY-Platform/moses/lib/api"
 	"github.com/SENERGY-Platform/moses/lib/config"
 	"github.com/SENERGY-Platform/moses/lib/state"
 	platform_connector_lib "github.com/SENERGY-Platform/platform-connector-lib"
 	"github.com/SENERGY-Platform/platform-connector-lib/connectionlog"
-	"github.com/Shopify/sarama"
 	"log"
 	"strings"
 	"time"

@@ -20,5 +20,5 @@ import (
 	"github.com/SENERGY-Platform/permission-search/lib/tests/docker"
 )
 
-var Elasticsearch = docker.Elasticsearch
+var OpenSearch = docker.OpenSearch
 var PermSearch = docker.PermissionSearch
