@@ -5,7 +5,7 @@ go 1.21
 toolchain go1.21.0
 
 require (
-	github.com/SENERGY-Platform/platform-connector-lib v0.0.0-20230824093541-9ebc03639b9b
+	github.com/SENERGY-Platform/platform-connector-lib v0.0.0-20230901084700-134dd8f51652
 	github.com/bradfitz/gomemcache v0.0.0-20230611145640-acc696258285 // indirect
 	github.com/cbroglie/mustache v1.4.0
 	github.com/globalsign/mgo v0.0.0-20181015135952-eeefdecb41b8
@@ -17,7 +17,7 @@ require (
 )
 
 require (
-	github.com/IBM/sarama v1.41.0
+	github.com/IBM/sarama v1.41.1
 	github.com/SENERGY-Platform/permission-search v0.0.0-20230829121111-76c8c176bddb
 	github.com/testcontainers/testcontainers-go v0.23.0
 )

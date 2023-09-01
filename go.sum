@@ -5,8 +5,8 @@ github.com/AdaLogics/go-fuzz-headers v0.0.0-20230106234847-43070de90fa1/go.mod h
 github.com/Azure/go-ansiterm v0.0.0-20230124172434-306776ec8161 h1:L/gRVlceqvL25UVaW/CKtUDjefjrs0SPonmDGUVOYP0=
 github.com/Azure/go-ansiterm v0.0.0-20230124172434-306776ec8161/go.mod h1:xomTg63KZ2rFqZQzSB4Vz2SUXa1BpHTVz9L5PTmPC4E=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
-github.com/IBM/sarama v1.41.0 h1:c+fV23/HDO+M88dTYFg7TFRlxU0scgfdcFrQh/8s5Z8=
-github.com/IBM/sarama v1.41.0/go.mod h1:JFCPURVskaipJdKRFkiE/OZqQHw7jqliaJmRwXCmSSw=
+github.com/IBM/sarama v1.41.1 h1:B4/TdHce/8Ipza+qrLIeNJ9D1AOxZVp/3uDv6H/dp2M=
+github.com/IBM/sarama v1.41.1/go.mod h1:JFCPURVskaipJdKRFkiE/OZqQHw7jqliaJmRwXCmSSw=
 github.com/Knetic/govaluate v3.0.0+incompatible h1:7o6+MAPhYTCF0+fdvoz1xDedhRb4f6s9Tn1Tt7/WTEg=
 github.com/Knetic/govaluate v3.0.0+incompatible/go.mod h1:r7JcOSlj0wfOMncg0iLm8Leh48TZaKVeNIfJntJ2wa0=
 github.com/Masterminds/semver/v3 v3.1.1/go.mod h1:VPu/7SZ7ePZ3QOrcuXROw5FAcLl4a0cBrbBpGY/8hQs=
@@ -22,8 +22,8 @@ github.com/SENERGY-Platform/models/go v0.0.0-20230824080159-16585960df38 h1:PDvF
 github.com/SENERGY-Platform/models/go v0.0.0-20230824080159-16585960df38/go.mod h1:bCREPNRN4P8oxLgpC3/ZKK4jXSy4MSPXoiomhohE+aw=
 github.com/SENERGY-Platform/permission-search v0.0.0-20230829121111-76c8c176bddb h1:AQ/VBfoQFSmY+pqWVTXtrBsgjvOdpSlRFj/a6ftwtck=
 github.com/SENERGY-Platform/permission-search v0.0.0-20230829121111-76c8c176bddb/go.mod h1:TxlFzRwUfDp9gordsK5dehq83AYDavt2876ElMP9n/E=
-github.com/SENERGY-Platform/platform-connector-lib v0.0.0-20230824093541-9ebc03639b9b h1:KoauuMeY5EUgCDAnTcZjg+rOyVMCyNsbx0UporD3P6k=
-github.com/SENERGY-Platform/platform-connector-lib v0.0.0-20230824093541-9ebc03639b9b/go.mod h1:VUlGE5JlNKXZ+bUz9baKXO7rHuNHhIt9GU6J+ry7xAY=
+github.com/SENERGY-Platform/platform-connector-lib v0.0.0-20230901084700-134dd8f51652 h1:DgVCC90T2QYAjIcGOU20uoqUO5ea12jvUTuLM8MnZPI=
+github.com/SENERGY-Platform/platform-connector-lib v0.0.0-20230901084700-134dd8f51652/go.mod h1:FsVwaBXtW2vnOuEp1Fqpnatc0ghP+BrQ/V5a1ojIpXU=
 github.com/aws/aws-sdk-go v1.42.27/go.mod h1:OGr6lGMAKGlG9CVrYnWYDKIyb829c6EVBRjxqjmPepc=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
