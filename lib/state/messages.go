@@ -232,6 +232,9 @@ func (this World) ToMsg() (result WorldMsg, err error) {
 		if err != nil {
 			return result, err
 		}
+		if result.Rooms == nil {
+			result.Rooms = map[string]RoomMsg{}
+		}
 		result.Rooms[key] = roomMsg
 	}
 	return
