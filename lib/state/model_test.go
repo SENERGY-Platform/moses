@@ -35,4 +35,25 @@ func TestCleanStates(t *testing.T) {
 	}) {
 		t.Error(result)
 	}
+
+	world := WorldMsg{Rooms: map[string]RoomMsg{"room": {
+		Devices: map[string]DeviceMsg{
+			"device": {
+				States: map[string]interface{}{
+					"a": 42,
+					"b": "foo",
+					"c": math.NaN(),
+				},
+			},
+		},
+	}}}
+	world.CleanStates()
+
+	if !reflect.DeepEqual(world.Rooms["room"].Devices["device"].States, map[string]interface{}{
+		"a": 42,
+		"b": "foo",
+		"c": 0,
+	}) {
+		t.Error(world.Rooms["room"].Devices["device"].States)
+	}
 }

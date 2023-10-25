@@ -97,7 +97,7 @@ type Device struct {
 	Services       map[string]Service       `json:"services" bson:"services"`
 }
 
-func (this Device) CleanStates() {
+func (this *Device) CleanStates() {
 	this.States = CleanStates(this.States)
 }
 

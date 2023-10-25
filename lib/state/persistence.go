@@ -80,6 +80,7 @@ func (this MongoPersistence) getTemplateCollection() (session *mgo.Session, coll
 
 func (this MongoPersistence) PersistWorld(world World) (err error) {
 	session, collection := this.getWorldCollection()
+	world.CleanStates()
 	defer session.Close()
 	_, err = collection.Upsert(bson.M{"id": world.Id}, world)
 	return
@@ -126,6 +127,7 @@ func (this MongoPersistence) LoadWorlds() (result map[string]*World, err error) 
 		var tempWorld World
 		tempWorld = world
 		tempWorld.mux = &sync.Mutex{}
+		tempWorld.CleanStates()
 		result[tempWorld.Id] = &tempWorld
 	}
 	return
