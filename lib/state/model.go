@@ -62,12 +62,28 @@ type World struct {
 	mux            *sync.Mutex              `json:"-" bson:"-"`
 }
 
+func (this *World) CleanStates() {
+	this.States = CleanStates(this.States)
+	for key, value := range this.Rooms {
+		value.CleanStates()
+		this.Rooms[key] = value
+	}
+}
+
 type Room struct {
 	Id             string                   `json:"id" bson:"id"`
 	Name           string                   `json:"name" bson:"name"`
 	States         map[string]interface{}   `json:"states" bson:"states"`
 	Devices        map[string]*Device       `json:"devices" bson:"devices"`
 	ChangeRoutines map[string]ChangeRoutine `json:"change_routines" bson:"change_routines"`
+}
+
+func (this *Room) CleanStates() {
+	this.States = CleanStates(this.States)
+	for key, value := range this.Devices {
+		value.CleanStates()
+		this.Devices[key] = value
+	}
 }
 
 type Device struct {
@@ -79,6 +95,10 @@ type Device struct {
 	States         map[string]interface{}   `json:"states" bson:"states"`
 	ChangeRoutines map[string]ChangeRoutine `json:"change_routines" bson:"change_routines"`
 	Services       map[string]Service       `json:"services" bson:"services"`
+}
+
+func (this Device) CleanStates() {
+	this.States = CleanStates(this.States)
 }
 
 type Service struct {
