@@ -199,6 +199,9 @@ func (this WorldMsg) ToModel() (result World, err error) {
 		if err != nil {
 			return result, err
 		}
+		if result.Rooms == nil {
+			result.Rooms = map[string]*Room{}
+		}
 		result.Rooms[key] = &roomModel
 	}
 	return
@@ -211,6 +214,9 @@ func (this RoomMsg) ToModel() (result Room, err error) {
 		if err != nil {
 			return result, err
 		}
+		if result.Devices == nil {
+			result.Devices = map[string]*Device{}
+		}
 		result.Devices[key] = &deviceModel
 	}
 	return
@@ -219,6 +225,9 @@ func (this RoomMsg) ToModel() (result Room, err error) {
 func (this DeviceMsg) ToModel() (result Device, err error) {
 	err = jsonCopy(this, &result)
 	for _, service := range this.Services {
+		if result.Services == nil {
+			result.Services = map[string]Service{}
+		}
 		result.Services[service.Id] = service
 	}
 	return
@@ -247,6 +256,9 @@ func (this Room) ToMsg() (result RoomMsg, err error) {
 		if err != nil {
 			return result, err
 		}
+		if result.Devices == nil {
+			result.Devices = map[string]DeviceMsg{}
+		}
 		result.Devices[key] = deviceMsg
 	}
 	return
@@ -255,6 +267,9 @@ func (this Room) ToMsg() (result RoomMsg, err error) {
 func (this Device) ToMsg() (result DeviceMsg, err error) {
 	err = jsonCopy(this, &result)
 	for _, service := range this.Services {
+		if result.Services == nil {
+			result.Services = map[string]Service{}
+		}
 		result.Services[service.Id] = service
 	}
 	return
