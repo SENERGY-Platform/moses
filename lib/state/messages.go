@@ -18,6 +18,8 @@ package state
 
 import (
 	"encoding/json"
+	"log"
+	"runtime/debug"
 	"sync"
 )
 
@@ -185,9 +187,17 @@ type DeviceMsg struct {
 func jsonCopy(from interface{}, to interface{}) (err error) {
 	temp, err := json.Marshal(from)
 	if err != nil {
+		log.Printf("ERROR: %#v \n", from)
+		debug.PrintStack()
 		return err
 	}
-	return json.Unmarshal(temp, to)
+	err = json.Unmarshal(temp, to)
+	if err != nil {
+		log.Printf("ERROR: %#v \n", string(temp))
+		debug.PrintStack()
+		return err
+	}
+	return
 }
 
 func (this WorldMsg) ToModel() (result World, err error) {
