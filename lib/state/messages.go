@@ -201,6 +201,7 @@ func jsonCopy(from interface{}, to interface{}) (err error) {
 }
 
 func (this WorldMsg) ToModel() (result World, err error) {
+	this.States = CleanStates(this.States)
 	err = jsonCopy(this, &result)
 	result.Owner = this.Owner
 	result.mux = &sync.Mutex{}
@@ -218,6 +219,7 @@ func (this WorldMsg) ToModel() (result World, err error) {
 }
 
 func (this RoomMsg) ToModel() (result Room, err error) {
+	this.States = CleanStates(this.States)
 	err = jsonCopy(this, &result)
 	for key, device := range this.Devices {
 		deviceModel, err := device.ToModel()
@@ -233,6 +235,7 @@ func (this RoomMsg) ToModel() (result Room, err error) {
 }
 
 func (this DeviceMsg) ToModel() (result Device, err error) {
+	this.States = CleanStates(this.States)
 	err = jsonCopy(this, &result)
 	for _, service := range this.Services {
 		if result.Services == nil {
@@ -244,6 +247,7 @@ func (this DeviceMsg) ToModel() (result Device, err error) {
 }
 
 func (this World) ToMsg() (result WorldMsg, err error) {
+	this.States = CleanStates(this.States)
 	err = jsonCopy(this, &result)
 	result.Owner = this.Owner
 	for key, room := range this.Rooms {
@@ -260,6 +264,7 @@ func (this World) ToMsg() (result WorldMsg, err error) {
 }
 
 func (this Room) ToMsg() (result RoomMsg, err error) {
+	this.States = CleanStates(this.States)
 	err = jsonCopy(this, &result)
 	for key, device := range this.Devices {
 		deviceMsg, err := device.ToMsg()
@@ -275,6 +280,7 @@ func (this Room) ToMsg() (result RoomMsg, err error) {
 }
 
 func (this Device) ToMsg() (result DeviceMsg, err error) {
+	this.States = CleanStates(this.States)
 	err = jsonCopy(this, &result)
 	for _, service := range this.Services {
 		if result.Services == nil {

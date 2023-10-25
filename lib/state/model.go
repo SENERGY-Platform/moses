@@ -17,6 +17,7 @@
 package state
 
 import (
+	"math"
 	"sync"
 )
 
@@ -86,4 +87,20 @@ type Service struct {
 	ExternalRef    string `json:"external_ref" bson:"external_ref"` //platform intern service id, will be used to populate Service.Marshaller and as endpoint for the Connector
 	SensorInterval int64  `json:"sensor_interval" bson:"sensor_interval"`
 	Code           string `json:"code"`
+}
+
+func CleanStates(in map[string]interface{}) (out map[string]interface{}) {
+	out = map[string]interface{}{}
+	for key, value := range in {
+		switch v := value.(type) {
+		case float64:
+			if math.IsNaN(v) {
+				out[key] = 0
+			}
+		default:
+			out[key] = value
+		}
+
+	}
+	return out
 }
