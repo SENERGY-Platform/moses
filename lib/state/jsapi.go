@@ -44,7 +44,15 @@ func (this *StateRepo) getJsWorldSubApi(world *World) map[string]interface{} {
 				}
 			},
 			"get": func(field string) interface{} {
-				return world.States[field]
+				if world.States == nil {
+					world.States = map[string]interface{}{}
+				}
+				val, ok := world.States[field]
+				if !ok {
+					world.States[field] = 0
+					val = 0
+				}
+				return val
 			},
 		},
 		"getRoom": func(roomid string) map[string]interface{} {
@@ -82,7 +90,15 @@ func (this *StateRepo) getJsRoomSubApi(world *World, room *Room) map[string]inte
 				}
 			},
 			"get": func(field string) interface{} {
-				return room.States[field]
+				if room.States == nil {
+					room.States = map[string]interface{}{}
+				}
+				val, ok := room.States[field]
+				if !ok {
+					room.States[field] = 0
+					val = 0
+				}
+				return val
 			},
 		},
 		"getDevice": func(deviceid string) map[string]interface{} {
@@ -121,7 +137,15 @@ func (this *StateRepo) getJsDeviceSubApi(world *World, device *Device) map[strin
 				}
 			},
 			"get": func(field string) interface{} {
-				return device.States[field]
+				if device.States == nil {
+					device.States = map[string]interface{}{}
+				}
+				val, ok := device.States[field]
+				if !ok {
+					device.States[field] = 0
+					val = 0
+				}
+				return val
 			},
 		},
 	}
