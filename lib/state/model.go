@@ -116,6 +116,8 @@ func CleanStates(in map[string]interface{}) (out map[string]interface{}) {
 		case float64:
 			if math.IsNaN(v) {
 				out[key] = 0
+			} else {
+				out[key] = v
 			}
 		default:
 			out[key] = value
