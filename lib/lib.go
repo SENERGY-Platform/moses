@@ -36,7 +36,7 @@ func New(config config.Config, ctx context.Context) (err error) {
 		return err
 	}
 
-	connector := platform_connector_lib.New(platform_connector_lib.Config{
+	connector, err := platform_connector_lib.New(platform_connector_lib.Config{
 		PartitionsNum:            config.KafkaPartitionNum,
 		ReplicationFactor:        config.KafkaReplicationFactor,
 		FatalKafkaError:          config.FatalKafkaError,
@@ -95,6 +95,10 @@ func New(config config.Config, ctx context.Context) (err error) {
 
 		KafkaTopicConfigs: config.KafkaTopicConfigs,
 	})
+	if err != nil {
+		log.Println("ERROR: lib init", err)
+		return err
+	}
 
 	if config.Debug {
 		connector.SetKafkaLogger(log.New(log.Writer(), "[CONNECTOR-KAFKA] ", 0))
