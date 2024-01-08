@@ -5,7 +5,7 @@ go 1.21
 toolchain go1.21.0
 
 require (
-	github.com/SENERGY-Platform/platform-connector-lib v0.0.0-20240102085656-1610948334c8
+	github.com/SENERGY-Platform/platform-connector-lib v0.0.0-20240105124530-e51c7fbf01e8
 	github.com/bradfitz/gomemcache v0.0.0-20230905024940-24af94b03874 // indirect
 	github.com/cbroglie/mustache v1.4.0
 	github.com/globalsign/mgo v0.0.0-20181015135952-eeefdecb41b8
@@ -29,7 +29,7 @@ require (
 	github.com/Microsoft/go-winio v0.6.1 // indirect
 	github.com/Microsoft/hcsshim v0.11.4 // indirect
 	github.com/RyanCarrier/dijkstra v1.3.0 // indirect
-	github.com/SENERGY-Platform/converter v0.0.3 // indirect
+	github.com/SENERGY-Platform/converter v0.0.4 // indirect
 	github.com/SENERGY-Platform/developer-notifications v0.0.1 // indirect
 	github.com/SENERGY-Platform/models/go v0.0.0-20230824080159-16585960df38 // indirect
 	github.com/SENERGY-Platform/service-commons v0.0.0-20231115074650-7021aeae60e4 // indirect
@@ -44,7 +44,7 @@ require (
 	github.com/distribution/reference v0.5.0 // indirect
 	github.com/docker/distribution v2.8.3+incompatible // indirect
 	github.com/docker/docker v24.0.7+incompatible // indirect
-	github.com/docker/go-connections v0.4.0 // indirect
+	github.com/docker/go-connections v0.5.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/eapache/go-resiliency v1.5.0 // indirect
 	github.com/eapache/go-xerial-snappy v0.0.0-20230731223053-c322873962e3 // indirect
@@ -101,13 +101,13 @@ require (
 	github.com/tklauser/numcpus v0.7.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.3 // indirect
 	golang.org/x/crypto v0.17.0 // indirect
-	golang.org/x/exp v0.0.0-20231226003508-02704c960a9b // indirect
+	golang.org/x/exp v0.0.0-20240103183307-be819d1f06fc // indirect
 	golang.org/x/mod v0.14.0 // indirect
 	golang.org/x/net v0.19.0 // indirect
-	golang.org/x/sys v0.15.0 // indirect
+	golang.org/x/sys v0.16.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 	golang.org/x/tools v0.16.1 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20231212172506-995d672761c0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20240102182953-50ed04b92917 // indirect
 	google.golang.org/grpc v1.60.1 // indirect
 	google.golang.org/protobuf v1.32.0 // indirect
 	gopkg.in/go-playground/colors.v1 v1.2.0 // indirect
