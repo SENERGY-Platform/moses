@@ -29,7 +29,7 @@ import (
 	"github.com/robertkrimen/otto"
 )
 
-func startChangeRoutine(routine ChangeRoutine, callbacks map[string]interface{}, timeout time.Duration, mux sync.Locker) (ticker *time.Ticker, stop chan bool) {
+func startChangeRoutine(routine ChangeRoutine, callbacks map[string]interface{}, timeout time.Duration, mux sync.Locker, locationInfoForErrorLogging string) (ticker *time.Ticker, stop chan bool) {
 	ticker = time.NewTicker(time.Duration(routine.Interval) * time.Second)
 	stop = make(chan bool)
 	go func() {
@@ -38,7 +38,7 @@ func startChangeRoutine(routine ChangeRoutine, callbacks map[string]interface{},
 			case <-ticker.C:
 				err := run(routine.Code, callbacks, timeout, mux)
 				if err != nil {
-					log.Println("ERROR: startChangeRoutine()", err, "\n", routine.Id, "\n", trimCodeDefault(routine.Code))
+					log.Println("ERROR: startChangeRoutine()", err, "\n", locationInfoForErrorLogging, "\n", trimCodeDefault(routine.Code))
 				}
 			case <-stop:
 				return
