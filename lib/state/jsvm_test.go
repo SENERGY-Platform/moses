@@ -28,6 +28,24 @@ type JsvmTestMoses struct {
 	Receive func(field string) interface{}
 }
 
+func TestTrimCode(t *testing.T) {
+	f := func(input string, maxSize int, epxected string) {
+		t.Helper()
+		actual := trimCode(input, maxSize)
+		if actual != epxected {
+			t.Errorf("Input: %s\nExpected: %s\nActual: %s", input, epxected, actual)
+			return
+		}
+	}
+	s := "12345678900987654321"
+
+	f(s, 100, s)
+	f(s, 20, s)
+	f("123456789000987654321", 20, "1234567890[...]0987654321")
+	f(s, 10, "12345[...]54321")
+	f(s, 5, "12[...]21")
+}
+
 func TestJsvmRun(t *testing.T) {
 	script := `
 	var foo = 2*21;

@@ -18,6 +18,7 @@ package state
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -37,7 +38,7 @@ func startChangeRoutine(routine ChangeRoutine, callbacks map[string]interface{},
 			case <-ticker.C:
 				err := run(routine.Code, callbacks, timeout, mux)
 				if err != nil {
-					log.Println("ERROR: startChangeRoutine()", err, "\n", routine.Code)
+					log.Println("ERROR: startChangeRoutine()", err, "\n", routine.Id, "\n", trimCodeDefault(routine.Code))
 				}
 			case <-stop:
 				return
@@ -45,6 +46,19 @@ func startChangeRoutine(routine ChangeRoutine, callbacks map[string]interface{},
 		}
 	}()
 	return
+}
+
+const maxCodeLogSize = 100
+
+func trimCodeDefault(code string) string {
+	return trimCode(code, maxCodeLogSize)
+}
+
+func trimCode(code string, size int) string {
+	if len(code) <= size {
+		return code
+	}
+	return fmt.Sprintf("%v[...]%v", code[:size/2], code[len(code)-size/2:])
 }
 
 var halt = errors.New("stop")
