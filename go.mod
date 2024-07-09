@@ -3,7 +3,7 @@ module github.com/SENERGY-Platform/moses
 go 1.22
 
 require (
-	github.com/SENERGY-Platform/platform-connector-lib v0.0.0-20240628090712-5125e12a31c4
+	github.com/SENERGY-Platform/platform-connector-lib v0.0.0-20240709092939-b6153d631069
 	github.com/bradfitz/gomemcache v0.0.0-20230905024940-24af94b03874 // indirect
 	github.com/cbroglie/mustache v1.4.0
 	github.com/globalsign/mgo v0.0.0-20181015135952-eeefdecb41b8
@@ -16,7 +16,7 @@ require (
 
 require (
 	github.com/IBM/sarama v1.43.2
-	github.com/SENERGY-Platform/permission-search v0.0.14
+	github.com/SENERGY-Platform/permission-search v0.0.16
 	github.com/testcontainers/testcontainers-go v0.31.0
 )
 
@@ -27,10 +27,10 @@ require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/Microsoft/hcsshim v0.12.4 // indirect
 	github.com/RyanCarrier/dijkstra v1.4.0 // indirect
-	github.com/SENERGY-Platform/converter v0.0.7 // indirect
+	github.com/SENERGY-Platform/converter v0.0.8 // indirect
 	github.com/SENERGY-Platform/developer-notifications v0.0.4 // indirect
 	github.com/SENERGY-Platform/models/go v0.0.0-20240627082833-157bd627a94f // indirect
-	github.com/SENERGY-Platform/service-commons v0.0.0-20240423132428-8eccbc027e71 // indirect
+	github.com/SENERGY-Platform/service-commons v0.0.0-20240708085423-94423a495d7f // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
