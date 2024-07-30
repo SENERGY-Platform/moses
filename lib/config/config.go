@@ -19,6 +19,7 @@ package config
 import (
 	"encoding/json"
 	"flag"
+	"fmt"
 	"github.com/segmentio/kafka-go"
 	"log"
 	"os"
@@ -35,7 +36,7 @@ type Config struct {
 	WorldCollectionName    string        `json:"world_collection_name"`
 	GraphCollectionName    string        `json:"graph_collection_name"`
 	TemplateCollectionName string        `json:"template_collection_name"`
-	MongoUrl               string        `json:"mongo_url"`
+	MongoUrl               string        `json:"mongo_url" config:"secret"`
 	MongoTable             string        `json:"mongo_table"`
 	JsTimeout              time.Duration `json:"js_timeout"`
 	ProtocolSegmentName    string        `json:"protocol_segment_name"`
@@ -50,8 +51,8 @@ type Config struct {
 	DeviceManagerUrl string `json:"device_manager_url"`
 	DeviceRepoUrl    string `json:"device_repo_url"`
 
-	AuthClientId             string  `json:"auth_client_id"`     //keycloak-client
-	AuthClientSecret         string  `json:"auth_client_secret"` //keycloak-secret
+	AuthClientId             string  `json:"auth_client_id" config:"secret"`     //keycloak-client
+	AuthClientSecret         string  `json:"auth_client_secret" config:"secret"` //keycloak-secret
 	AuthExpirationTimeBuffer float64 `json:"auth_expiration_time_buffer"`
 	AuthEndpoint             string  `json:"auth_endpoint"`
 
@@ -74,8 +75,8 @@ type Config struct {
 	PublishToPostgres bool   `json:"publish_to_postgres"`
 	PostgresHost      string `json:"postgres_host"`
 	PostgresPort      int    `json:"postgres_port"`
-	PostgresUser      string `json:"postgres_user"`
-	PostgresPw        string `json:"postgres_pw"`
+	PostgresUser      string `json:"postgres_user" config:"secret"`
+	PostgresPw        string `json:"postgres_pw" config:"secret"`
 	PostgresDb        string `json:"postgres_db"`
 
 	AsyncPgThreadMax    int64  `json:"async_pg_thread_max"`
@@ -149,10 +150,13 @@ func handleEnvironmentVars(config interface{}) {
 	configType := configValue.Type()
 	for index := 0; index < configType.NumField(); index++ {
 		fieldName := configType.Field(index).Name
+		fieldConfig := configType.Field(index).Tag.Get("config")
 		envName := fieldNameToEnvName(fieldName)
 		envValue := os.Getenv(envName)
 		if envValue != "" {
-			log.Println("use environment variable: ", envName, " = ", envValue)
+			if !strings.Contains(fieldConfig, "secret") {
+				fmt.Println("use environment variable: ", envName, " = ", envValue)
+			}
 			if configValue.FieldByName(fieldName).Kind() == reflect.Int64 {
 				i, _ := strconv.ParseInt(envValue, 10, 64)
 				configValue.FieldByName(fieldName).SetInt(i)
