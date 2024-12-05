@@ -90,8 +90,8 @@ func New(config config.Config, ctx context.Context) (err error) {
 
 		DeviceTypeTopic: config.DeviceTypeTopic,
 
-		NotificationUrl: config.NotificationUrl,
-		PermQueryUrl:    config.PermSearchUrl,
+		NotificationUrl:  config.NotificationUrl,
+		PermissionsV2Url: config.PermissionsV2Url,
 
 		KafkaTopicConfigs: config.KafkaTopicConfigs,
 	})

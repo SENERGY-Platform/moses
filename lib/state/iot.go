@@ -17,14 +17,15 @@
 package state
 
 import (
-	"errors"
+	deviceRepo "github.com/SENERGY-Platform/device-repository/lib/client"
+	"github.com/SENERGY-Platform/models/go/models"
 	"github.com/SENERGY-Platform/moses/lib/jwt"
+	permClient "github.com/SENERGY-Platform/permissions-v2/pkg/client"
 	"github.com/SENERGY-Platform/platform-connector-lib/model"
 	"github.com/google/uuid"
 	"log"
 	"net/url"
 	"runtime/debug"
-	"strconv"
 )
 
 func (this *StateRepo) GetIotDeviceType(jwt jwt.Jwt, id string) (dt model.DeviceType, err error) {
@@ -47,22 +48,18 @@ func (this *StateRepo) GetIotDeviceTypesIds(jwt jwt.Jwt) (result []string, err e
 	steps := 1000
 	limit := 0
 	offset := 0
-	temp := []map[string]interface{}{}
+	temp := []string{}
+	c := permClient.New(this.Config.PermissionsV2Url)
 	for len(temp) == limit {
 		limit = steps
-		temp = []map[string]interface{}{}
-		err = jwt.Impersonate.GetJSON(this.Config.PermSearchUrl+"/jwt/list/device-types/r/"+strconv.Itoa(limit)+"/"+strconv.Itoa(offset), &temp)
+		temp, err, _ = c.AdminListResourceIds(permClient.InternalAdminToken, "device-types", permClient.ListOptions{
+			Limit:  int64(limit),
+			Offset: int64(offset),
+		})
 		if err != nil {
 			return result, err
 		}
-		for _, element := range temp {
-			id, ok := element["id"].(string)
-			if ok {
-				result = append(result, id)
-			} else {
-				return result, errors.New("unable to parse permsearch result")
-			}
-		}
+		result = append(result, temp...)
 		offset = offset + limit
 	}
 	return
@@ -72,21 +69,21 @@ func (this *StateRepo) GetMosesDeviceTypesIds(jwt jwt.Jwt) (result []string, err
 	steps := 1000
 	limit := 0
 	offset := 0
-	temp := []map[string]interface{}{}
+	temp := []models.DeviceType{}
+	c := deviceRepo.NewClient(this.Config.DeviceRepoUrl)
 	for len(temp) == limit {
 		limit = steps
-		temp = []map[string]interface{}{}
-		err = jwt.Impersonate.GetJSON(this.Config.PermSearchUrl+"/jwt/select/device-types/protocols/"+url.PathEscape(this.MosesProtocolId)+"/r/"+strconv.Itoa(limit)+"/"+strconv.Itoa(offset)+"/name/asc", &temp)
+		temp, err, _ = c.ListDeviceTypesV3(permClient.InternalAdminToken, deviceRepo.DeviceTypeListOptions{
+			Limit:       int64(limit),
+			Offset:      int64(offset),
+			ProtocolIds: []string{this.MosesProtocolId},
+			SortBy:      "name.asc",
+		})
 		if err != nil {
 			return result, err
 		}
 		for _, element := range temp {
-			id, ok := element["id"].(string)
-			if ok {
-				result = append(result, id)
-			} else {
-				return result, errors.New("unable to parse permsearch result")
-			}
+			result = append(result, element.Id)
 		}
 		offset = offset + limit
 	}
@@ -109,13 +106,13 @@ func (this *StateRepo) DeleteExternalDevice(jwt jwt.Jwt, id string) (err error) 
 	return
 }
 
-func (this *StateRepo) GetProtocolList(handler string) (result []map[string]interface{}, err error) {
+func (this *StateRepo) GetProtocolList(handler string) (result []models.Protocol, err error) {
 	token, err := this.Connector.Security().Access()
 	if err != nil {
 		debug.PrintStack()
 		return result, err
 	}
-	err = token.GetJSON(this.Config.PermSearchUrl+"/jwt/select/protocols/handler/"+url.PathEscape(handler)+"/r/1000/0/name/asc", &result)
+	result, err, _ = deviceRepo.NewClient(this.Config.DeviceRepoUrl).ListProtocols(string(token), 1000, 0, "name.asc")
 	return result, err
 }
 
@@ -126,27 +123,16 @@ func (this *StateRepo) EnsureProtocol(handler string, segments []model.ProtocolS
 		return protocolId, err
 	}
 	if len(protocols) == 1 {
-		ok := false
-		protocolId, ok = protocols[0]["id"].(string)
-		if !ok {
-			err = errors.New("protocol id from perm-search not a string")
-			log.Println("ERROR: ", err)
-			debug.PrintStack()
-		}
-		return protocolId, err
+		return protocols[0].Id, err
 	}
 	if len(protocols) > 1 {
 		log.Println("WARNING: found multiple existing moses protocols")
-		ok := false
-		protocolId, ok = protocols[0]["id"].(string)
-		if !ok {
-			err = errors.New("protocol id from perm-search not a string")
-			log.Println("ERROR: ", err)
-			debug.PrintStack()
-		}
-		return protocolId, err
+		return protocols[0].Id, err
 	}
 	protocol, err := this.CreateProtocol(handler, segments)
+	if err != nil {
+		return protocolId, err
+	}
 	protocolId = protocol.Id
 	return protocolId, err
 }

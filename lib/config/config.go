@@ -47,7 +47,7 @@ type Config struct {
 	FatalKafkaError    bool   `json:"fatal_kafka_error"` // "true" || "false"; "" -> "true", else -> "false"
 	Protocol           string `json:"protocol"`
 
-	PermSearchUrl    string `json:"perm_search_url"`
+	PermissionsV2Url string `json:"permissions_v2_url"`
 	DeviceManagerUrl string `json:"device_manager_url"`
 	DeviceRepoUrl    string `json:"device_repo_url"`
 

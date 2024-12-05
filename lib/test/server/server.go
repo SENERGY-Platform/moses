@@ -44,13 +44,6 @@ func New(ctx context.Context, wg *sync.WaitGroup, startConfig config.Config, key
 		return config, err
 	}
 
-	_, searchIp, err := OpenSearch(ctx, wg)
-	if err != nil {
-		log.Println("ERROR:", err)
-		debug.PrintStack()
-		return config, err
-	}
-
 	_, mongoIp, err := MongoDB(ctx, wg)
 	if err != nil {
 		log.Println("ERROR:", err)
@@ -59,15 +52,15 @@ func New(ctx context.Context, wg *sync.WaitGroup, startConfig config.Config, key
 	}
 	config.MongoUrl = "mongodb://" + mongoIp + ":27017"
 
-	_, permIp, err := PermSearch(ctx, wg, false, config.KafkaUrl, searchIp)
+	_, permV2Ip, err := PermissionsV2(ctx, wg, config.MongoUrl, config.KafkaUrl)
 	if err != nil {
 		log.Println("ERROR:", err)
 		debug.PrintStack()
 		return config, err
 	}
-	config.PermSearchUrl = "http://" + permIp + ":8080"
+	config.PermissionsV2Url = "http://" + permV2Ip + ":8080"
 
-	_, ip, err := DeviceRepo(ctx, wg, config.KafkaUrl, config.MongoUrl, config.PermSearchUrl)
+	_, ip, err := DeviceRepo(ctx, wg, config.KafkaUrl, config.MongoUrl, config.PermissionsV2Url)
 	if err != nil {
 		log.Println("ERROR:", err)
 		debug.PrintStack()
@@ -75,7 +68,7 @@ func New(ctx context.Context, wg *sync.WaitGroup, startConfig config.Config, key
 	}
 	config.DeviceRepoUrl = "http://" + ip + ":8080"
 
-	_, ip, err = DeviceManager(ctx, wg, config.KafkaUrl, config.DeviceRepoUrl, config.PermSearchUrl)
+	_, ip, err = DeviceManager(ctx, wg, config.KafkaUrl, config.DeviceRepoUrl, config.PermissionsV2Url)
 	if err != nil {
 		log.Println("ERROR:", err)
 		debug.PrintStack()
