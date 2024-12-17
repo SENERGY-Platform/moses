@@ -73,7 +73,7 @@ func (this *StateRepo) GetMosesDeviceTypesIds(jwt jwt.Jwt) (result []string, err
 	c := deviceRepo.NewClient(this.Config.DeviceRepoUrl)
 	for len(temp) == limit {
 		limit = steps
-		temp, err, _ = c.ListDeviceTypesV3(permClient.InternalAdminToken, deviceRepo.DeviceTypeListOptions{
+		temp, _, err, _ = c.ListDeviceTypesV3(permClient.InternalAdminToken, deviceRepo.DeviceTypeListOptions{
 			Limit:       int64(limit),
 			Offset:      int64(offset),
 			ProtocolIds: []string{this.MosesProtocolId},
