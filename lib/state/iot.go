@@ -70,7 +70,7 @@ func (this *StateRepo) GetMosesDeviceTypesIds(jwt jwt.Jwt) (result []string, err
 	limit := 0
 	offset := 0
 	temp := []models.DeviceType{}
-	c := deviceRepo.NewClient(this.Config.DeviceRepoUrl)
+	c := deviceRepo.NewClient(this.Config.DeviceRepoUrl, nil)
 	for len(temp) == limit {
 		limit = steps
 		temp, _, err, _ = c.ListDeviceTypesV3(permClient.InternalAdminToken, deviceRepo.DeviceTypeListOptions{
@@ -112,7 +112,7 @@ func (this *StateRepo) GetProtocolList(handler string) (result []models.Protocol
 		debug.PrintStack()
 		return result, err
 	}
-	result, err, _ = deviceRepo.NewClient(this.Config.DeviceRepoUrl).ListProtocols(string(token), 1000, 0, "name.asc")
+	result, err, _ = deviceRepo.NewClient(this.Config.DeviceRepoUrl, nil).ListProtocols(string(token), 1000, 0, "name.asc")
 	return result, err
 }
 
