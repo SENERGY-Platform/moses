@@ -5,7 +5,7 @@ go 1.23.0
 toolchain go1.23.4
 
 require (
-	github.com/SENERGY-Platform/platform-connector-lib v0.0.0-20250106140339-d65972e07eef
+	github.com/SENERGY-Platform/platform-connector-lib v0.0.0-20250113112424-b764ba2e1a12
 	github.com/bradfitz/gomemcache v0.0.0-20230905024940-24af94b03874 // indirect
 	github.com/cbroglie/mustache v1.4.0
 	github.com/globalsign/mgo v0.0.0-20181015135952-eeefdecb41b8
