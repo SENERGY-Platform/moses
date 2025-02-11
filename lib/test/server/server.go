@@ -67,14 +67,7 @@ func New(ctx context.Context, wg *sync.WaitGroup, startConfig config.Config, key
 		return config, err
 	}
 	config.DeviceRepoUrl = "http://" + ip + ":8080"
-
-	_, ip, err = DeviceManager(ctx, wg, config.KafkaUrl, config.DeviceRepoUrl, config.PermissionsV2Url)
-	if err != nil {
-		log.Println("ERROR:", err)
-		debug.PrintStack()
-		return config, err
-	}
-	config.DeviceManagerUrl = "http://" + ip + ":8080"
+	config.DeviceManagerUrl = config.DeviceRepoUrl
 
 	_, ip, err = Memcached(ctx, wg)
 	if err != nil {

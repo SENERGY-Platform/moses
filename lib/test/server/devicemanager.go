@@ -18,51 +18,8 @@ package server
 
 import (
 	"context"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
-	"log"
 	"sync"
 )
-
-func DeviceManager(ctx context.Context, wg *sync.WaitGroup, kafkaUrl string, deviceRepoUrl string, permv2Url string) (hostPort string, ipAddress string, err error) {
-	log.Println("start device-manager")
-	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: testcontainers.ContainerRequest{
-			Image: "ghcr.io/senergy-platform/device-manager:dev",
-			Env: map[string]string{
-				"KAFKA_URL":          kafkaUrl,
-				"PERMISSIONS_V2_URL": permv2Url,
-				"DEVICE_REPO_URL":    deviceRepoUrl,
-				"DISABLE_VALIDATION": "true",
-			},
-			ExposedPorts:    []string{"8080/tcp"},
-			WaitingFor:      wait.ForListeningPort("8080/tcp"),
-			AlwaysPullImage: true,
-		},
-		Started: true,
-	})
-	if err != nil {
-		return "", "", err
-	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		<-ctx.Done()
-		log.Println("DEBUG: remove container device-manager", c.Terminate(context.Background()))
-	}()
-
-	ipAddress, err = c.ContainerIP(ctx)
-	if err != nil {
-		return "", "", err
-	}
-	temp, err := c.MappedPort(ctx, "8080/tcp")
-	if err != nil {
-		return "", "", err
-	}
-	hostPort = temp.Port()
-
-	return hostPort, ipAddress, err
-}
 
 func DeviceManagerWithDependencies(basectx context.Context, wg *sync.WaitGroup) (managerUrl string, repoUrl string, permv2Url string, err error) {
 	_, managerUrl, repoUrl, permv2Url, err = DeviceManagerWithDependenciesAndKafka(basectx, wg)
@@ -105,12 +62,7 @@ func DeviceManagerWithDependenciesAndKafka(basectx context.Context, wg *sync.Wai
 		return kafkaUrl, managerUrl, repoUrl, permv2Url, err
 	}
 	repoUrl = "http://" + repoIp + ":8080"
-
-	_, managerIp, err := DeviceManager(ctx, wg, kafkaUrl, repoUrl, permv2Url)
-	if err != nil {
-		return kafkaUrl, managerUrl, repoUrl, permv2Url, err
-	}
-	managerUrl = "http://" + managerIp + ":8080"
+	managerUrl = repoUrl
 
 	return kafkaUrl, managerUrl, repoUrl, permv2Url, err
 }
