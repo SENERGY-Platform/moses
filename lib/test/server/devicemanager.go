@@ -34,13 +34,7 @@ func DeviceManagerWithDependenciesAndKafka(basectx context.Context, wg *sync.Wai
 		}
 	}()
 
-	_, zkIp, err := Zookeeper(ctx, wg)
-	if err != nil {
-		return kafkaUrl, managerUrl, repoUrl, permv2Url, err
-	}
-	zookeeperUrl := zkIp + ":2181"
-
-	kafkaUrl, err = Kafka(ctx, wg, zookeeperUrl)
+	kafkaUrl, err = Kafka(ctx, wg)
 	if err != nil {
 		return kafkaUrl, managerUrl, repoUrl, permv2Url, err
 	}

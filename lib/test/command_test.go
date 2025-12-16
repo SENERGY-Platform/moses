@@ -19,16 +19,17 @@ package test
 import (
 	"context"
 	"encoding/json"
+	"log"
+	"sync"
+	"testing"
+	"time"
+
 	"github.com/SENERGY-Platform/moses/lib/config"
 	"github.com/SENERGY-Platform/moses/lib/state"
 	"github.com/SENERGY-Platform/moses/lib/test/server"
 	"github.com/SENERGY-Platform/platform-connector-lib/kafka"
 	"github.com/SENERGY-Platform/platform-connector-lib/model"
 	"github.com/google/uuid"
-	"log"
-	"sync"
-	"testing"
-	"time"
 )
 
 func TestCommand(t *testing.T) {
@@ -125,7 +126,7 @@ func tryCommandToDevice(t *testing.T, config config.Config, protocol model.Proto
 		t.Fatal(err)
 	}
 
-	producer, err := kafka.PrepareProducer(ctx, config.KafkaUrl, true, false, 1, 1)
+	producer, err := kafka.PrepareProducer(ctx, config.KafkaUrl, true, false, 1, 1, true)
 	if err != nil {
 		t.Fatal(err)
 	}

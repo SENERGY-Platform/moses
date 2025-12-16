@@ -21,6 +21,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/ioutil"
+	"log"
+	"net/http"
+	"sync"
+	"testing"
+	"time"
+
 	"github.com/SENERGY-Platform/moses/lib/config"
 	"github.com/SENERGY-Platform/moses/lib/state"
 	"github.com/SENERGY-Platform/moses/lib/test/helper"
@@ -28,12 +35,6 @@ import (
 	"github.com/SENERGY-Platform/platform-connector-lib/kafka"
 	"github.com/SENERGY-Platform/platform-connector-lib/model"
 	"github.com/google/uuid"
-	"io/ioutil"
-	"log"
-	"net/http"
-	"sync"
-	"testing"
-	"time"
 )
 
 func TestEchoCommand(t *testing.T) {
@@ -113,6 +114,14 @@ func tryEchoCommandToDevice(t *testing.T, config config.Config, protocol model.P
 	if err != nil {
 		t.Fatal(err)
 	}
+	err = kafka.InitTopic(config.KafkaUrl, config.KafkaTopicConfigs, config.KafkaResponseTopic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = kafka.InitTopic(config.KafkaUrl, config.KafkaTopicConfigs, config.Protocol)
+	if err != nil {
+		t.Fatal(err)
+	}
 	mux := sync.Mutex{}
 	responses := []model.ProtocolMsg{}
 	err = kafka.NewConsumer(ctx, kafka.ConsumerConfig{
@@ -141,7 +150,7 @@ func tryEchoCommandToDevice(t *testing.T, config config.Config, protocol model.P
 		t.Fatal(err)
 	}
 
-	producer, err := kafka.PrepareProducer(ctx, config.KafkaUrl, true, false, 1, 1)
+	producer, err := kafka.PrepareProducer(ctx, config.KafkaUrl, true, false, 1, 1, true)
 	if err != nil {
 		t.Fatal(err)
 	}

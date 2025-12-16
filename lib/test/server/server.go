@@ -18,26 +18,19 @@ package server
 
 import (
 	"context"
-	"github.com/SENERGY-Platform/moses/lib"
-	"github.com/SENERGY-Platform/moses/lib/config"
 	"log"
 	"net"
 	"runtime/debug"
 	"sync"
+
+	"github.com/SENERGY-Platform/moses/lib"
+	"github.com/SENERGY-Platform/moses/lib/config"
 )
 
 func New(ctx context.Context, wg *sync.WaitGroup, startConfig config.Config, keyxcloakExportLocation string) (config config.Config, err error) {
 	config = startConfig
 
-	_, zkIp, err := Zookeeper(ctx, wg)
-	if err != nil {
-		log.Println("ERROR:", err)
-		debug.PrintStack()
-		return config, err
-	}
-	zookeeperUrl := zkIp + ":2181"
-
-	config.KafkaUrl, err = Kafka(ctx, wg, zookeeperUrl)
+	config.KafkaUrl, err = Kafka(ctx, wg)
 	if err != nil {
 		log.Println("ERROR:", err)
 		debug.PrintStack()
