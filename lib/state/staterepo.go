@@ -33,7 +33,6 @@ import (
 
 type StateRepo struct {
 	Worlds                 map[string]*World
-	Graphs                 map[string]*Graph
 	Persistence            PersistenceInterface
 	Connector              *platform_connector_lib.Connector
 	Config                 config.Config
@@ -233,8 +232,7 @@ func (this *StateRepo) Load() (err error) {
 		debug.PrintStack()
 		return err
 	}
-	this.Graphs, err = this.Persistence.LoadGraphs()
-	return err
+	return nil
 }
 
 // stops all change routines; may be called repeatedly while already stopped ore not started

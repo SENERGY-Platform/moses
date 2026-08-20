@@ -21,17 +21,6 @@ import (
 	"sync"
 )
 
-type Point struct {
-	X float64 `json:"x" bson:"x"`
-	Y float64 `json:"y" bson:"y"`
-}
-
-type Graph struct {
-	Id     string  `json:"id" bson:"id"`
-	Name   string  `json:"name" bson:"name"`
-	Values []Point `json:"values" bson:"values"`
-}
-
 type ChangeRoutineIndexElement struct {
 	Id      string
 	RefType string // "world" || "room" || "device"
@@ -40,7 +29,7 @@ type ChangeRoutineIndexElement struct {
 
 type ChangeRoutine struct {
 	Id       string `json:"id" bson:"id"`
-	Interval int64  `json:"interval" bson:"interval"`
+	Interval int64  `json:"interval" bson:"interval,truncate"`
 	Code     string `json:"code" bson:"code"`
 }
 
@@ -105,7 +94,7 @@ type Service struct {
 	Id             string `json:"id" bson:"id"`
 	Name           string `json:"name" bson:"name"`
 	ExternalRef    string `json:"external_ref" bson:"external_ref"` //platform intern service id, will be used to populate Service.Marshaller and as endpoint for the Connector
-	SensorInterval int64  `json:"sensor_interval" bson:"sensor_interval"`
+	SensorInterval int64  `json:"sensor_interval" bson:"sensor_interval,truncate"`
 	Code           string `json:"code"`
 }
 

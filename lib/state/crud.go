@@ -22,7 +22,6 @@ import (
 	"github.com/SENERGY-Platform/moses/lib/jwt"
 	"github.com/SENERGY-Platform/platform-connector-lib/model"
 	"github.com/cbroglie/mustache"
-	"github.com/globalsign/mgo"
 	"github.com/google/uuid"
 	"log"
 	"strings"
@@ -621,7 +620,7 @@ func (this *StateRepo) CreateTemplate(jwt jwt.Jwt, request CreateTemplateRequest
 
 func (this *StateRepo) UpdateTemplate(jwt jwt.Jwt, request UpdateTemplateRequest) (result RoutineTemplate, exists bool, err error) {
 	result, err = this.Persistence.GetTemplate(request.Id)
-	if err == mgo.ErrNotFound {
+	if errors.Is(err, ErrNotFound) {
 		log.Println("WARNING: template not found", request.Id)
 		return result, false, nil
 	}
@@ -643,7 +642,7 @@ func (this *StateRepo) ReadTemplate(jwt jwt.Jwt, id string) (result RoutineTempl
 		return result, true, nil
 	}
 	result, err = this.Persistence.GetTemplate(id)
-	if err == mgo.ErrNotFound {
+	if errors.Is(err, ErrNotFound) {
 		return result, false, nil
 	}
 	return result, true, err

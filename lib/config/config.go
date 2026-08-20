@@ -34,7 +34,6 @@ type Config struct {
 	ServerPort             string        `json:"server_port"`
 	LogLevel               string        `json:"log_level"`
 	WorldCollectionName    string        `json:"world_collection_name"`
-	GraphCollectionName    string        `json:"graph_collection_name"`
 	TemplateCollectionName string        `json:"template_collection_name"`
 	MongoUrl               string        `json:"mongo_url" config:"secret"`
 	MongoTable             string        `json:"mongo_table"`

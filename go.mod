@@ -6,7 +6,6 @@ require (
 	github.com/SENERGY-Platform/platform-connector-lib v0.0.0-20251218071208-0c4d789e51e8
 	github.com/bradfitz/gomemcache v0.0.0-20230905024940-24af94b03874 // indirect
 	github.com/cbroglie/mustache v1.4.0
-	github.com/globalsign/mgo v0.0.0-20181015135952-eeefdecb41b8
 	github.com/google/uuid v1.6.0
 	github.com/julienschmidt/httprouter v1.3.0
 	github.com/robertkrimen/otto v0.4.0
@@ -22,6 +21,7 @@ require (
 	github.com/docker/go-connections v0.6.0
 	github.com/testcontainers/testcontainers-go v0.40.0
 	github.com/testcontainers/testcontainers-go/modules/kafka v0.40.0
+	go.mongodb.org/mongo-driver v1.16.1
 )
 
 require (
@@ -121,7 +121,6 @@ require (
 	github.com/xdg-go/stringprep v1.0.4 // indirect
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	go.mongodb.org/mongo-driver v1.16.1 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.64.0 // indirect
 	go.opentelemetry.io/otel v1.39.0 // indirect
