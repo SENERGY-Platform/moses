@@ -149,7 +149,7 @@ type CreateChangeRoutineByTemplateRequest struct {
 }
 
 type UpdateChangeRoutineByTemplateRequest struct {
-	RoutineId string            `json:"routine_id""`
+	RoutineId string            `json:"routine_id"`
 	TemplId   string            `json:"templ_id"`
 	Interval  int64             `json:"interval"`
 	Parameter map[string]string `json:"parameter"`
