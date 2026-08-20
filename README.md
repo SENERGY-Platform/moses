@@ -1,15 +1,18 @@
 # My Own Smart Environment Simulator (MOSES)
-A simulator for smart environments
+A simulator for smart environments in the SENERGY platform.
 
 ## Dependencies
-* Persists data on Mongodb
-* Calls the Iot-Repository from the SEPL-Project
-* Publishes messages to Kafka (+Zookeeper)
-* tests create docker containers
-    * testing host needs access to fgseitsrancher.wifa.intern.uni-leipzig.de:5000/iot-ontology docker image
-    * testing host needs access to fgseitsrancher.wifa.intern.uni-leipzig.de:5000/iot-device-repository docker image
-    * testing host needs access to fgseitsrancher.wifa.intern.uni-leipzig.de:5000/permissionsearch docker image
-* Golang library dependencies are managed by go.mod file
+* Persists data in MongoDB (official go driver `go.mongodb.org/mongo-driver`)
+* Uses the SENERGY device-repository/device-manager to manage device types and devices
+* Uses permissions-v2 for resource permissions
+* Publishes and consumes messages via Kafka (through `platform-connector-lib`)
+* Golang library dependencies are managed by the go.mod file
+
+## Tests
+* `go test -short ./...` runs the fast unit tests only
+* `go test ./...` additionally runs the integration tests, which start docker
+  containers via testcontainers (kafka, mongodb, memcached,
+  ghcr.io/senergy-platform/device-repository, ghcr.io/senergy-platform/permissions-v2)
 
 ## State-Hierarchies 
 
