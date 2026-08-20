@@ -54,6 +54,10 @@ func New(config config.Config, ctx context.Context) (err error) {
 		DeviceRepoUrl:            config.DeviceRepoUrl,
 		KafkaResponseTopic:       config.KafkaResponseTopic,
 
+		//create topics before consuming: if a consumer group joins before its topic exists,
+		//the group can become stable with 0 assigned partitions and never receive messages
+		InitTopics: true,
+
 		DeviceExpiration:         int32(config.DeviceExpiration),
 		DeviceTypeExpiration:     int32(config.DeviceTypeExpiration),
 		CharacteristicExpiration: int32(config.CharacteristicExpiration),
