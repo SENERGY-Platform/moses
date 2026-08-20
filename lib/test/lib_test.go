@@ -36,6 +36,9 @@ import (
 )
 
 func TestStartup(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test with docker containers in short mode")
+	}
 	wg := &sync.WaitGroup{}
 	defer wg.Wait()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -96,7 +99,8 @@ func checkDevice(t *testing.T, config config.Config, device state.DeviceMsg) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, _ := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	req.WithContext(ctx)
 	req.Header.Set("Authorization", string(helper.AdminJwt))
 	req.Header.Set("Accept", "application/json")
@@ -211,7 +215,8 @@ func createTestWorld(t *testing.T, config config.Config) (worldId string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, _ := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	req.WithContext(ctx)
 	req.Header.Set("Authorization", string(helper.AdminJwt))
 	req.Header.Set("Accept", "application/json")
@@ -253,7 +258,8 @@ func createTestRoom(t *testing.T, config config.Config, worldId string) (roomId 
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, _ := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	req.WithContext(ctx)
 	req.Header.Set("Authorization", string(helper.AdminJwt))
 	req.Header.Set("Accept", "application/json")
@@ -295,7 +301,8 @@ func createMosesDevice(t *testing.T, config config.Config, worldId string, roomI
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, _ := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	req.WithContext(ctx)
 	req.Header.Set("Authorization", string(helper.AdminJwt))
 	req.Header.Set("Accept", "application/json")

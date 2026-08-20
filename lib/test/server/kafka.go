@@ -31,31 +31,41 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-func Kafka(ctx context.Context, wg *sync.WaitGroup) (kafkaUrl string, err error) {
+// Kafka starts a kafka test container with two client listeners:
+// hostKafkaUrl (localhost:<port>) for the test process on the host and
+// containerKafkaUrl (<docker-gateway-ip>:<port>) for other test containers.
+// The docker gateway ip is not reachable from the host on Docker Desktop/WSL2,
+// which is why the host gets its own listener.
+func Kafka(ctx context.Context, wg *sync.WaitGroup) (hostKafkaUrl string, containerKafkaUrl string, err error) {
 	kafkaport, err := GetFreePort()
 	if err != nil {
-		return kafkaUrl, err
+		return hostKafkaUrl, containerKafkaUrl, err
+	}
+	hostport, err := GetFreePort()
+	if err != nil {
+		return hostKafkaUrl, containerKafkaUrl, err
 	}
 	provider, err := testcontainers.NewDockerProvider(testcontainers.DefaultNetwork("bridge"))
 	if err != nil {
-		return kafkaUrl, err
+		return hostKafkaUrl, containerKafkaUrl, err
 	}
 	hostIp, err := provider.GetGatewayIP(ctx)
 	if err != nil {
-		return kafkaUrl, err
+		return hostKafkaUrl, containerKafkaUrl, err
 	}
-	kafkaUrl = hostIp + ":" + strconv.Itoa(kafkaport)
-	log.Println("host ip: ", hostIp)
-	log.Println("host port: ", kafkaport)
-	log.Println("kafkaUrl url: ", kafkaUrl)
+	containerKafkaUrl = hostIp + ":" + strconv.Itoa(kafkaport)
+	hostKafkaUrl = "localhost:" + strconv.Itoa(hostport)
+	log.Println("gateway ip: ", hostIp)
+	log.Println("container kafka url: ", containerKafkaUrl)
+	log.Println("host kafka url: ", hostKafkaUrl)
 
 	c, err := kafka_test.Run(ctx, "confluentinc/confluent-local:7.5.0",
-		testcontainers.WithExposedPorts(strconv.Itoa(kafkaport)+":9093/tcp"),
+		testcontainers.WithExposedPorts(strconv.Itoa(kafkaport)+":9093/tcp", strconv.Itoa(hostport)+":9095/tcp"),
 		testcontainers.WithEnv(
 			map[string]string{
-				"KAFKA_LISTENERS":                                "PLAINTEXT://0.0.0.0:9093,BROKER://0.0.0.0:9092,CONTROLLER://0.0.0.0:9094",
+				"KAFKA_LISTENERS":                                "PLAINTEXT://0.0.0.0:9093,BROKER://0.0.0.0:9092,CONTROLLER://0.0.0.0:9094,HOST://0.0.0.0:9095",
 				"KAFKA_REST_BOOTSTRAP_SERVERS":                   "PLAINTEXT://0.0.0.0:9093,BROKER://0.0.0.0:9092,CONTROLLER://0.0.0.0:9094",
-				"KAFKA_LISTENER_SECURITY_PROTOCOL_MAP":           "BROKER:PLAINTEXT,PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT",
+				"KAFKA_LISTENER_SECURITY_PROTOCOL_MAP":           "BROKER:PLAINTEXT,PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,HOST:PLAINTEXT",
 				"KAFKA_INTER_BROKER_LISTENER_NAME":               "BROKER",
 				"KAFKA_BROKER_ID":                                "1",
 				"KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR":         "1",
@@ -72,7 +82,7 @@ func Kafka(ctx context.Context, wg *sync.WaitGroup) (kafkaUrl string, err error)
 		testcontainers.WithLifecycleHooks(testcontainers.ContainerLifecycleHooks{
 			PostStarts: []testcontainers.ContainerHook{
 				func(ctx context.Context, c testcontainers.Container) error {
-					if err := copyStarterScript(ctx, c, kafkaUrl); err != nil {
+					if err := copyStarterScript(ctx, c, containerKafkaUrl, hostKafkaUrl); err != nil {
 						log.Println("ERROR: copy starter script: ", err)
 						return fmt.Errorf("copy starter script: %w", err)
 					}
@@ -88,7 +98,7 @@ func Kafka(ctx context.Context, wg *sync.WaitGroup) (kafkaUrl string, err error)
 		}),
 	)
 	if err != nil {
-		return kafkaUrl, err
+		return hostKafkaUrl, containerKafkaUrl, err
 	}
 	wg.Add(1)
 	go func() {
@@ -97,7 +107,7 @@ func Kafka(ctx context.Context, wg *sync.WaitGroup) (kafkaUrl string, err error)
 		log.Println("DEBUG: remove container kafka", c.Terminate(context.Background()))
 	}()
 
-	return kafkaUrl, err
+	return hostKafkaUrl, containerKafkaUrl, err
 }
 
 func GetFreePort() (int, error) {
@@ -114,7 +124,7 @@ func GetFreePort() (int, error) {
 	return listener.Addr().(*net.TCPAddr).Port, nil
 }
 
-func copyStarterScript(ctx context.Context, c testcontainers.Container, kafkaUrl string) error {
+func copyStarterScript(ctx context.Context, c testcontainers.Container, containerKafkaUrl string, hostKafkaUrl string) error {
 	const publicPort = nat.Port("9093/tcp")
 	const starterScript = "/usr/sbin/testcontainers_start.sh"
 	// starterScript {
@@ -140,7 +150,7 @@ echo '' > /etc/confluent/docker/ensure
 
 	hostname := inspect.Config.Hostname
 
-	scriptContent := fmt.Sprintf(starterScriptContent, "PLAINTEXT://"+kafkaUrl, hostname)
+	scriptContent := fmt.Sprintf(starterScriptContent, "PLAINTEXT://"+containerKafkaUrl+",HOST://"+hostKafkaUrl, hostname)
 
 	if err := c.CopyToContainer(ctx, []byte(scriptContent), starterScript, 0o755); err != nil {
 		return fmt.Errorf("copy to container: %w", err)

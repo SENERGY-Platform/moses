@@ -28,7 +28,7 @@ func Memcached(ctx context.Context, wg *sync.WaitGroup) (hostPort string, ipAddr
 	log.Println("start memcached")
 	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image:           "memcached:1.5.12-alpine",
+			Image:           "memcached:1.6-alpine",
 			Tmpfs:           map[string]string{},
 			WaitingFor:      wait.ForListeningPort("11211/tcp"),
 			AlwaysPullImage: true,

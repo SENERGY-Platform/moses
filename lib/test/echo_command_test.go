@@ -38,6 +38,9 @@ import (
 )
 
 func TestEchoCommand(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test with docker containers in short mode")
+	}
 	wg := &sync.WaitGroup{}
 	defer wg.Wait()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -132,6 +135,9 @@ func tryEchoCommandToDevice(t *testing.T, config config.Config, protocol model.P
 		MaxBytes:       int(config.KafkaConsumerMaxBytes),
 		MaxWait:        100 * time.Millisecond,
 		TopicConfigMap: config.KafkaTopicConfigs,
+		//create the topic before joining: a consumer group that joins before its topic exists
+		//gets 0 partitions assigned and only recovers on the 1 minute partition watch interval
+		InitTopic: true,
 	}, func(topic string, msg []byte, time time.Time) error {
 		mux.Lock()
 		defer mux.Unlock()
@@ -176,7 +182,14 @@ func tryEchoCommandToDevice(t *testing.T, config config.Config, protocol model.P
 		t.Fatal(err)
 	}
 	log.Println("wait for command handling")
-	time.Sleep(10 * time.Second)
+	if !waitFor(60*time.Second, func() bool {
+		mux.Lock()
+		defer mux.Unlock()
+		return len(responses) > 0
+	}) {
+		t.Fatal("no command response received within 60s")
+	}
+	time.Sleep(1 * time.Second) //settle: would catch unexpected duplicate responses
 
 	mux.Lock()
 	defer mux.Unlock()
@@ -207,7 +220,8 @@ func setServiceCode(t *testing.T, config config.Config, service state.Service, c
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, _ := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	req.WithContext(ctx)
 	req.Header.Set("Authorization", string(helper.AdminJwt))
 	req.Header.Set("Accept", "application/json")

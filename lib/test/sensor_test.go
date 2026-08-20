@@ -38,6 +38,9 @@ import (
 )
 
 func TestSensor(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test with docker containers in short mode")
+	}
 	wg := &sync.WaitGroup{}
 	defer wg.Wait()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -116,6 +119,9 @@ func trySensorFromDevice(t *testing.T, config config.Config, protocol model.Prot
 		MaxBytes:       int(config.KafkaConsumerMaxBytes),
 		MaxWait:        100 * time.Millisecond,
 		TopicConfigMap: config.KafkaTopicConfigs,
+		//create the topic before joining: a consumer group that joins before its topic exists
+		//gets 0 partitions assigned and only recovers on the 1 minute partition watch interval
+		InitTopic: true,
 	}, func(topic string, msg []byte, time time.Time) error {
 		mux.Lock()
 		defer mux.Unlock()
@@ -134,13 +140,16 @@ func trySensorFromDevice(t *testing.T, config config.Config, protocol model.Prot
 		t.Fatal(err)
 	}
 
-	time.Sleep(5 * time.Second)
+	if !waitFor(60*time.Second, func() bool {
+		mux.Lock()
+		defer mux.Unlock()
+		return len(events) > 0
+	}) {
+		t.Fatal("no sensor events received within 60s")
+	}
 
 	mux.Lock()
 	defer mux.Unlock()
-	if len(events) == 0 {
-		t.Fatal("unexpected event count", events)
-	}
 	event := events[0]
 	if event.DeviceId != device.ExternalRef {
 		t.Fatal("unexpected envelope", event)
@@ -188,7 +197,8 @@ func setSensorTime(t *testing.T, config config.Config, deviceMsg state.DeviceMsg
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, _ := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	req.WithContext(ctx)
 	req.Header.Set("Authorization", string(helper.AdminJwt))
 	req.Header.Set("Accept", "application/json")

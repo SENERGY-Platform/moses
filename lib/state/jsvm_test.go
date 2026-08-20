@@ -79,18 +79,18 @@ func TestJsvmTimeout(t *testing.T) {
 	while(true){}
 `
 	testmoses := JsvmTestMoses{State: map[string]interface{}{}}
-	done := false
+	done := make(chan error, 1)
 	go func() {
-		time.Sleep(1 * time.Second)
-		if !done {
-			t.Fatal("slept to long")
-		}
+		done <- run(script, testmoses, 100*time.Millisecond, nil)
 	}()
-	err := run(script, testmoses, 100*time.Millisecond, nil)
-	if err == nil {
-		t.Fatal("missing error; should have thrown 'Some code took to long' after 100 ms")
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("missing error; should have thrown 'Some code took to long' after 100 ms")
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("run() did not return within 1s despite 100ms js timeout")
 	}
-	done = true
 }
 
 //interval changed to seconds => invalid test scenarios

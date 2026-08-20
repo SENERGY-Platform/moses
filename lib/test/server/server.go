@@ -21,6 +21,7 @@ import (
 	"log"
 	"net"
 	"runtime/debug"
+	"strconv"
 	"sync"
 
 	"github.com/SENERGY-Platform/moses/lib"
@@ -30,46 +31,53 @@ import (
 func New(ctx context.Context, wg *sync.WaitGroup, startConfig config.Config, keyxcloakExportLocation string) (config config.Config, err error) {
 	config = startConfig
 
-	config.KafkaUrl, err = Kafka(ctx, wg)
+	// the config used by the moses process under test lives on the host and
+	// must use localhost + mapped ports; the containers talk to each other
+	// via container ips / the docker gateway ip (not reachable from the host
+	// on Docker Desktop/WSL2)
+	hostKafkaUrl, containerKafkaUrl, err := Kafka(ctx, wg)
 	if err != nil {
 		log.Println("ERROR:", err)
 		debug.PrintStack()
 		return config, err
 	}
+	config.KafkaUrl = hostKafkaUrl
 
-	_, mongoIp, err := MongoDB(ctx, wg)
+	mongoHostPort, mongoIp, err := MongoDB(ctx, wg)
 	if err != nil {
 		log.Println("ERROR:", err)
 		debug.PrintStack()
 		return config, err
 	}
-	config.MongoUrl = "mongodb://" + mongoIp + ":27017"
+	config.MongoUrl = "mongodb://localhost:" + mongoHostPort
+	containerMongoUrl := "mongodb://" + mongoIp + ":27017"
 
-	_, permV2Ip, err := PermissionsV2(ctx, wg, config.MongoUrl, config.KafkaUrl)
+	permV2HostPort, permV2Ip, err := PermissionsV2(ctx, wg, containerMongoUrl, containerKafkaUrl)
 	if err != nil {
 		log.Println("ERROR:", err)
 		debug.PrintStack()
 		return config, err
 	}
-	config.PermissionsV2Url = "http://" + permV2Ip + ":8080"
+	config.PermissionsV2Url = "http://localhost:" + permV2HostPort
+	containerPermV2Url := "http://" + permV2Ip + ":8080"
 
-	_, ip, err := DeviceRepo(ctx, wg, config.KafkaUrl, config.MongoUrl, config.PermissionsV2Url)
+	repoHostPort, _, err := DeviceRepo(ctx, wg, containerKafkaUrl, containerMongoUrl, containerPermV2Url)
 	if err != nil {
 		log.Println("ERROR:", err)
 		debug.PrintStack()
 		return config, err
 	}
-	config.DeviceRepoUrl = "http://" + ip + ":8080"
+	config.DeviceRepoUrl = "http://localhost:" + repoHostPort
 	config.DeviceManagerUrl = config.DeviceRepoUrl
 
-	_, ip, err = Memcached(ctx, wg)
+	memcachedHostPort, _, err := Memcached(ctx, wg)
 	if err != nil {
 		log.Println("ERROR:", err)
 		debug.PrintStack()
 		return config, err
 	}
-	config.IotCacheUrls = ip + ":11211"
-	config.TokenCacheUrls = ip + ":11211"
+	config.IotCacheUrls = "localhost:" + memcachedHostPort
+	config.TokenCacheUrls = config.IotCacheUrls
 
 	config.AuthEndpoint, err = Keycloak(ctx, wg)
 	if err != nil {
@@ -79,6 +87,14 @@ func New(ctx context.Context, wg *sync.WaitGroup, startConfig config.Config, key
 	}
 	config.AuthClientSecret = "d61daec4-40d6-4d3e-98c9-f3b515696fc6"
 	config.AuthClientId = "connector"
+
+	apiPort, err := getFreePort()
+	if err != nil {
+		log.Println("ERROR:", err)
+		debug.PrintStack()
+		return config, err
+	}
+	config.ServerPort = strconv.Itoa(apiPort)
 
 	err = lib.New(config, ctx)
 	if err != nil {
