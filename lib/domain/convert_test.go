@@ -194,7 +194,10 @@ func TestFromLegacyWorldLeavesTheCharacteristicToTheDeviceRepository(t *testing.
 	}
 }
 
-func TestFromLegacyWorldReportsAnUnmappedWorldChangeRoutine(t *testing.T) {
+// A world or zone routine is not migrated by decision: it evolves a state that
+// no channel can publish, because channels belong to assets. Zone measurements
+// are modelled as their own assets instead of being translated.
+func TestFromLegacyWorldDoesNotMigrateAWorldChangeRoutine(t *testing.T) {
 	world := legacyWorld()
 	world.ChangeRoutines = map[string]state.ChangeRoutine{
 		"routine-key": {Id: "routine-world", Interval: 15, Code: "moses.world.state.set(\"temperature\", 1);"},
@@ -202,26 +205,83 @@ func TestFromLegacyWorldReportsAnUnmappedWorldChangeRoutine(t *testing.T) {
 	_, problems := convert(t, world)
 	assertProblemMentions(t, problems, "routine-world")
 	assertProblemMentions(t, problems, "15s")
-	assertProblemMentions(t, problems, "legacy:change_routines[routine-key]")
+	assertProblemMentions(t, problems, "deliberately not migrated")
+	assertProblemMentions(t, problems, "legacy:change_routines_not_migrated[routine-key]")
 }
 
-func TestFromLegacyWorldReportsAnUnmappedRoomChangeRoutine(t *testing.T) {
+func TestFromLegacyWorldDoesNotMigrateARoomChangeRoutine(t *testing.T) {
 	world := legacyWorld()
 	world.Rooms["room-key"].ChangeRoutines = map[string]state.ChangeRoutine{
 		"routine-key": {Id: "routine-room", Interval: 20, Code: "moses.room.state.set(\"humidity\", 1);"},
 	}
 	_, problems := convert(t, world)
 	assertProblemMentions(t, problems, "routine-room")
-	assertProblemMentions(t, problems, "legacy:rooms[room-key].change_routines[routine-key]")
+	assertProblemMentions(t, problems, "deliberately not migrated")
+	assertProblemMentions(t, problems, "legacy:rooms[room-key].change_routines_not_migrated[routine-key]")
 }
 
-func TestFromLegacyWorldReportsAnUnmappedDeviceChangeRoutine(t *testing.T) {
+// This is what the source interval is for: the routine keeps its own 5 seconds
+// while the channel keeps publishing every 30, as the legacy pair did.
+func TestFromLegacyWorldAttachesADeviceChangeRoutineToTheChannelReadingItsState(t *testing.T) {
 	world := legacyWorld()
 	world.Rooms["room-key"].Devices["device-key"].ChangeRoutines = map[string]state.ChangeRoutine{
 		"routine-key": {Id: "routine-device", Interval: 5, Code: "moses.device.state.set(\"celsius\", 1);"},
 	}
+	env, problems := convert(t, world)
+	assertNoProblems(t, problems)
+
+	channel := firstChannel(t, env)
+	if channel.Source.IntervalSeconds != 5 {
+		t.Errorf("expected the routine interval 5 on the source, got %d", channel.Source.IntervalSeconds)
+	}
+	if channel.IntervalSeconds != 30 {
+		t.Errorf("expected the publish interval to stay at 30, got %d", channel.IntervalSeconds)
+	}
+	if !strings.Contains(channel.Source.Script.Code, "moses.device.state.set(\"celsius\", 1);") {
+		t.Errorf("the routine script was not carried into the source: %q", channel.Source.Script.Code)
+	}
+	if !strings.Contains(channel.Source.Script.Code, "moses.service.send") {
+		t.Errorf("the legacy service script was lost: %q", channel.Source.Script.Code)
+	}
+}
+
+// A routine writing two states is attached once. Both values come out of one
+// draw, so running the physics twice would decouple them.
+func TestFromLegacyWorldAttachesATwoStateRoutineToOneChannelOnly(t *testing.T) {
+	world := legacyWorld()
+	device := world.Rooms["room-key"].Devices["device-key"]
+	device.Services["second"] = state.Service{
+		Id: "service-2", Name: "getPressureService", ExternalRef: "urn:infai:ses:service:2",
+		SensorInterval: 30, Code: "moses.service.send(moses.device.state.get(\"bar\"));",
+	}
+	device.ChangeRoutines = map[string]state.ChangeRoutine{
+		"routine-key": {Id: "routine-two", Interval: 5,
+			Code: "moses.device.state.set(\"bar\", 1); moses.device.state.set(\"celsius\", 2);"},
+	}
+	env, problems := convert(t, world)
+	assertNoProblems(t, problems)
+
+	withSource, plain := 0, 0
+	for _, channel := range env.Zones[0].Assets[0].Channels {
+		if channel.Source.IntervalSeconds == 5 {
+			withSource++
+		} else if channel.Source.IntervalSeconds == 0 {
+			plain++
+		}
+	}
+	if withSource != 1 || plain != 1 {
+		t.Errorf("expected one channel to carry the routine and one to stay a reader, got %d and %d", withSource, plain)
+	}
+}
+
+func TestFromLegacyWorldReportsADeviceChangeRoutineNoChannelReads(t *testing.T) {
+	world := legacyWorld()
+	world.Rooms["room-key"].Devices["device-key"].ChangeRoutines = map[string]state.ChangeRoutine{
+		"routine-key": {Id: "routine-device", Interval: 5, Code: "moses.device.state.set(\"unread\", 1);"},
+	}
 	_, problems := convert(t, world)
 	assertProblemMentions(t, problems, "routine-device")
+	assertProblemMentions(t, problems, "writes no device state that a channel of this asset reads")
 	assertProblemMentions(t, problems, "legacy:rooms[room-key].devices[device-key].change_routines[routine-key]")
 }
 
@@ -540,23 +600,47 @@ func TestFromLegacyWorldConvertsTheIndustryExportIntoTheExpectedShape(t *testing
 	}
 }
 
-func TestFromLegacyWorldReportsEveryChangeRoutineOfTheIndustryExport(t *testing.T) {
-	_, problems := convert(t, industryWorld(t))
-	routineProblems := 0
+// The whole point of the migration, measured against the real export: every one
+// of the 18 device routines finds its channel, and only the 3 room routines are
+// left, which are not migrated by decision.
+func TestFromLegacyWorldAttachesEveryDeviceRoutineOfTheIndustryExport(t *testing.T) {
+	env, problems := convert(t, industryWorld(t))
+
+	unmatched, notMigrated := 0, 0
 	for _, problem := range problems {
 		if strings.Contains(problem.Path, "change_routines[") {
-			routineProblems++
+			unmatched++
+		}
+		if strings.Contains(problem.Path, "change_routines_not_migrated[") {
+			notMigrated++
 		}
 	}
-	if routineProblems != 21 {
-		t.Errorf("expected 21 unmapped change routines, got %d:\n%v", routineProblems, problemMessages(problems))
+	if unmatched != 0 {
+		t.Errorf("expected every device routine to be attached, %d were not:\n%v", unmatched, problemMessages(problems))
+	}
+	if notMigrated != 3 {
+		t.Errorf("expected the 3 room routines to be reported as not migrated, got %d", notMigrated)
+	}
+
+	withSource := 0
+	for _, zone := range env.Zones {
+		for _, asset := range zone.Assets {
+			for _, channel := range asset.Channels {
+				if channel.Source.IntervalSeconds > 0 {
+					withSource++
+				}
+			}
+		}
+	}
+	if withSource != 18 {
+		t.Errorf("expected 18 channels to carry a routine on its own interval, got %d", withSource)
 	}
 }
 
-func TestFromLegacyWorldReportsNothingButChangeRoutinesForTheIndustryExport(t *testing.T) {
+func TestFromLegacyWorldReportsNothingButRoutinesForTheIndustryExport(t *testing.T) {
 	_, problems := convert(t, industryWorld(t))
 	for _, problem := range problems {
-		if !strings.Contains(problem.Path, "change_routines[") {
+		if !strings.Contains(problem.Path, "change_routines") {
 			t.Errorf("unexpected problem: %v", problem)
 		}
 	}
@@ -622,4 +706,60 @@ func TestFromLegacyWorldMakesEveryIndustryChannelASensor(t *testing.T) {
 			}
 		}
 	}
+}
+
+// The migration is only faithful if both intervals survive it: every device
+// routine's interval reappears as a source interval, and every legacy
+// sensor_interval as a publish interval. Both sides are computed from the real
+// export rather than written down, so the test cannot drift from the fixture.
+func TestFromLegacyWorldPreservesBothIntervalsOfTheIndustryExport(t *testing.T) {
+	world := industryWorld(t)
+
+	wantSource, wantPublish := []int64{}, []int64{}
+	for _, room := range world.Rooms {
+		for _, device := range room.Devices {
+			for _, routine := range device.ChangeRoutines {
+				wantSource = append(wantSource, routine.Interval)
+			}
+			for _, service := range device.Services {
+				wantPublish = append(wantPublish, service.SensorInterval)
+			}
+		}
+	}
+
+	env, _ := convert(t, world)
+	gotSource, gotPublish := []int64{}, []int64{}
+	for _, zone := range env.Zones {
+		for _, asset := range zone.Assets {
+			for _, channel := range asset.Channels {
+				if channel.Source.IntervalSeconds > 0 {
+					gotSource = append(gotSource, channel.Source.IntervalSeconds)
+				}
+				gotPublish = append(gotPublish, channel.IntervalSeconds)
+			}
+		}
+	}
+
+	//a comparison of two empty lists would pass and prove nothing
+	if len(wantSource) != 18 || len(wantPublish) != 24 {
+		t.Fatalf("the fixture changed: expected 18 routines and 24 services, got %d and %d", len(wantSource), len(wantPublish))
+	}
+	if !sameIntervals(wantSource, gotSource) {
+		t.Errorf("the routine intervals were not preserved as source intervals:\nlegacy %v\nsource %v",
+			sortedIntervals(wantSource), sortedIntervals(gotSource))
+	}
+	if !sameIntervals(wantPublish, gotPublish) {
+		t.Errorf("the sensor intervals were not preserved as publish intervals:\nlegacy  %v\npublish %v",
+			sortedIntervals(wantPublish), sortedIntervals(gotPublish))
+	}
+}
+
+func sortedIntervals(in []int64) []int64 {
+	out := append([]int64{}, in...)
+	sort.Slice(out, func(a, b int) bool { return out[a] < out[b] })
+	return out
+}
+
+func sameIntervals(a []int64, b []int64) bool {
+	return reflect.DeepEqual(sortedIntervals(a), sortedIntervals(b))
 }

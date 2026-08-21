@@ -165,6 +165,12 @@ const (
 type Source struct {
 	Kind SourceKind `json:"kind" bson:"kind"`
 
+	// IntervalSeconds is how often the source computes, which is not the same as
+	// how often the channel publishes. Zero means it computes when the channel
+	// publishes. A legacy world evolved its state on one interval and read it out
+	// on another, and folding the two together would change the simulation.
+	IntervalSeconds int64 `json:"interval_seconds,omitempty" bson:"interval_seconds,omitempty,truncate"`
+
 	Script  *ScriptSource  `json:"script,omitempty" bson:"script,omitempty"`
 	Profile *ProfileSource `json:"profile,omitempty" bson:"profile,omitempty"`
 	Dataset *DatasetSource `json:"dataset,omitempty" bson:"dataset,omitempty"`

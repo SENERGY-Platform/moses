@@ -115,6 +115,36 @@ type channelBinding struct {
 	asset   assetRef
 	channel domain.Channel
 	code    string
+
+	// sourceInterval is how often the script runs. Zero means it runs when the
+	// channel publishes, which is the only behaviour the legacy runtime had.
+	sourceInterval int64
+}
+
+// latest holds the value a source produced but has not published yet. It exists
+// only for a channel whose source runs more often than the channel publishes:
+// the source goroutine writes, the publish goroutine reads.
+//
+// The value is kept, not consumed. A legacy sensor re-read the state on every
+// tick, so a publish interval that elapses without the source having run again
+// sent the previous value rather than nothing.
+type latest struct {
+	mux   sync.Mutex
+	value interface{}
+	set   bool
+}
+
+func (this *latest) put(value interface{}) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	this.value = value
+	this.set = true
+}
+
+func (this *latest) get() (interface{}, bool) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	return this.value, this.set
 }
 
 // newGeneration indexes a definition. It reports what it cannot execute rather
@@ -180,17 +210,27 @@ func (this *generation) addAsset(envId string, zoneId string, asset domain.Asset
 			continue
 		}
 		binding := channelBinding{zoneId: zoneId, asset: ref, channel: channel, code: channel.Source.Script.Code}
-		if channel.Direction == domain.Sensor && channel.IntervalSeconds > 0 {
-			//an interval this side of the limit is a ticker; beyond it, seconds
-			//times time.Second overflows int64 and produces a negative duration,
-			//which makes time.NewTicker panic and would take the process down
-			if channel.IntervalSeconds > maxIntervalSeconds {
-				util.Logger.Warn("channel interval is out of range, the channel does not tick",
-					"environment", envId, "channel", channel.Id,
-					"interval_seconds", channel.IntervalSeconds, "limit", maxIntervalSeconds)
-			} else {
-				this.sensors = append(this.sensors, binding)
-			}
+		//seconds times time.Second overflows int64 beyond this limit and produces
+		//a negative duration, which makes time.NewTicker panic and would take the
+		//process down. Validation only rejects a negative interval.
+		if channel.Source.IntervalSeconds > maxIntervalSeconds {
+			util.Logger.Warn("source interval is out of range, it is ignored and the source runs when the channel publishes",
+				"environment", envId, "channel", channel.Id,
+				"interval_seconds", channel.Source.IntervalSeconds, "limit", maxIntervalSeconds)
+		} else {
+			binding.sourceInterval = channel.Source.IntervalSeconds
+		}
+		publishes := channel.Direction == domain.Sensor && channel.IntervalSeconds > 0
+		if publishes && channel.IntervalSeconds > maxIntervalSeconds {
+			util.Logger.Warn("channel interval is out of range, the channel does not tick",
+				"environment", envId, "channel", channel.Id,
+				"interval_seconds", channel.IntervalSeconds, "limit", maxIntervalSeconds)
+			publishes = false
+		}
+		//a source interval makes the channel tick even when nothing is published
+		//on a schedule: that is a state the other channels of the asset read
+		if publishes || binding.sourceInterval > 0 {
+			this.sensors = append(this.sensors, binding)
 		}
 		//a channel is addressable as a command whichever direction it has: the
 		//legacy runtime ran the code of any service a command named, and the

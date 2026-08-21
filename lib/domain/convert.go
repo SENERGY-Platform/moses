@@ -223,10 +223,21 @@ func (this *converter) asset(path string, roomKey string, mapKey string, device 
 		this.note(path, false, "the legacy device had the image %v, which the new model does not carry", device.ImageUrl)
 	}
 
-	this.reportRoutines(fmt.Sprintf("rooms[%s].devices[%s]", roomKey, mapKey), "device", device.ChangeRoutines)
-
 	for _, serviceKey := range sortedByName(device.Services, func(service state.Service) string { return service.Name }) {
 		result.Channels = append(result.Channels, this.channel(fmt.Sprintf("%s.channels[%d]", path, len(result.Channels)), serviceKey, device.Services[serviceKey]))
+	}
+
+	//after the channels exist: a routine is attached to the channel that
+	//publishes the state it writes, and keeps its own interval
+	for _, key := range attachRoutines(result.Channels, device.ChangeRoutines) {
+		routine := device.ChangeRoutines[key]
+		id := routine.Id
+		if id == "" {
+			id = key
+		}
+		this.note(fmt.Sprintf("rooms[%s].devices[%s].change_routines[%s]", roomKey, mapKey, key), true,
+			"the device change routine %v (interval %vs) writes no device state that a channel of this asset reads, so it could not be attached to one: its script was not migrated and has to be re-created as a channel source",
+			id, routine.Interval)
 	}
 	return result
 }
@@ -272,14 +283,14 @@ func (this *converter) channel(path string, mapKey string, service state.Service
 	}
 }
 
-// reportRoutines turns every change routine into a Problem. This is the one real
-// information loss of the migration: the new model has sources per channel and
-// nothing per zone or asset, so a routine that wrote several states at once has
-// no equivalent and has to be split up by hand.
+// reportRoutines reports the world and zone routines, which are not migrated by
+// decision rather than by limitation: they evolve a zone state, and a zone has no
+// channels. Zone level measurements are modelled as their own assets with their
+// own channels instead of being translated.
 func (this *converter) reportRoutines(pathPrefix string, scope string, routines map[string]state.ChangeRoutine) {
-	path := "change_routines"
+	path := "change_routines_not_migrated"
 	if pathPrefix != "" {
-		path = pathPrefix + ".change_routines"
+		path = pathPrefix + ".change_routines_not_migrated"
 	}
 	keys := make([]string, 0, len(routines))
 	for key := range routines {
@@ -293,8 +304,8 @@ func (this *converter) reportRoutines(pathPrefix string, scope string, routines 
 			id = key
 		}
 		this.note(fmt.Sprintf("%s[%s]", path, key), true,
-			"the %v change routine %v (interval %vs) has no equivalent in the new model, where only a channel has a source: its script was not migrated and has to be re-created as a channel source",
-			scope, id, routine.Interval)
+			"the %v change routine %v (interval %vs) is deliberately not migrated: it evolves a %v state, and a %v has no channels. Model the measurement as an asset with its own channels instead",
+			scope, id, routine.Interval, scope, scope)
 	}
 }
 

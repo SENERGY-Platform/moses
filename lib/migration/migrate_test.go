@@ -127,11 +127,14 @@ func TestPlanConvertsAWorldIntoAWritablePlan(t *testing.T) {
 	if zones != 1 || assets != 1 || channels != 1 {
 		t.Errorf("expected 1/1/1 zones/assets/channels, got %d/%d/%d", zones, assets, channels)
 	}
-	if len(plan.UnmappedRoutines()) != 3 {
-		t.Errorf("expected the world, room and device routine to be reported, got %v", problemPaths(plan.UnmappedRoutines()))
+	//the device routine writes a state no channel of the fixture reads, so it
+	//stays unmapped; the world and room routines are not migrated by decision
+	//and land in the other findings
+	if len(plan.UnmappedRoutines()) != 1 {
+		t.Errorf("expected only the device routine to be unmapped, got %v", problemPaths(plan.UnmappedRoutines()))
 	}
-	if len(plan.OtherProblems()) != 0 {
-		t.Errorf("unexpected findings: %v", plan.OtherProblems())
+	if len(plan.OtherProblems()) != 2 {
+		t.Errorf("expected the world and room routine as findings, got %v", plan.OtherProblems())
 	}
 }
 
@@ -152,7 +155,7 @@ func TestPlanSkipsAWorldThatAlreadyExistsInTheEnvironmentStore(t *testing.T) {
 	}
 	// the conversion result is still reported, so that a dry run shows what
 	// would have been written
-	if plan.Environment.Id != "world-1" || len(plan.UnmappedRoutines()) != 3 {
+	if plan.Environment.Id != "world-1" || len(plan.UnmappedRoutines()) != 1 {
 		t.Errorf("a skipped plan still has to carry its conversion, got %v with %d routines", plan.Environment.Id, len(plan.UnmappedRoutines()))
 	}
 }
@@ -520,14 +523,16 @@ func TestPlanConvertsTheIndustryExportIntoOneWritablePlan(t *testing.T) {
 	}
 }
 
-func TestPlanReportsEveryUnmappedChangeRoutineOfTheIndustryExport(t *testing.T) {
+// Every device routine of the real export finds a channel. What is left are the
+// three room routines, which are not migrated by decision.
+func TestPlanAttachesEveryDeviceRoutineOfTheIndustryExport(t *testing.T) {
 	plan := onlyPlan(t, Plan(industryWorlds(t), domain.IndustrialSite, nil))
-	if got := len(plan.UnmappedRoutines()); got != 21 {
-		t.Errorf("expected 21 unmapped change routines, got %d: %v", got, problemPaths(plan.UnmappedRoutines()))
+	if got := len(plan.UnmappedRoutines()); got != 0 {
+		t.Errorf("expected no unmapped change routine, got %d: %v", got, problemPaths(plan.UnmappedRoutines()))
 	}
-	//the owner is set on the fixture, so nothing else is expected to be found
-	if got := plan.OtherProblems(); len(got) != 0 {
-		t.Errorf("unexpected findings besides the change routines: %v", got)
+	//the owner is set on the fixture, so the room routines are all that is left
+	if got := plan.OtherProblems(); len(got) != 3 {
+		t.Errorf("expected the 3 room routines as findings, got %v", got)
 	}
 }
 

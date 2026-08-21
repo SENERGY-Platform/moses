@@ -496,10 +496,14 @@ func (this *Runtime) snapshotEnvs() []*environment {
 	return result
 }
 
-// runChannel is one sensor channel: a ticker that runs the script, exactly like
-// the legacy change routine, except that the interval is the channel's own.
+// runChannel is one channel on a ticker. Without a source interval it is the
+// legacy shape: one ticker, and what the script sends goes out at once.
 func (this *Runtime) runChannel(ctx context.Context, env *environment, gen *generation, binding channelBinding) {
 	defer env.runners.Done()
+	if binding.sourceInterval > 0 {
+		this.runSplitChannel(ctx, env, gen, binding)
+		return
+	}
 	ticker := time.NewTicker(time.Duration(binding.channel.IntervalSeconds) * time.Second)
 	defer ticker.Stop()
 	for {
@@ -511,6 +515,45 @@ func (this *Runtime) runChannel(ctx context.Context, env *environment, gen *gene
 			this.execute(env, gen, binding, nil, func(value interface{}) {
 				this.publish(env, binding, value)
 			})
+		}
+	}
+}
+
+// runSplitChannel drives a channel whose source computes more often than the
+// channel publishes. The source ticker evolves the state and hands its value to
+// pending; the publish ticker sends what is there.
+//
+// A channel with a source interval and no publish interval is legitimate: it
+// only evolves state that the other channels of the asset read. It then has no
+// publish ticker, and what its script sends is dropped rather than queued
+// forever - the legacy runtime had no way to express this at all, so there is no
+// behaviour to be faithful to.
+func (this *Runtime) runSplitChannel(ctx context.Context, env *environment, gen *generation, binding channelBinding) {
+	pending := &latest{}
+	source := time.NewTicker(time.Duration(binding.sourceInterval) * time.Second)
+	defer source.Stop()
+
+	publishes := binding.channel.Direction == domain.Sensor && binding.channel.IntervalSeconds > 0
+	var publishC <-chan time.Time
+	if publishes {
+		publish := time.NewTicker(time.Duration(binding.channel.IntervalSeconds) * time.Second)
+		defer publish.Stop()
+		publishC = publish.C
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-source.C:
+			this.execute(env, gen, binding, nil, pending.put)
+		case <-publishC:
+			//nothing to send before the source has run once. Skipping is right
+			//rather than sending a zero value: the channel carries a unit, and a
+			//fabricated reading is worse than a missing one.
+			if value, ok := pending.get(); ok {
+				this.publish(env, binding, value)
+			}
 		}
 	}
 }

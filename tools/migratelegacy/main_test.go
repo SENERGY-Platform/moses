@@ -533,7 +533,7 @@ func TestExitCodeIgnoresProblemsAndSkips(t *testing.T) {
 	if got := exitCode(results); got != exitClean {
 		t.Errorf("a skip is not a failure, got exit %d", got)
 	}
-	if len(plans[0].UnmappedRoutines()) == 0 {
+	if len(plans[0].Problems) == 0 {
 		t.Fatal("the fixture has to produce problems for this test to mean anything")
 	}
 	results = []worldResult{{plan: plans[0], action: actionWouldCreate}}
@@ -591,9 +591,8 @@ func TestReportOfTheIndustryFixture(t *testing.T) {
 		"contents               : 1 zone, 3 assets, 24 channels",
 		"validation             : ok",
 		"action                 : would create",
-		"UNMAPPED CHANGE ROUTINES (21) - not migrated",
-		"UNMAPPED CHANGE ROUTINES: 21 in 1 of 1 worlds",
-		"work list for the declarative sources phase",
+		"change routines        : none unmapped",
+		"UNMAPPED CHANGE ROUTINES: 0 in 0 of 1 worlds",
 		"legacy documents       : never deleted or modified by this tool",
 		"result: OK - the plan is clean.",
 	} {
@@ -601,19 +600,14 @@ func TestReportOfTheIndustryFixture(t *testing.T) {
 			t.Errorf("the report does not contain %q:\n%s", want, text)
 		}
 	}
-	//every routine is listed with its own path, not summarised
-	for _, problem := range plan.UnmappedRoutines() {
+	//the three room routines are not migrated by decision, and each is named
+	if !strings.Contains(text, "other findings (3)") {
+		t.Errorf("the three room routines have to be listed as findings:\n%s", text)
+	}
+	for _, problem := range plan.OtherProblems() {
 		if !strings.Contains(text, problem.Path) {
-			t.Errorf("the report does not list the routine %v", problem.Path)
+			t.Errorf("the report does not list the finding %v", problem.Path)
 		}
-	}
-	//the per world section is only printed when there is something to print; the
-	//summary line "other findings : 0" is not that section
-	if strings.Contains(text, "other findings (") {
-		t.Errorf("the industry export has no other findings, so none may be listed:\n%s", text)
-	}
-	if !strings.Contains(text, "other findings         : none") {
-		t.Errorf("a world without other findings has to say so:\n%s", text)
 	}
 }
 
@@ -681,8 +675,12 @@ func TestReportMarksAnEnvironmentWithoutAnOwner(t *testing.T) {
 	if !strings.Contains(text, "owner                  : (none)") {
 		t.Errorf("a missing owner has to be visible:\n%s", text)
 	}
-	if !strings.Contains(text, "other findings (1)") {
+	//the world routine is not migrated by decision and is a finding too
+	if !strings.Contains(text, "other findings (2)") {
 		t.Errorf("the missing owner has to be listed as a finding:\n%s", text)
+	}
+	if !strings.Contains(text, "deliberately not migrated") {
+		t.Errorf("the world routine has to be reported as not migrated:\n%s", text)
 	}
 }
 

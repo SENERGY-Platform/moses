@@ -169,6 +169,9 @@ func (this *validator) checkChannel(path string, channel Channel) {
 		this.fail(path+".direction", "must be %q or %q, got %q", Sensor, Actuator, channel.Direction)
 	}
 	this.claimId(path+".id", channel.Id)
+	if channel.Source.IntervalSeconds < 0 {
+		this.fail(path+".source.interval_seconds", "must not be negative")
+	}
 	if channel.IntervalSeconds < 0 {
 		this.fail(path+".interval_seconds", "must not be negative")
 	}
