@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/SENERGY-Platform/moses/lib/config"
+	"github.com/SENERGY-Platform/moses/lib/domain"
 	"github.com/SENERGY-Platform/moses/lib/state"
 	"github.com/SENERGY-Platform/moses/lib/test/helper"
 	"github.com/SENERGY-Platform/moses/lib/test/server"
@@ -93,6 +94,145 @@ func TestSensor(t *testing.T) {
 		trySensorFromDevice(t, config, protocol, deviceType, device)
 	})
 
+	t.Run("try environment sensor", func(t *testing.T) {
+		tryEnvironmentSensor(t, config, deviceType, worldId, roomId)
+	})
+
+}
+
+// tryEnvironmentSensor is the new runtime end to end: an environment stored
+// through the api has to publish for its asset exactly the way a legacy world
+// published for its device, through the same connector onto the same topic.
+//
+// The platform device is created through the legacy flow on purpose. That is
+// what a migrated environment references: the asset keeps the device id and the
+// channel keeps the service id of the world it was converted from, and those two
+// refs are what keeps the existing timeseries attached.
+func tryEnvironmentSensor(t *testing.T, conf config.Config, deviceType model.DeviceType, worldId string, roomId string) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	//a second device, and one whose legacy service interval stays 0: every event
+	//that arrives for it therefore comes from the environment runtime and not
+	//from the legacy change routines
+	device := createMosesDevice(t, conf, worldId, roomId, deviceType)
+	log.Println("wait for device creation")
+	time.Sleep(5 * time.Second)
+	checkDevice(t, conf, device)
+
+	service := model.Service{}
+	for _, s := range deviceType.Services {
+		if s.LocalId == "sepl_get" {
+			service = s
+			break
+		}
+	}
+	if service.Id == "" {
+		t.Fatal("the test device type has no sepl_get service")
+	}
+
+	mux := sync.Mutex{}
+	events := []model.Envelope{}
+	err := kafka.NewConsumer(ctx, kafka.ConsumerConfig{
+		KafkaUrl:       conf.KafkaUrl,
+		GroupId:        "testing_" + uuid.NewString(),
+		Topic:          model.ServiceIdToTopic(service.Id),
+		MinBytes:       int(conf.KafkaConsumerMinBytes),
+		MaxBytes:       int(conf.KafkaConsumerMaxBytes),
+		MaxWait:        100 * time.Millisecond,
+		TopicConfigMap: conf.KafkaTopicConfigs,
+		InitTopic:      true,
+	}, func(topic string, msg []byte, time time.Time) error {
+		resp := model.Envelope{}
+		err := json.Unmarshal(msg, &resp)
+		if err != nil {
+			return err
+		}
+		//the topic carries the events of every device of this service, the first
+		//test device included, so the envelopes are filtered by device
+		if resp.DeviceId != device.ExternalRef {
+			return nil
+		}
+		mux.Lock()
+		defer mux.Unlock()
+		events = append(events, resp)
+		return nil
+	}, func(err error) {
+		//logged and not failed: this callback runs on the consumer's own
+		//goroutine, which outlives the test function, and t.Error from there
+		//panics instead of failing the test
+		log.Println("ERROR: kafka consumer:", err)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	//the channel script is a legacy script, unchanged: it sends the value of the
+	//service's output content variable, which is exactly what the skeleton
+	//generated for a legacy service does. The platform wraps it under the name of
+	//that variable ("metrics"), and its CleanMsg drops every field the device
+	//type does not declare - so a payload that repeats the variable name, or a
+	//bare number, arrives with empty leaves. That is not a property of the new
+	//runtime; the legacy runtime behaves the same, and the assertion below is the
+	//same one the legacy test makes.
+	environmentId := uuid.NewString()
+	environment := domain.Environment{
+		Name:    "test_environment",
+		Type:    domain.IndustrialSite,
+		Context: map[string]interface{}{},
+		Zones: []domain.Zone{{
+			Name:          "test_hall",
+			Type:          domain.ZoneHall,
+			InitialStates: map[string]interface{}{},
+			Assets: []domain.Asset{{
+				Name:           "test_machine",
+				Kind:           domain.AssetMachine,
+				ExternalRef:    device.ExternalRef,
+				ExternalTypeId: device.ExternalTypeId,
+				InitialStates:  map[string]interface{}{},
+				Channels: []domain.Channel{{
+					Name:            "sepl_get",
+					Direction:       domain.Sensor,
+					ExternalRef:     service.Id,
+					IntervalSeconds: 1,
+					Source: domain.Source{Kind: domain.SourceScript, Script: &domain.ScriptSource{
+						Code: `moses.service.send({"level":7,"title":"env","updateTime":0});`,
+					}},
+				}},
+			}},
+		}},
+	}
+	stored := domain.Environment{}
+	err = helper.AdminJwt.PutJSON("http://localhost:"+conf.ServerPort+"/environments/"+environmentId, environment, &stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Id != environmentId {
+		t.Fatal("unexpected environment id", stored.Id)
+	}
+
+	if !waitFor(60*time.Second, func() bool {
+		mux.Lock()
+		defer mux.Unlock()
+		return len(events) > 0
+	}) {
+		t.Fatal("no environment sensor events received within 60s")
+	}
+
+	mux.Lock()
+	defer mux.Unlock()
+	event := events[0]
+	if event.ServiceId != service.Id {
+		t.Fatal("unexpected envelope", event)
+	}
+	var expected interface{}
+	err = json.Unmarshal([]byte(`{"metrics":{"level":7,"title":"env","updateTime":0}}`), &expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(event.Value, expected) {
+		t.Fatal(event.Value, "\n\n!=\n\n", expected)
+	}
 }
 
 func trySensorFromDevice(t *testing.T, config config.Config, protocol model.Protocol, deviceType model.DeviceType, device state.DeviceMsg) {

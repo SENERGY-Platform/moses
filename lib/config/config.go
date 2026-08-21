@@ -54,6 +54,16 @@ type Config struct {
 	EnvironmentCollectionName string `json:"environment_collection_name" env_var:"ENVIRONMENT_COLLECTION_NAME"`
 	StateCollectionName       string `json:"state_collection_name" env_var:"STATE_COLLECTION_NAME"`
 
+	// StateFlushInterval is how often the runtime writes the changed runtime
+	// state of an environment to the database. The runtime keeps the live values
+	// in memory and persists them behind this interval, instead of writing on
+	// every state.set() the way the legacy runtime does: a channel ticking every
+	// second would otherwise turn every simulated value into a database write.
+	//
+	// The interval is the bound on how much simulated state a crash can lose.
+	// json: nanoseconds, env: duration string ("5s").
+	StateFlushInterval time.Duration `json:"state_flush_interval" env_var:"STATE_FLUSH_INTERVAL"`
+
 	KafkaUrl           string `json:"kafka_url" env_var:"KAFKA_URL"`
 	KafkaResponseTopic string `json:"kafka_response_topic" env_var:"KAFKA_RESPONSE_TOPIC"`
 	KafkaGroupName     string `json:"kafka_group_name" env_var:"KAFKA_GROUP_NAME"`

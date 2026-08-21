@@ -9,6 +9,7 @@
     "mongo_url":"mongodb://db",
     "mongo_table": "moses",
     "js_timeout":2000000000,
+    "state_flush_interval":5000000000,
     "protocol_segment_name": "payload",
     "protocol":"moses",
 

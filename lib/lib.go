@@ -18,16 +18,16 @@ package lib
 
 import (
 	"context"
-	"github.com/IBM/sarama"
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/api"
 	"github.com/SENERGY-Platform/moses/lib/config"
 	"github.com/SENERGY-Platform/moses/lib/repo"
+	"github.com/SENERGY-Platform/moses/lib/runtime"
 	"github.com/SENERGY-Platform/moses/lib/state"
 	"github.com/SENERGY-Platform/moses/lib/util"
 	platform_connector_lib "github.com/SENERGY-Platform/platform-connector-lib"
 	"github.com/SENERGY-Platform/platform-connector-lib/connectionlog"
-	"log/slog"
+	"github.com/segmentio/kafka-go"
 	"strings"
 	"time"
 )
@@ -101,15 +101,13 @@ func New(config config.Config, ctx context.Context) (err error) {
 		PermissionsV2Url: config.PermissionsV2Url,
 
 		KafkaTopicConfigs: config.KafkaTopicConfigs,
+
+		//the connector logs through the service logger instead of its own default
+		Logger: util.Logger,
 	})
 	if err != nil {
 		util.Logger.Error("unable to initialise the connector", attributes.ErrorKey, err)
 		return err
-	}
-
-	if config.Debug {
-		connector.SetKafkaLogger(slog.NewLogLogger(util.Logger.Handler(), slog.LevelDebug))
-		connector.IotCache.Debug = true
 	}
 
 	err = connector.InitProducer(ctx, []platform_connector_lib.Qos{platform_connector_lib.Sync})
@@ -150,8 +148,40 @@ func New(config config.Config, ctx context.Context) (err error) {
 		return err
 	}
 
-	util.Logger.Info("starting state routines")
+	//the per world cutover: a world that exists as an environment is run by the
+	//new runtime and must not be started here as well. Both runtimes publish
+	//under the same platform device and service ids, so a double start would
+	//send every value twice, and two scripts would write the same state.
+	staterepo.SkipWorldIds, err = migratedWorldIds(ctx, environments)
+	if err != nil {
+		util.Logger.Error("unable to determine the migrated worlds", attributes.ErrorKey, err)
+		return err
+	}
+
+	util.Logger.Info("starting state routines", "skipped_worlds", len(staterepo.SkipWorldIds))
 	staterepo.Start()
+
+	util.Logger.Info("starting the environment runtime")
+	environmentRuntime := runtime.New(config, environments, environments.States(), connector, logger)
+	err = environmentRuntime.Start(ctx)
+	if err != nil {
+		util.Logger.Error("unable to start the environment runtime", attributes.ErrorKey, err)
+		return err
+	}
+
+	//one handler for both runtimes, new model first: HandleCommand reports
+	//whether the device belongs to an environment, and only if it does not is
+	//the command offered to the legacy worlds
+	connector.SetAsyncCommandHandler(asyncCommandHandler(config, connector,
+		func(externalDeviceRef string, externalServiceRef string, cmdMsg interface{}, responder func(respMsg interface{})) {
+			if environmentRuntime.HandleCommand(externalDeviceRef, externalServiceRef, cmdMsg, responder) {
+				return
+			}
+			staterepo.HandleCommand(externalDeviceRef, externalServiceRef, cmdMsg, responder)
+		}))
+
+	notifier := &environmentNotifier{runtime: environmentRuntime, staterepo: staterepo}
+	notifier.warn()
 
 	err = connector.Start(ctx, platform_connector_lib.Sync)
 	if err != nil {
@@ -161,14 +191,81 @@ func New(config config.Config, ctx context.Context) (err error) {
 
 	util.Logger.Info("starting the api", "port", config.ServerPort)
 
-	api.Start(ctx, config, staterepo, environments)
+	api.Start(ctx, config, staterepo, environments, notifier)
 	go func() {
 		<-ctx.Done()
+		//the runtime first: its final state flush needs the environment store,
+		//which is closed at the end of this function
+		environmentRuntime.Stop()
 		staterepo.Stop()
 		persistence.Close()
 		environments.Close()
 	}()
 	return nil
+}
+
+// migratedWorldIds is the set of legacy world ids that exist as an environment.
+// The migration keeps the id of the world it converted, which is what makes this
+// comparison possible at all.
+func migratedWorldIds(ctx context.Context, environments repo.Environments) (map[string]bool, error) {
+	all, err := environments.All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]bool, len(all))
+	for _, env := range all {
+		if env.Id == "" {
+			continue
+		}
+		result[env.Id] = true
+	}
+	return result, nil
+}
+
+// environmentNotifier is what the api tells about a stored environment. It
+// forwards to the runtime and, on every change, re-runs the one check the per
+// world cutover cannot make on its own (see warn).
+type environmentNotifier struct {
+	runtime   *runtime.Runtime
+	staterepo *state.StateRepo
+}
+
+func (this *environmentNotifier) Reload(id string) {
+	this.runtime.Reload(id)
+	this.warn()
+}
+
+func (this *environmentNotifier) Remove(id string) {
+	this.runtime.Remove(id)
+	this.warn()
+}
+
+// warn reports the double runs the per world cutover cannot prevent:
+//
+//   - an environment that references the devices of a world it was not converted
+//     from. That world keeps a different id, so it is not skipped.
+//   - an environment created while the service runs whose id IS a world id. The
+//     skip set is computed at startup, so that world keeps running until the
+//     service is restarted.
+//
+// Both are diagnostics and not guards, on purpose. Which of the two runtimes is
+// the intended owner of a device cannot be decided here, and refusing to serve
+// would take a service down over a modelling mistake in one document. Checked on
+// every change and not only at startup, because the second case only appears
+// after a change.
+func (this *environmentNotifier) warn() {
+	legacy := this.staterepo.ExternalRefWorldIds()
+	if len(legacy) == 0 {
+		return
+	}
+	for _, ref := range this.runtime.ExternalDeviceRefs() {
+		worldId, shared := legacy[ref]
+		if !shared {
+			continue
+		}
+		util.Logger.Warn("a running legacy world and an environment both act on this platform device, its values are sent twice",
+			"device_ref", ref, "world", worldId)
+	}
 }
 
 func StringToList(str string) []string {
@@ -183,19 +280,16 @@ func StringToList(str string) []string {
 	return result
 }
 
-func getKafkaCompression(compression string) sarama.CompressionCodec {
+func getKafkaCompression(compression string) kafka.Compression {
 	switch strings.ToLower(compression) {
-	case "":
-		return sarama.CompressionNone
-	case "-":
-		return sarama.CompressionNone
-	case "none":
-		return sarama.CompressionNone
+	case "", "-", "none":
+		// the zero value of kafka.Compression means uncompressed
+		return 0
 	case "gzip":
-		return sarama.CompressionGZIP
+		return kafka.Gzip
 	case "snappy":
-		return sarama.CompressionSnappy
+		return kafka.Snappy
 	}
 	util.Logger.Warn("unknown compression, falling back to none", "compression", compression)
-	return sarama.CompressionNone
+	return 0
 }

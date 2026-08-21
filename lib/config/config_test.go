@@ -318,6 +318,10 @@ func TestLoadConfigLocationLoadsTheShippedConfigJson(t *testing.T) {
 	if len(config.KafkaTopicConfigs) == 0 {
 		t.Error("KafkaTopicConfigs: expected the shipped topic configs, got none")
 	}
+	// state_flush_interval is a json number as well, for the same reason
+	if config.StateFlushInterval != 5*time.Second {
+		t.Errorf("StateFlushInterval: expected 5s from state_flush_interval=5000000000, got %v", config.StateFlushInterval)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -402,6 +406,7 @@ func TestConfigFieldsMapToTheExpectedEnvironmentVariableNames(t *testing.T) {
 		"PublishToPostgres":         "PUBLISH_TO_POSTGRES",
 		"ServerPort":                "SERVER_PORT",
 		"StateCollectionName":       "STATE_COLLECTION_NAME",
+		"StateFlushInterval":        "STATE_FLUSH_INTERVAL",
 		"SyncCompression":           "SYNC_COMPRESSION",
 		"TemplateCollectionName":    "TEMPLATE_COLLECTION_NAME",
 		"TokenCacheExpiration":      "TOKEN_CACHE_EXPIRATION",
