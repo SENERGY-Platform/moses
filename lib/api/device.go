@@ -17,200 +17,152 @@
 package api
 
 import (
-	"encoding/json"
-	"fmt"
-	"github.com/SENERGY-Platform/moses/lib/config"
-	"github.com/SENERGY-Platform/moses/lib/jwt"
-	"github.com/SENERGY-Platform/moses/lib/state"
-	"github.com/julienschmidt/httprouter"
-	"log"
 	"net/http"
+
+	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
+	"github.com/SENERGY-Platform/moses/lib/config"
+	"github.com/SENERGY-Platform/moses/lib/state"
+	"github.com/SENERGY-Platform/moses/lib/util"
+	"github.com/gin-gonic/gin"
 )
 
 func init() {
 	endpoints = append(endpoints, DeviceEndpoints)
 }
 
-func DeviceEndpoints(config config.Config, states *state.StateRepo, router *httprouter.Router) {
+func DeviceEndpoints(config config.Config, states *state.StateRepo, router gin.IRouter) {
 	// POST /device/bydevicetype
-	router.POST("/device/bydevicetype", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-		jwt, err := jwt.GetJwt(request)
-		if err != nil {
-			log.Println("ERROR: POST /device/bydevicetype GetJwt", err)
-			http.Error(resp, err.Error(), 400)
+	router.POST("/device/bydevicetype", func(gc *gin.Context) {
+		token, ok := requireUser(gc)
+		if !ok {
 			return
 		}
 		msg := state.CreateDeviceByTypeRequest{}
-		err = json.NewDecoder(request.Body).Decode(&msg)
+		err := gc.ShouldBindJSON(&msg)
 		if err != nil {
-			log.Println("ERROR: /device/bydevicetype Decode", err)
-			http.Error(resp, err.Error(), 400)
+			gc.String(http.StatusBadRequest, "%s", err.Error())
 			return
 		}
-		result, access, worldAndRoomExists, err := states.CreateDeviceByType(jwt, msg)
+		result, access, worldAndRoomExists, err := states.CreateDeviceByType(token, msg)
 		if err != nil {
-			log.Println("ERROR: /device/bydevicetype CreateDeviceByType", err)
-			http.Error(resp, err.Error(), 500)
+			util.Logger.Error("unable to create device by type", attributes.ErrorKey, err)
+			gc.String(http.StatusInternalServerError, "unable to create device by type")
 			return
 		}
 		if !access {
-			log.Println("WARNING: user access denied")
-			http.Error(resp, "access denied", http.StatusUnauthorized)
+			gc.String(http.StatusUnauthorized, "access denied")
 			return
 		}
 		if !worldAndRoomExists {
-			log.Println("WARNING: 404")
-			http.Error(resp, "unknown world or room id", http.StatusNotFound)
+			gc.String(http.StatusNotFound, "unknown world or room id")
 			return
 		}
-		b, err := json.Marshal(result)
-		if err != nil {
-			log.Println("ERROR: /device/bydevicetype Marshal", err)
-			http.Error(resp, err.Error(), 500)
-		} else {
-			fmt.Fprint(resp, string(b))
-		}
+		gc.JSON(http.StatusOK, result)
 	})
 
 	// PUT /device
-	router.PUT("/device", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-		jwt, err := jwt.GetJwt(request)
-		if err != nil {
-			log.Println("ERROR: PUT /device GetJwt", err)
-			http.Error(resp, err.Error(), 400)
+	router.PUT("/device", func(gc *gin.Context) {
+		token, ok := requireUser(gc)
+		if !ok {
 			return
 		}
 		msg := state.UpdateDeviceRequest{}
-		err = json.NewDecoder(request.Body).Decode(&msg)
+		err := gc.ShouldBindJSON(&msg)
 		if err != nil {
-			log.Println("ERROR: PUT /device Decode", err)
-			http.Error(resp, err.Error(), 400)
+			gc.String(http.StatusBadRequest, "%s", err.Error())
 			return
 		}
-		result, access, exists, err := states.UpdateDevice(jwt, msg)
+		result, access, exists, err := states.UpdateDevice(token, msg)
 		if err != nil {
-			log.Println("ERROR: PUT /device UpdateDevice", err)
-			http.Error(resp, err.Error(), 500)
+			util.Logger.Error("unable to update device", attributes.ErrorKey, err)
+			gc.String(http.StatusInternalServerError, "unable to update device")
 			return
 		}
 		if !access {
-			log.Println("WARNING: user access denied")
-			http.Error(resp, "access denied", http.StatusUnauthorized)
+			gc.String(http.StatusUnauthorized, "access denied")
 			return
 		}
 		if !exists {
-			log.Println("WARNING: 404")
-			http.Error(resp, "unknown id", http.StatusNotFound)
+			gc.String(http.StatusNotFound, "unknown id")
 			return
 		}
-		b, err := json.Marshal(result)
-		if err != nil {
-			log.Println("ERROR: PUT /device Marshal", err)
-			http.Error(resp, err.Error(), 500)
-		} else {
-			fmt.Fprint(resp, string(b))
-		}
+		gc.JSON(http.StatusOK, result)
 	})
 
 	// POST /device
-	router.POST("/device", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-		jwt, err := jwt.GetJwt(request)
-		if err != nil {
-			log.Println("ERROR: POST /device GetJwt", err)
-			http.Error(resp, err.Error(), 400)
+	router.POST("/device", func(gc *gin.Context) {
+		token, ok := requireUser(gc)
+		if !ok {
 			return
 		}
 		msg := state.CreateDeviceRequest{}
-		err = json.NewDecoder(request.Body).Decode(&msg)
+		err := gc.ShouldBindJSON(&msg)
 		if err != nil {
-			log.Println("ERROR: POST /device Decode", err)
-			http.Error(resp, err.Error(), 400)
+			gc.String(http.StatusBadRequest, "%s", err.Error())
 			return
 		}
-		result, access, worldAndRoomExists, err := states.CreateDevice(jwt, msg)
+		result, access, worldAndRoomExists, err := states.CreateDevice(token, msg)
 		if err != nil {
-			log.Println("ERROR: POST /device CreateDevice", err)
-			http.Error(resp, err.Error(), 500)
+			util.Logger.Error("unable to create device", attributes.ErrorKey, err)
+			gc.String(http.StatusInternalServerError, "unable to create device")
 			return
 		}
 		if !access {
-			log.Println("WARNING: user access denied")
-			http.Error(resp, "access denied", http.StatusUnauthorized)
+			gc.String(http.StatusUnauthorized, "access denied")
 			return
 		}
 		if !worldAndRoomExists {
-			log.Println("WARNING: 404")
-			http.Error(resp, "unknown world or room id", http.StatusNotFound)
+			gc.String(http.StatusNotFound, "unknown world or room id")
 			return
 		}
-		b, err := json.Marshal(result)
-		if err != nil {
-			log.Println("ERROR: POST /device Marshal", err)
-			http.Error(resp, err.Error(), 500)
-		} else {
-			fmt.Fprint(resp, string(b))
-		}
+		gc.JSON(http.StatusOK, result)
 	})
 
 	// GET /device/:id
-	router.GET("/device/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-		jwt, err := jwt.GetJwt(request)
-		if err != nil {
-			log.Println("ERROR: GET /device/:id GetJwt", err)
-			http.Error(resp, err.Error(), 400)
+	router.GET("/device/:id", func(gc *gin.Context) {
+		token, ok := requireUser(gc)
+		if !ok {
 			return
 		}
-		id := params.ByName("id")
-		result, access, exists, err := states.ReadDevice(jwt, id)
+		id := gc.Param("id")
+		result, access, exists, err := states.ReadDevice(token, id)
 		if err != nil {
-			log.Println("ERROR: GET /device/:id ReadDevice", err)
-			http.Error(resp, err.Error(), 500)
+			util.Logger.Error("unable to read device", attributes.ErrorKey, err)
+			gc.String(http.StatusInternalServerError, "unable to read device")
 			return
 		}
 		if !access {
-			log.Println("WARNING: user access denied")
-			http.Error(resp, "access denied", http.StatusUnauthorized)
+			gc.String(http.StatusUnauthorized, "access denied")
 			return
 		}
 		if !exists {
-			log.Println("WARNING: 404")
-			http.Error(resp, "unknown id", http.StatusNotFound)
+			gc.String(http.StatusNotFound, "unknown id")
 			return
 		}
-		b, err := json.Marshal(result)
-		if err != nil {
-			log.Println("ERROR: GET /device/:id Marshal", err)
-			http.Error(resp, err.Error(), 500)
-		} else {
-			fmt.Fprint(resp, string(b))
-		}
+		gc.JSON(http.StatusOK, result)
 	})
 
-	// DELETE /device/:wid
-	router.DELETE("/device/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-		jwt, err := jwt.GetJwt(request)
-		if err != nil {
-			log.Println("ERROR: DELETE /device/:id GetJwt", err)
-			http.Error(resp, err.Error(), 400)
+	// DELETE /device/:id
+	router.DELETE("/device/:id", func(gc *gin.Context) {
+		token, ok := requireUser(gc)
+		if !ok {
 			return
 		}
-		id := params.ByName("id")
-		_, access, exists, err := states.DeleteDevice(jwt, id)
+		id := gc.Param("id")
+		_, access, exists, err := states.DeleteDevice(token, id)
 		if err != nil {
-			log.Println("ERROR: DELETE /device/:id DeleteDevice", err)
-			http.Error(resp, err.Error(), 500)
+			util.Logger.Error("unable to delete device", attributes.ErrorKey, err)
+			gc.String(http.StatusInternalServerError, "unable to delete device")
 			return
 		}
 		if !access {
-			log.Println("WARNING: user access denied")
-			http.Error(resp, "access denied", http.StatusUnauthorized)
+			gc.String(http.StatusUnauthorized, "access denied")
 			return
 		}
 		if !exists {
-			log.Println("WARNING: 404")
-			http.Error(resp, "unknown id", http.StatusNotFound)
+			gc.String(http.StatusNotFound, "unknown id")
 			return
 		}
-		fmt.Fprint(resp, "ok")
+		gc.String(http.StatusOK, "ok")
 	})
 }

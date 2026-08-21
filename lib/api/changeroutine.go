@@ -17,162 +17,125 @@
 package api
 
 import (
-	"encoding/json"
-	"fmt"
-	"github.com/SENERGY-Platform/moses/lib/config"
-	"github.com/SENERGY-Platform/moses/lib/jwt"
-	"github.com/SENERGY-Platform/moses/lib/state"
-	"github.com/julienschmidt/httprouter"
-	"log"
 	"net/http"
+
+	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
+	"github.com/SENERGY-Platform/moses/lib/config"
+	"github.com/SENERGY-Platform/moses/lib/state"
+	"github.com/SENERGY-Platform/moses/lib/util"
+	"github.com/gin-gonic/gin"
 )
 
 func init() {
 	endpoints = append(endpoints, ChangeroutineEndpoints)
 }
 
-func ChangeroutineEndpoints(config config.Config, states *state.StateRepo, router *httprouter.Router) {
+func ChangeroutineEndpoints(config config.Config, states *state.StateRepo, router gin.IRouter) {
 
 	// PUT /changeroutine					//{id:"", interval: 0, code:""}
-	router.PUT("/changeroutine", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-		jwt, err := jwt.GetJwt(request)
-		if err != nil {
-			log.Println("ERROR: PUT /changeroutine GetJwt", err)
-			http.Error(resp, err.Error(), 400)
+	router.PUT("/changeroutine", func(gc *gin.Context) {
+		token, ok := requireUser(gc)
+		if !ok {
 			return
 		}
 		msg := state.UpdateChangeRoutineRequest{}
-		err = json.NewDecoder(request.Body).Decode(&msg)
+		err := gc.ShouldBindJSON(&msg)
 		if err != nil {
-			log.Println("ERROR: PUT /changeroutine Decode", err)
-			http.Error(resp, err.Error(), 400)
+			gc.String(http.StatusBadRequest, "%s", err.Error())
 			return
 		}
-		result, access, exists, err := states.UpdateChangeRoutine(jwt, msg)
+		result, access, exists, err := states.UpdateChangeRoutine(token, msg)
 		if err != nil {
-			log.Println("ERROR: PUT /changeroutine UpdateChangeRoutine", err)
-			http.Error(resp, err.Error(), 500)
+			util.Logger.Error("unable to update change routine", attributes.ErrorKey, err)
+			gc.String(http.StatusInternalServerError, "unable to update change routine")
 			return
 		}
 		if !access {
-			log.Println("WARNING: user access denied")
-			http.Error(resp, "access denied", http.StatusUnauthorized)
+			gc.String(http.StatusUnauthorized, "access denied")
 			return
 		}
 		if !exists {
-			log.Println("WARNING: 404")
-			http.Error(resp, "unknown id", http.StatusNotFound)
+			gc.String(http.StatusNotFound, "unknown id")
 			return
 		}
-		b, err := json.Marshal(result)
-		if err != nil {
-			log.Println("ERROR: PUT /changeroutine Marshal", err)
-			http.Error(resp, err.Error(), 500)
-		} else {
-			fmt.Fprint(resp, string(b))
-		}
+		gc.JSON(http.StatusOK, result)
 	})
 
 	// POST /changeroutine					//{ref_type:"workd|room|device", ref_id: "", interval: 0, code:""}
-	router.POST("/changeroutine", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-		jwt, err := jwt.GetJwt(request)
-		if err != nil {
-			log.Println("ERROR: POST /changeroutine GetJwt", err)
-			http.Error(resp, err.Error(), 400)
+	router.POST("/changeroutine", func(gc *gin.Context) {
+		token, ok := requireUser(gc)
+		if !ok {
 			return
 		}
 		msg := state.CreateChangeRoutineRequest{}
-		err = json.NewDecoder(request.Body).Decode(&msg)
+		err := gc.ShouldBindJSON(&msg)
 		if err != nil {
-			log.Println("ERROR: POST /changeroutine Decode", err)
-			http.Error(resp, err.Error(), 400)
+			gc.String(http.StatusBadRequest, "%s", err.Error())
 			return
 		}
-		result, access, exists, err := states.CreateChangeRoutine(jwt, msg)
+		result, access, exists, err := states.CreateChangeRoutine(token, msg)
 		if err != nil {
-			log.Println("ERROR: POST /changeroutine CreateChangeRoutine", err)
-			http.Error(resp, err.Error(), 500)
+			util.Logger.Error("unable to create change routine", attributes.ErrorKey, err)
+			gc.String(http.StatusInternalServerError, "unable to create change routine")
 			return
 		}
 		if !access {
-			log.Println("WARNING: user access denied")
-			http.Error(resp, "access denied", http.StatusUnauthorized)
+			gc.String(http.StatusUnauthorized, "access denied")
 			return
 		}
 		if !exists {
-			log.Println("WARNING: 404")
-			http.Error(resp, "unknown world, room or device id", http.StatusNotFound)
+			gc.String(http.StatusNotFound, "unknown world, room or device id")
 			return
 		}
-		b, err := json.Marshal(result)
-		if err != nil {
-			log.Println("ERROR: POST /changeroutine Marshal", err)
-			http.Error(resp, err.Error(), 500)
-		} else {
-			fmt.Fprint(resp, string(b))
-		}
+		gc.JSON(http.StatusOK, result)
 	})
 
-	// GET /changeroutine/:routineid
-	router.GET("/changeroutine/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-		jwt, err := jwt.GetJwt(request)
-		if err != nil {
-			log.Println("ERROR: GET /changeroutine/:id GetJwt", err)
-			http.Error(resp, err.Error(), 400)
+	// GET /changeroutine/:id
+	router.GET("/changeroutine/:id", func(gc *gin.Context) {
+		token, ok := requireUser(gc)
+		if !ok {
 			return
 		}
-		id := params.ByName("id")
-		result, access, exists, err := states.ReadChangeRoutine(jwt, id)
+		id := gc.Param("id")
+		result, access, exists, err := states.ReadChangeRoutine(token, id)
 		if err != nil {
-			log.Println("ERROR: GET /changeroutine/:id ReadChangeRoutine", err)
-			http.Error(resp, err.Error(), 500)
+			util.Logger.Error("unable to read change routine", attributes.ErrorKey, err)
+			gc.String(http.StatusInternalServerError, "unable to read change routine")
 			return
 		}
 		if !access {
-			log.Println("WARNING: user access denied")
-			http.Error(resp, "access denied", http.StatusUnauthorized)
+			gc.String(http.StatusUnauthorized, "access denied")
 			return
 		}
 		if !exists {
-			log.Println("WARNING: 404")
-			http.Error(resp, "unknown id", http.StatusNotFound)
+			gc.String(http.StatusNotFound, "unknown id")
 			return
 		}
-		b, err := json.Marshal(result)
-		if err != nil {
-			log.Println("ERROR: GET /changeroutine/:id Marshal", err)
-			http.Error(resp, err.Error(), 500)
-		} else {
-			fmt.Fprint(resp, string(b))
-		}
+		gc.JSON(http.StatusOK, result)
 	})
 
-	// DELETE /changeroutine/:routineid
-	router.DELETE("/changeroutine/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-		jwt, err := jwt.GetJwt(request)
-		if err != nil {
-			log.Println("ERROR: DELETE /changeroutine/:id GetJwt", err)
-			http.Error(resp, err.Error(), 400)
+	// DELETE /changeroutine/:id
+	router.DELETE("/changeroutine/:id", func(gc *gin.Context) {
+		token, ok := requireUser(gc)
+		if !ok {
 			return
 		}
-		id := params.ByName("id")
-		_, access, exists, err := states.DeleteChangeRoutine(jwt, id)
+		id := gc.Param("id")
+		_, access, exists, err := states.DeleteChangeRoutine(token, id)
 		if err != nil {
-			log.Println("ERROR: DELETE /changeroutine/:id DeleteChangeRoutine", err)
-			http.Error(resp, err.Error(), 500)
+			util.Logger.Error("unable to delete change routine", attributes.ErrorKey, err)
+			gc.String(http.StatusInternalServerError, "unable to delete change routine")
 			return
 		}
 		if !access {
-			log.Println("WARNING: user access denied")
-			http.Error(resp, "access denied", http.StatusUnauthorized)
+			gc.String(http.StatusUnauthorized, "access denied")
 			return
 		}
 		if !exists {
-			log.Println("WARNING: 404")
-			http.Error(resp, "unknown id", http.StatusNotFound)
+			gc.String(http.StatusNotFound, "unknown id")
 			return
 		}
-		fmt.Fprint(resp, "ok")
+		gc.String(http.StatusOK, "ok")
 	})
 
 }

@@ -17,162 +17,125 @@
 package api
 
 import (
-	"encoding/json"
-	"fmt"
-	"github.com/SENERGY-Platform/moses/lib/config"
-	"github.com/SENERGY-Platform/moses/lib/jwt"
-	"github.com/SENERGY-Platform/moses/lib/state"
-	"github.com/julienschmidt/httprouter"
-	"log"
 	"net/http"
+
+	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
+	"github.com/SENERGY-Platform/moses/lib/config"
+	"github.com/SENERGY-Platform/moses/lib/state"
+	"github.com/SENERGY-Platform/moses/lib/util"
+	"github.com/gin-gonic/gin"
 )
 
 func init() {
 	endpoints = append(endpoints, ServiceEndpoints)
 }
 
-func ServiceEndpoints(config config.Config, states *state.StateRepo, router *httprouter.Router) {
+func ServiceEndpoints(config config.Config, states *state.StateRepo, router gin.IRouter) {
 
 	// PUT /service
-	router.PUT("/service", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-		jwt, err := jwt.GetJwt(request)
-		if err != nil {
-			log.Println("ERROR: PUT /service GetJwt", err)
-			http.Error(resp, err.Error(), 400)
+	router.PUT("/service", func(gc *gin.Context) {
+		token, ok := requireUser(gc)
+		if !ok {
 			return
 		}
 		msg := state.UpdateServiceRequest{}
-		err = json.NewDecoder(request.Body).Decode(&msg)
+		err := gc.ShouldBindJSON(&msg)
 		if err != nil {
-			log.Println("ERROR: PUT /service Decode", err)
-			http.Error(resp, err.Error(), 400)
+			gc.String(http.StatusBadRequest, "%s", err.Error())
 			return
 		}
-		result, access, exists, err := states.UpdateService(jwt, msg)
+		result, access, exists, err := states.UpdateService(token, msg)
 		if err != nil {
-			log.Println("ERROR: PUT /service UpdateService", err)
-			http.Error(resp, err.Error(), 500)
+			util.Logger.Error("unable to update service", attributes.ErrorKey, err)
+			gc.String(http.StatusInternalServerError, "unable to update service")
 			return
 		}
 		if !access {
-			log.Println("WARNING: user access denied")
-			http.Error(resp, "access denied", http.StatusUnauthorized)
+			gc.String(http.StatusUnauthorized, "access denied")
 			return
 		}
 		if !exists {
-			log.Println("WARNING: 404")
-			http.Error(resp, "unknown id", http.StatusNotFound)
+			gc.String(http.StatusNotFound, "unknown id")
 			return
 		}
-		b, err := json.Marshal(result)
-		if err != nil {
-			log.Println("ERROR: PUT /service Marshal", err)
-			http.Error(resp, err.Error(), 500)
-		} else {
-			fmt.Fprint(resp, string(b))
-		}
+		gc.JSON(http.StatusOK, result)
 	})
 
 	// POST /service
-	router.POST("/service", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-		jwt, err := jwt.GetJwt(request)
-		if err != nil {
-			log.Println("ERROR: POST /service GetJwt", err)
-			http.Error(resp, err.Error(), 400)
+	router.POST("/service", func(gc *gin.Context) {
+		token, ok := requireUser(gc)
+		if !ok {
 			return
 		}
 		msg := state.CreateServiceRequest{}
-		err = json.NewDecoder(request.Body).Decode(&msg)
+		err := gc.ShouldBindJSON(&msg)
 		if err != nil {
-			log.Println("ERROR: POST /service Decode", err)
-			http.Error(resp, err.Error(), 400)
+			gc.String(http.StatusBadRequest, "%s", err.Error())
 			return
 		}
-		result, access, worldAndRoomExists, err := states.CreateService(jwt, msg)
+		result, access, worldAndRoomExists, err := states.CreateService(token, msg)
 		if err != nil {
-			log.Println("ERROR: POST /service CreateService", err)
-			http.Error(resp, err.Error(), 500)
+			util.Logger.Error("unable to create service", attributes.ErrorKey, err)
+			gc.String(http.StatusInternalServerError, "unable to create service")
 			return
 		}
 		if !access {
-			log.Println("WARNING: user access denied")
-			http.Error(resp, "access denied", http.StatusUnauthorized)
+			gc.String(http.StatusUnauthorized, "access denied")
 			return
 		}
 		if !worldAndRoomExists {
-			log.Println("WARNING: 404")
-			http.Error(resp, "unknown world or room id", http.StatusNotFound)
+			gc.String(http.StatusNotFound, "unknown world or room id")
 			return
 		}
-		b, err := json.Marshal(result)
-		if err != nil {
-			log.Println("ERROR: POST /service Marshal", err)
-			http.Error(resp, err.Error(), 500)
-		} else {
-			fmt.Fprint(resp, string(b))
-		}
+		gc.JSON(http.StatusOK, result)
 	})
 
-	// GET /service/:wid
-	router.GET("/service/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-		jwt, err := jwt.GetJwt(request)
-		if err != nil {
-			log.Println("ERROR: GET /service/:id GetJwt", err)
-			http.Error(resp, err.Error(), 400)
+	// GET /service/:id
+	router.GET("/service/:id", func(gc *gin.Context) {
+		token, ok := requireUser(gc)
+		if !ok {
 			return
 		}
-		id := params.ByName("id")
-		result, access, exists, err := states.ReadService(jwt, id)
+		id := gc.Param("id")
+		result, access, exists, err := states.ReadService(token, id)
 		if err != nil {
-			log.Println("ERROR: GET /service/:id ReadService", err)
-			http.Error(resp, err.Error(), 500)
+			util.Logger.Error("unable to read service", attributes.ErrorKey, err)
+			gc.String(http.StatusInternalServerError, "unable to read service")
 			return
 		}
 		if !access {
-			log.Println("WARNING: user access denied")
-			http.Error(resp, "access denied", http.StatusUnauthorized)
+			gc.String(http.StatusUnauthorized, "access denied")
 			return
 		}
 		if !exists {
-			log.Println("WARNING: 404")
-			http.Error(resp, "unknown id", http.StatusNotFound)
+			gc.String(http.StatusNotFound, "unknown id")
 			return
 		}
-		b, err := json.Marshal(result)
-		if err != nil {
-			log.Println("ERROR: GET /service/:id Marshal", err)
-			http.Error(resp, err.Error(), 500)
-		} else {
-			fmt.Fprint(resp, string(b))
-		}
+		gc.JSON(http.StatusOK, result)
 	})
 
-	// DELETE /service/:wid
-	router.DELETE("/service/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-		jwt, err := jwt.GetJwt(request)
-		if err != nil {
-			log.Println("ERROR: DELETE /service/:id GetJwt", err)
-			http.Error(resp, err.Error(), 400)
+	// DELETE /service/:id
+	router.DELETE("/service/:id", func(gc *gin.Context) {
+		token, ok := requireUser(gc)
+		if !ok {
 			return
 		}
-		id := params.ByName("id")
-		_, access, exists, err := states.DeleteService(jwt, id)
+		id := gc.Param("id")
+		_, access, exists, err := states.DeleteService(token, id)
 		if err != nil {
-			log.Println("ERROR: DELETE /service/:id DeleteService", err)
-			http.Error(resp, err.Error(), 500)
+			util.Logger.Error("unable to delete service", attributes.ErrorKey, err)
+			gc.String(http.StatusInternalServerError, "unable to delete service")
 			return
 		}
 		if !access {
-			log.Println("WARNING: user access denied")
-			http.Error(resp, "access denied", http.StatusUnauthorized)
+			gc.String(http.StatusUnauthorized, "access denied")
 			return
 		}
 		if !exists {
-			log.Println("WARNING: 404")
-			http.Error(resp, "unknown id", http.StatusNotFound)
+			gc.String(http.StatusNotFound, "unknown id")
 			return
 		}
-		fmt.Fprint(resp, "ok")
+		gc.String(http.StatusOK, "ok")
 	})
 
 }

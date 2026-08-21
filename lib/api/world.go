@@ -17,21 +17,20 @@
 package api
 
 import (
-	"encoding/json"
-	"fmt"
-	"github.com/SENERGY-Platform/moses/lib/config"
-	"github.com/SENERGY-Platform/moses/lib/jwt"
-	"github.com/SENERGY-Platform/moses/lib/state"
-	"github.com/julienschmidt/httprouter"
-	"log"
 	"net/http"
+
+	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
+	"github.com/SENERGY-Platform/moses/lib/config"
+	"github.com/SENERGY-Platform/moses/lib/state"
+	"github.com/SENERGY-Platform/moses/lib/util"
+	"github.com/gin-gonic/gin"
 )
 
 func init() {
 	endpoints = append(endpoints, WorldEndpoints)
 }
 
-func WorldEndpoints(config config.Config, states *state.StateRepo, router *httprouter.Router) {
+func WorldEndpoints(config config.Config, states *state.StateRepo, router gin.IRouter) {
 	// PUTS only work on current level. sublevel will be preserved ( for example, put on room wont change devices of the room or change what devices the room has )
 	// empty on list == []; not nil
 	// states are managed by crud of parent entity
@@ -42,157 +41,115 @@ func WorldEndpoints(config config.Config, states *state.StateRepo, router *httpr
 	// D	= 	DELETE
 
 	// GET /worlds
-	router.GET("/worlds", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-		jwt, err := jwt.GetJwt(request)
-		if err != nil {
-			log.Println("ERROR: GET/worlds GetJwt()", err)
-			http.Error(resp, err.Error(), 400)
+	router.GET("/worlds", func(gc *gin.Context) {
+		token, ok := requireUser(gc)
+		if !ok {
 			return
 		}
-		result, err := states.ReadWorlds(jwt)
+		result, err := states.ReadWorlds(token)
 		if err != nil {
-			log.Println("ERROR: GET/worlds ReadWorlds()", err)
-			http.Error(resp, err.Error(), 500)
+			util.Logger.Error("unable to read worlds", attributes.ErrorKey, err)
+			gc.String(http.StatusInternalServerError, "unable to read worlds")
 			return
 		}
-		b, err := json.Marshal(result)
-		if err != nil {
-			log.Println("ERROR: GET/worlds  Marshal();", err)
-			http.Error(resp, err.Error(), 500)
-		} else {
-			fmt.Fprint(resp, string(b))
-		}
+		gc.JSON(http.StatusOK, result)
 	})
 
 	// PUT /world
-	router.PUT("/world", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-		jwt, err := jwt.GetJwt(request)
-		if err != nil {
-			log.Println("ERROR: PUT/world GetJwt()", err)
-			http.Error(resp, err.Error(), 400)
+	router.PUT("/world", func(gc *gin.Context) {
+		token, ok := requireUser(gc)
+		if !ok {
 			return
 		}
 		msg := state.UpdateWorldRequest{}
-		err = json.NewDecoder(request.Body).Decode(&msg)
+		err := gc.ShouldBindJSON(&msg)
 		if err != nil {
-			log.Println("ERROR: PUT/world Decode()", err)
-			http.Error(resp, err.Error(), 400)
+			gc.String(http.StatusBadRequest, "%s", err.Error())
 			return
 		}
-		result, access, exists, err := states.UpdateWorld(jwt, msg)
+		result, access, exists, err := states.UpdateWorld(token, msg)
 		if err != nil {
-			log.Println("ERROR: PUT/world UpdateWorld()", err)
-			http.Error(resp, err.Error(), 500)
+			util.Logger.Error("unable to update world", attributes.ErrorKey, err)
+			gc.String(http.StatusInternalServerError, "unable to update world")
 			return
 		}
 		if !access {
-			log.Println("WARNING: user access denied")
-			http.Error(resp, "access denied", http.StatusUnauthorized)
+			gc.String(http.StatusUnauthorized, "access denied")
 			return
 		}
 		if !exists {
-			log.Println("WARNING: 404")
-			http.Error(resp, "unknown id", http.StatusNotFound)
+			gc.String(http.StatusNotFound, "unknown id")
 			return
 		}
-		b, err := json.Marshal(result)
-		if err != nil {
-			log.Println("ERROR: PUT/world Marshal()", err)
-			http.Error(resp, err.Error(), 500)
-		} else {
-			fmt.Fprint(resp, string(b))
-		}
+		gc.JSON(http.StatusOK, result)
 	})
 
 	// POST /world
-	router.POST("/world", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-		jwt, err := jwt.GetJwt(request)
-		if err != nil {
-			log.Println("ERROR: POST /world GetJwt", err)
-			http.Error(resp, err.Error(), 400)
+	router.POST("/world", func(gc *gin.Context) {
+		token, ok := requireUser(gc)
+		if !ok {
 			return
 		}
 		msg := state.CreateWorldRequest{}
-		err = json.NewDecoder(request.Body).Decode(&msg)
+		err := gc.ShouldBindJSON(&msg)
 		if err != nil {
-			log.Println("ERROR: POST /world Decode", err)
-			http.Error(resp, err.Error(), 400)
+			gc.String(http.StatusBadRequest, "%s", err.Error())
 			return
 		}
-		result, err := states.CreateWorld(jwt, msg)
+		result, err := states.CreateWorld(token, msg)
 		if err != nil {
-			log.Println("ERROR: POST /world CreateWorld", err)
-			http.Error(resp, err.Error(), 500)
+			util.Logger.Error("unable to create world", attributes.ErrorKey, err)
+			gc.String(http.StatusInternalServerError, "unable to create world")
 			return
 		}
-		b, err := json.Marshal(result)
-		if err != nil {
-			log.Println("ERROR: POST /world Marshal", err)
-			http.Error(resp, err.Error(), 500)
-		} else {
-			fmt.Fprint(resp, string(b))
-		}
+		gc.JSON(http.StatusOK, result)
 	})
 
-	// GET /world/:wid
-	router.GET("/world/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-		jwt, err := jwt.GetJwt(request)
-		if err != nil {
-			log.Println("ERROR: GET /world/:id GetJwt", err)
-			http.Error(resp, err.Error(), 400)
+	// GET /world/:id
+	router.GET("/world/:id", func(gc *gin.Context) {
+		token, ok := requireUser(gc)
+		if !ok {
 			return
 		}
-		id := params.ByName("id")
-		result, access, exists, err := states.ReadWorld(jwt, id)
+		id := gc.Param("id")
+		result, access, exists, err := states.ReadWorld(token, id)
 		if err != nil {
-			log.Println("ERROR: GET /world/:id ReadWorld", err)
-			http.Error(resp, err.Error(), 500)
+			util.Logger.Error("unable to read world", attributes.ErrorKey, err)
+			gc.String(http.StatusInternalServerError, "unable to read world")
 			return
 		}
 		if !access {
-			log.Println("WARNING: user access denied")
-			http.Error(resp, "access denied", http.StatusUnauthorized)
+			gc.String(http.StatusUnauthorized, "access denied")
 			return
 		}
 		if !exists {
-			log.Println("WARNING: 404")
-			http.Error(resp, "unknown id", http.StatusNotFound)
+			gc.String(http.StatusNotFound, "unknown id")
 			return
 		}
-		b, err := json.Marshal(result)
-		if err != nil {
-			log.Println("ERROR: GET /world/:id Marshal", err)
-			http.Error(resp, err.Error(), 500)
-		} else {
-			fmt.Fprint(resp, string(b))
-		}
+		gc.JSON(http.StatusOK, result)
 	})
 
-	// DELETE /world/:wid
-	router.DELETE("/world/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-		jwt, err := jwt.GetJwt(request)
-		if err != nil {
-			log.Println("ERROR: DELETE /world/:id GetJwt", err)
-			http.Error(resp, err.Error(), 400)
+	// DELETE /world/:id
+	router.DELETE("/world/:id", func(gc *gin.Context) {
+		token, ok := requireUser(gc)
+		if !ok {
 			return
 		}
-		id := params.ByName("id")
-		access, exists, err := states.DeleteWorld(jwt, id)
+		id := gc.Param("id")
+		access, exists, err := states.DeleteWorld(token, id)
 		if err != nil {
-			log.Println("ERROR: DELETE /world/:id DeleteWorld", err)
-			http.Error(resp, err.Error(), 500)
+			util.Logger.Error("unable to delete world", attributes.ErrorKey, err)
+			gc.String(http.StatusInternalServerError, "unable to delete world")
 			return
 		}
 		if !access {
-			log.Println("WARNING: user access denied")
-			http.Error(resp, "access denied", http.StatusUnauthorized)
+			gc.String(http.StatusUnauthorized, "access denied")
 			return
 		}
 		if !exists {
-			log.Println("WARNING: 404")
-			http.Error(resp, "unknown id", http.StatusNotFound)
+			gc.String(http.StatusNotFound, "unknown id")
 			return
 		}
-		fmt.Fprint(resp, "ok")
+		gc.String(http.StatusOK, "ok")
 	})
 }

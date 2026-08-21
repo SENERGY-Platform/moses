@@ -17,89 +17,68 @@
 package api
 
 import (
-	"encoding/json"
-	"fmt"
-	"github.com/SENERGY-Platform/moses/lib/config"
-	"github.com/SENERGY-Platform/moses/lib/jwt"
-	"github.com/SENERGY-Platform/moses/lib/state"
-	"github.com/julienschmidt/httprouter"
-	"log"
 	"net/http"
+
+	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
+	"github.com/SENERGY-Platform/moses/lib/config"
+	"github.com/SENERGY-Platform/moses/lib/state"
+	"github.com/SENERGY-Platform/moses/lib/util"
+	"github.com/gin-gonic/gin"
 )
 
 func init() {
 	endpoints = append(endpoints, OtherEndpoints)
 }
 
-func OtherEndpoints(config config.Config, states *state.StateRepo, router *httprouter.Router) {
-	router.POST("/run/service/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-		id := params.ByName("id")
-		jwt, err := jwt.GetJwt(request)
-		if err != nil {
-			log.Println("ERROR: POST /run/service/:id GetJwt", err)
-			http.Error(resp, err.Error(), 400)
+func OtherEndpoints(config config.Config, states *state.StateRepo, router gin.IRouter) {
+	router.POST("/run/service/:id", func(gc *gin.Context) {
+		token, ok := requireUser(gc)
+		if !ok {
 			return
 		}
-		_, access, exists, err := states.ReadService(jwt, id)
+		id := gc.Param("id")
+		_, access, exists, err := states.ReadService(token, id)
 		if err != nil {
-			log.Println("ERROR: POST /run/service/:id ReadService", err)
-			http.Error(resp, err.Error(), 500)
+			util.Logger.Error("unable to read service", attributes.ErrorKey, err)
+			gc.String(http.StatusInternalServerError, "unable to read service")
 			return
 		}
 		if !access {
-			log.Println("WARNING: user access denied")
-			http.Error(resp, "access denied", http.StatusUnauthorized)
+			gc.String(http.StatusUnauthorized, "access denied")
 			return
 		}
 		if !exists {
-			log.Println("WARNING: 404")
-			http.Error(resp, "unknown id", http.StatusNotFound)
+			gc.String(http.StatusNotFound, "unknown id")
 			return
 		}
 		var msg interface{}
-		err = json.NewDecoder(request.Body).Decode(&msg)
+		err = gc.ShouldBindJSON(&msg)
 		if err != nil {
-			log.Println("ERROR: POST /run/service/:id Decode", err)
-			http.Error(resp, err.Error(), 400)
+			gc.String(http.StatusBadRequest, "%s", err.Error())
 			return
 		}
 		result, err := states.RunService(id, msg)
 		if err != nil {
-			log.Println("ERROR: POST /run/service/:id RunService", err)
-			http.Error(resp, err.Error(), 400)
+			gc.String(http.StatusBadRequest, "%s", err.Error())
 			return
 		}
-		b, err := json.Marshal(result)
-		if err != nil {
-			log.Println("ERROR: POST /run/service/:id Marshal", err)
-			http.Error(resp, err.Error(), 500)
-		} else {
-			fmt.Fprint(resp, string(b))
-		}
+		gc.JSON(http.StatusOK, result)
 	})
 
 	// GET /devicetypes
 	// returns list of device type ids which use the moses protocol
 	// to get DeviceType objects you can call the permsearch endpoint POST /ids/select/:resource_kind/:right ; /ids/select/:resource_kind/:right/:limit/:offset/:orderfeature/:direction or by requesting the iot repository
-	router.GET("/devicetypes", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-		jwt, err := jwt.GetJwt(request)
-		if err != nil {
-			log.Println("ERROR: GET /devicetypes GetJwt", err)
-			http.Error(resp, err.Error(), 400)
+	router.GET("/devicetypes", func(gc *gin.Context) {
+		token, ok := requireUser(gc)
+		if !ok {
 			return
 		}
-		result, err := states.GetMosesDeviceTypesIds(jwt)
+		result, err := states.GetMosesDeviceTypesIds(token)
 		if err != nil {
-			log.Println("ERROR: GET /devicetypes GetJwt", err)
-			http.Error(resp, err.Error(), 500)
+			util.Logger.Error("unable to read device types", attributes.ErrorKey, err)
+			gc.String(http.StatusInternalServerError, "unable to read device types")
 			return
 		}
-		b, err := json.Marshal(result)
-		if err != nil {
-			log.Println("ERROR: GET /devicetypes Marshal", err)
-			http.Error(resp, err.Error(), 500)
-		} else {
-			fmt.Fprint(resp, string(b))
-		}
+		gc.JSON(http.StatusOK, result)
 	})
 }

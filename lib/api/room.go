@@ -17,160 +17,123 @@
 package api
 
 import (
-	"encoding/json"
-	"fmt"
-	"github.com/SENERGY-Platform/moses/lib/config"
-	"github.com/SENERGY-Platform/moses/lib/jwt"
-	"github.com/SENERGY-Platform/moses/lib/state"
-	"github.com/julienschmidt/httprouter"
-	"log"
 	"net/http"
+
+	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
+	"github.com/SENERGY-Platform/moses/lib/config"
+	"github.com/SENERGY-Platform/moses/lib/state"
+	"github.com/SENERGY-Platform/moses/lib/util"
+	"github.com/gin-gonic/gin"
 )
 
 func init() {
 	endpoints = append(endpoints, RoomEndpoints)
 }
 
-func RoomEndpoints(config config.Config, states *state.StateRepo, router *httprouter.Router) {
+func RoomEndpoints(config config.Config, states *state.StateRepo, router gin.IRouter) {
 	// PUT /room
-	router.PUT("/room", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-		jwt, err := jwt.GetJwt(request)
-		if err != nil {
-			log.Println("ERROR: PUT /room GetJwt", err)
-			http.Error(resp, err.Error(), 400)
+	router.PUT("/room", func(gc *gin.Context) {
+		token, ok := requireUser(gc)
+		if !ok {
 			return
 		}
 		msg := state.UpdateRoomRequest{}
-		err = json.NewDecoder(request.Body).Decode(&msg)
+		err := gc.ShouldBindJSON(&msg)
 		if err != nil {
-			log.Println("ERROR: PUT /room Decode", err)
-			http.Error(resp, err.Error(), 400)
+			gc.String(http.StatusBadRequest, "%s", err.Error())
 			return
 		}
-		result, access, exists, err := states.UpdateRoom(jwt, msg)
+		result, access, exists, err := states.UpdateRoom(token, msg)
 		if err != nil {
-			log.Println("ERROR: PUT /room UpdateRoom", err)
-			http.Error(resp, err.Error(), 500)
+			util.Logger.Error("unable to update room", attributes.ErrorKey, err)
+			gc.String(http.StatusInternalServerError, "unable to update room")
 			return
 		}
 		if !access {
-			log.Println("WARNING: user access denied")
-			http.Error(resp, "access denied", http.StatusUnauthorized)
+			gc.String(http.StatusUnauthorized, "access denied")
 			return
 		}
 		if !exists {
-			log.Println("WARNING: 404")
-			http.Error(resp, "unknown id", http.StatusNotFound)
+			gc.String(http.StatusNotFound, "unknown id")
 			return
 		}
-		b, err := json.Marshal(result)
-		if err != nil {
-			log.Println("ERROR: PUT /room Marshal", err)
-			http.Error(resp, err.Error(), 500)
-		} else {
-			fmt.Fprint(resp, string(b))
-		}
+		gc.JSON(http.StatusOK, result)
 	})
 
 	// POST /room
-	router.POST("/room", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-		jwt, err := jwt.GetJwt(request)
-		if err != nil {
-			log.Println("ERROR: POST /room GetJwt", err)
-			http.Error(resp, err.Error(), 400)
+	router.POST("/room", func(gc *gin.Context) {
+		token, ok := requireUser(gc)
+		if !ok {
 			return
 		}
 		msg := state.CreateRoomRequest{}
-		err = json.NewDecoder(request.Body).Decode(&msg)
+		err := gc.ShouldBindJSON(&msg)
 		if err != nil {
-			log.Println("ERROR: POST /room Decode", err)
-			http.Error(resp, err.Error(), 400)
+			gc.String(http.StatusBadRequest, "%s", err.Error())
 			return
 		}
-		result, access, worldExists, err := states.CreateRoom(jwt, msg)
+		result, access, worldExists, err := states.CreateRoom(token, msg)
 		if err != nil {
-			log.Println("ERROR: POST /room CreateRoom", err)
-			http.Error(resp, err.Error(), 500)
+			util.Logger.Error("unable to create room", attributes.ErrorKey, err)
+			gc.String(http.StatusInternalServerError, "unable to create room")
 			return
 		}
 		if !access {
-			log.Println("WARNING: user access denied")
-			http.Error(resp, "access denied", http.StatusUnauthorized)
+			gc.String(http.StatusUnauthorized, "access denied")
 			return
 		}
 		if !worldExists {
-			log.Println("WARNING: 404")
-			http.Error(resp, "unknown world id", http.StatusNotFound)
+			gc.String(http.StatusNotFound, "unknown world id")
 			return
 		}
-		b, err := json.Marshal(result)
-		if err != nil {
-			log.Println("ERROR: POST /room Marshal", err)
-			http.Error(resp, err.Error(), 500)
-		} else {
-			fmt.Fprint(resp, string(b))
-		}
+		gc.JSON(http.StatusOK, result)
 	})
 
-	// GET /room/:wid
-	router.GET("/room/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-		jwt, err := jwt.GetJwt(request)
-		if err != nil {
-			log.Println("ERROR: GET /room/:id GetJwt", err)
-			http.Error(resp, err.Error(), 400)
+	// GET /room/:id
+	router.GET("/room/:id", func(gc *gin.Context) {
+		token, ok := requireUser(gc)
+		if !ok {
 			return
 		}
-		id := params.ByName("id")
-		result, access, exists, err := states.ReadRoom(jwt, id)
+		id := gc.Param("id")
+		result, access, exists, err := states.ReadRoom(token, id)
 		if err != nil {
-			log.Println("ERROR: GET /room/:id ReadRoom", err)
-			http.Error(resp, err.Error(), 500)
+			util.Logger.Error("unable to read room", attributes.ErrorKey, err)
+			gc.String(http.StatusInternalServerError, "unable to read room")
 			return
 		}
 		if !access {
-			log.Println("WARNING: user access denied")
-			http.Error(resp, "access denied", http.StatusUnauthorized)
+			gc.String(http.StatusUnauthorized, "access denied")
 			return
 		}
 		if !exists {
-			log.Println("WARNING: 404")
-			http.Error(resp, "unknown id", http.StatusNotFound)
+			gc.String(http.StatusNotFound, "unknown id")
 			return
 		}
-		b, err := json.Marshal(result)
-		if err != nil {
-			log.Println("ERROR: GET /room/:id Marshal", err)
-			http.Error(resp, err.Error(), 500)
-		} else {
-			fmt.Fprint(resp, string(b))
-		}
+		gc.JSON(http.StatusOK, result)
 	})
 
-	// DELETE /room/:wid
-	router.DELETE("/room/:id", func(resp http.ResponseWriter, request *http.Request, params httprouter.Params) {
-		jwt, err := jwt.GetJwt(request)
-		if err != nil {
-			log.Println("ERROR: DELETE /room/:id GetJwt", err)
-			http.Error(resp, err.Error(), 400)
+	// DELETE /room/:id
+	router.DELETE("/room/:id", func(gc *gin.Context) {
+		token, ok := requireUser(gc)
+		if !ok {
 			return
 		}
-		id := params.ByName("id")
-		_, access, exists, err := states.DeleteRoom(jwt, id)
+		id := gc.Param("id")
+		_, access, exists, err := states.DeleteRoom(token, id)
 		if err != nil {
-			log.Println("ERROR: DELETE /room/:id DeleteRoom", err)
-			http.Error(resp, err.Error(), 500)
+			util.Logger.Error("unable to delete room", attributes.ErrorKey, err)
+			gc.String(http.StatusInternalServerError, "unable to delete room")
 			return
 		}
 		if !access {
-			log.Println("WARNING: user access denied")
-			http.Error(resp, "access denied", http.StatusUnauthorized)
+			gc.String(http.StatusUnauthorized, "access denied")
 			return
 		}
 		if !exists {
-			log.Println("WARNING: 404")
-			http.Error(resp, "unknown id", http.StatusNotFound)
+			gc.String(http.StatusNotFound, "unknown id")
 			return
 		}
-		fmt.Fprint(resp, "ok")
+		gc.String(http.StatusOK, "ok")
 	})
 }
