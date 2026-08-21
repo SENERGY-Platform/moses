@@ -19,12 +19,15 @@ package lib
 import (
 	"context"
 	"github.com/IBM/sarama"
+	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/api"
 	"github.com/SENERGY-Platform/moses/lib/config"
+	"github.com/SENERGY-Platform/moses/lib/repo"
 	"github.com/SENERGY-Platform/moses/lib/state"
+	"github.com/SENERGY-Platform/moses/lib/util"
 	platform_connector_lib "github.com/SENERGY-Platform/platform-connector-lib"
 	"github.com/SENERGY-Platform/platform-connector-lib/connectionlog"
-	"log"
+	"log/slog"
 	"strings"
 	"time"
 )
@@ -45,9 +48,9 @@ func New(config config.Config, ctx context.Context) (err error) {
 		KafkaUrl:                 config.KafkaUrl,
 		AuthExpirationTimeBuffer: config.AuthExpirationTimeBuffer,
 		JwtExpiration:            config.JwtExpiration,
-		JwtPrivateKey:            config.JwtPrivateKey,
+		JwtPrivateKey:            config.JwtPrivateKey.Value(),
 		JwtIssuer:                config.JwtIssuer,
-		AuthClientSecret:         config.AuthClientSecret,
+		AuthClientSecret:         config.AuthClientSecret.Value(),
 		AuthClientId:             config.AuthClientId,
 		AuthEndpoint:             config.AuthEndpoint,
 		DeviceManagerUrl:         config.DeviceManagerUrl,
@@ -71,8 +74,8 @@ func New(config config.Config, ctx context.Context) (err error) {
 		PublishToPostgres: config.PublishToPostgres,
 		PostgresHost:      config.PostgresHost,
 		PostgresPort:      config.PostgresPort,
-		PostgresUser:      config.PostgresUser,
-		PostgresPw:        config.PostgresPw,
+		PostgresUser:      config.PostgresUser.Value(),
+		PostgresPw:        config.PostgresPw.Value(),
 		PostgresDb:        config.PostgresDb,
 
 		SyncCompression:     getKafkaCompression(config.SyncCompression),
@@ -100,63 +103,70 @@ func New(config config.Config, ctx context.Context) (err error) {
 		KafkaTopicConfigs: config.KafkaTopicConfigs,
 	})
 	if err != nil {
-		log.Println("ERROR: lib init", err)
+		util.Logger.Error("unable to initialise the connector", attributes.ErrorKey, err)
 		return err
 	}
 
 	if config.Debug {
-		connector.SetKafkaLogger(log.New(log.Writer(), "[CONNECTOR-KAFKA] ", 0))
+		connector.SetKafkaLogger(slog.NewLogLogger(util.Logger.Handler(), slog.LevelDebug))
 		connector.IotCache.Debug = true
 	}
 
 	err = connector.InitProducer(ctx, []platform_connector_lib.Qos{platform_connector_lib.Sync})
 	if err != nil {
-		log.Println("ERROR: producer ", err)
+		util.Logger.Error("unable to init the kafka producer", attributes.ErrorKey, err)
 		return err
 	}
 
 	logProducer, err := connector.GetProducer(platform_connector_lib.Sync)
 	if err != nil {
-		log.Println("ERROR: logger ", err)
+		util.Logger.Error("unable to build the connection log", attributes.ErrorKey, err)
 		return err
 	}
 	logger, err := connectionlog.NewWithProducer(logProducer, config.DeviceLogTopic, config.GatewayLogTopic)
 	if err != nil {
-		log.Println("ERROR: logger ", err)
+		util.Logger.Error("unable to build the connection log", attributes.ErrorKey, err)
 		return err
 	}
 
-	log.Println("connect to database")
+	util.Logger.Info("connecting to the database")
 	persistence, err := state.NewMongoPersistence(config)
 	if err != nil {
-		log.Println("ERROR: unable to connect to database: ", err)
+		util.Logger.Error("unable to connect to the database", attributes.ErrorKey, err)
 		return err
 	}
 
-	log.Println("load states from database")
+	environments, err := repo.NewMongo(config)
+	if err != nil {
+		util.Logger.Error("unable to connect to the environment store", attributes.ErrorKey, err)
+		return err
+	}
+
+	util.Logger.Info("loading states from the database")
 	staterepo := &state.StateRepo{Persistence: persistence, Config: config, Connector: connector, StateLogger: logger}
 	err = staterepo.Load()
 	if err != nil {
-		log.Println("ERROR: unable to load state repo: ", err)
+		util.Logger.Error("unable to load the state repo", attributes.ErrorKey, err)
 		return err
 	}
 
-	log.Println("start state routines")
+	util.Logger.Info("starting state routines")
 	staterepo.Start()
 
 	err = connector.Start(ctx, platform_connector_lib.Sync)
 	if err != nil {
-		log.Println("ERROR: unable to start protocol: ", err)
+		util.Logger.Error("unable to start the protocol", attributes.ErrorKey, err)
 		return err
 	}
 
-	log.Println("start api on port: ", config.ServerPort)
+	util.Logger.Info("starting the api", "port", config.ServerPort)
 
-	api.Start(ctx, config, staterepo)
+	api.Start(ctx, config, staterepo, environments)
 	go func() {
 		<-ctx.Done()
 		staterepo.Stop()
 		persistence.Close()
+		environments.Close()
 	}()
 	return nil
 }
@@ -186,6 +196,6 @@ func getKafkaCompression(compression string) sarama.CompressionCodec {
 	case "snappy":
 		return sarama.CompressionSnappy
 	}
-	log.Println("WARNING: unknown compression", compression, "fallback to none")
+	util.Logger.Warn("unknown compression, falling back to none", "compression", compression)
 	return sarama.CompressionNone
 }

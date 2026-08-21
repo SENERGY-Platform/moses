@@ -16,10 +16,14 @@
 
 package main
 
+//go:generate go run github.com/swaggo/swag/cmd/swag@v1.16.4 init --generalInfo lib/api/api.go --output docs --parseDependency --parseInternal --outputTypes json,yaml
+
 import (
 	"context"
+	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib"
 	"github.com/SENERGY-Platform/moses/lib/config"
+	"github.com/SENERGY-Platform/moses/lib/util"
 	"log"
 	"os"
 	"os/signal"
@@ -28,11 +32,12 @@ import (
 )
 
 func main() {
-	log.Println("load config")
 	config, err := config.LoadConfig()
 	if err != nil {
+		// the logger is not configured yet, so this one stays on the standard library
 		log.Fatal("unable to load config: ", err)
 	}
+	util.InitLogger(config.LoggerHandler, config.LoggerLevel)
 
 	time.Sleep(5 * time.Second) //wait for routing tables in cluster
 
@@ -40,7 +45,7 @@ func main() {
 
 	err = lib.New(config, ctx)
 	if err != nil {
-		log.Println(err)
+		util.Logger.Error("unable to start", attributes.ErrorKey, err)
 		cancel()
 	}
 
@@ -48,7 +53,7 @@ func main() {
 		shutdown := make(chan os.Signal, 1)
 		signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
 		sig := <-shutdown
-		log.Println("received shutdown signal", sig)
+		util.Logger.Info("received shutdown signal", "signal", sig.String())
 		cancel()
 	}()
 
