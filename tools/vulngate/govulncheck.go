@@ -34,16 +34,12 @@ type frame struct {
 
 // finding is one govulncheck finding.
 //
-// FixedVersion is govulncheck's own answer to "is there a version of this
-// module without the vulnerability", and it is the answer this gate uses.
-// Deriving it from the osv entries instead is a trap: an entry may carry a
-// `fixed` event for a *different* module path than the one in the trace.
-// GO-2026-4887 in this repository is exactly that case — it is fixed in
-// github.com/moby/moby/v2 and unfixed in github.com/docker/docker, which is the
-// module actually required here. govulncheck filters the affected ranges by
-// module path and picks the earliest fix that is not itself vulnerable
-// (internal/vulncheck.FixedVersion), and it sets the field on findings at every
-// scan level, symbol level included.
+// FixedVersion is the field this gate trusts. Deriving fixability from the osv
+// entries is a trap: an entry may carry a `fixed` event for a different module
+// path than the trace. GO-2026-4887 here is exactly that - fixed in
+// github.com/moby/moby/v2, unfixed in github.com/docker/docker, which is what
+// this module requires. govulncheck filters by module path and sets the field at
+// every scan level.
 type finding struct {
 	OSV          string  `json:"osv"`
 	FixedVersion string  `json:"fixed_version"`

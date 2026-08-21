@@ -14,23 +14,16 @@
  * limitations under the License.
  */
 
-// Package runtime executes the environment model.
+// Package runtime replaces the change routines of lib/state and differs in three
+// ways that are the point of the rewrite:
 //
-// It is the replacement for the change routines of lib/state, and it differs
-// from them in three ways that are the point of the rewrite:
+//   - Reload and Remove affect one environment, where the legacy runtime
+//     restarted every ticker of every world on every edit.
+//   - One mutex per environment, so two environments run in parallel.
+//   - State is kept in memory and flushed on an interval, not written whole on
+//     every state.set().
 //
-//   - Scope of a change. Reload and Remove affect one environment. The legacy
-//     runtime stopped and restarted every ticker of every world for every edit,
-//     which is why a busy installation lost values on every api call.
-//   - Scope of the lock. One mutex per environment serialises that
-//     environment's scripts, exactly like the legacy world mutex did, but two
-//     environments run in parallel.
-//   - When state is written. Runtime state is kept in memory and flushed behind
-//     an interval, instead of writing the whole document on every state.set().
-//
-// What is deliberately NOT different is the javascript surface: a migrated
-// channel carries its legacy script verbatim, so moses.world, moses.room,
-// moses.device and moses.service keep working. See jsapi.go.
+// The javascript surface is deliberately unchanged, see jsapi.go.
 package runtime
 
 import (
@@ -397,18 +390,12 @@ func (this *Runtime) removeEnvironment(id string) {
 	this.deleteStateIfDefinitionIsGone(id)
 }
 
-// deleteStateIfDefinitionIsGone cleans up the state document of a deleted
-// environment.
+// deleteStateIfDefinitionIsGone closes a window the api cannot: it deletes
+// definition and state before telling the runtime, so a flush already in flight
+// can recreate the state document afterwards and leave it behind forever. This
+// is the second delete mongodb recommends for a non transactional two step.
 //
-// This closes a window the api cannot close on its own: it deletes the
-// definition and the state and only then tells the runtime, so a flush that was
-// already on its way to the database can write the state document again after
-// that delete and leave it behind forever. Deleting it here, after the flush in
-// flight has finished, is the second delete mongodb's own documentation
-// recommends for exactly this kind of non transactional two step.
-//
-// The definition is read first so that this can never delete the state of an
-// environment that still exists.
+// The definition is read first, so the state of a live environment is safe.
 func (this *Runtime) deleteStateIfDefinitionIsGone(id string) {
 	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
 	defer cancel()

@@ -20,24 +20,18 @@ import (
 	"github.com/SENERGY-Platform/moses/lib/util"
 )
 
-// The javascript surface is the legacy one, mapped onto the new model. That is
-// not nostalgia: a migrated channel carries the legacy script verbatim, so
-// moses.world, moses.room, moses.device and moses.service have to keep meaning
-// what they meant, only against the environment, the zone the asset sits in,
-// the asset and the channel.
-//
-// The new names are exposed as aliases pointing at the same maps, so a script
-// written today can read the way the model reads, and a migrated script keeps
-// working without being rewritten:
+// The javascript surface is the legacy one: a migrated channel carries its
+// script verbatim, so moses.world, room, device and service keep their meaning,
+// now against the environment, the asset's zone, the asset and the channel. The
+// new names are aliases onto the same maps:
 //
 //	moses.world   == moses.environment
 //	moses.room    == moses.zone
 //	moses.device  == moses.asset
 //	moses.service == moses.channel
 //
-// Every function below is called from inside a script run, which means the
-// environment mutex is held for its whole duration. That is what makes reading
-// and writing the state maps here safe without any locking of their own.
+// Everything below runs inside a script run with the environment mutex held,
+// which is what makes the state maps safe without locking of their own.
 func (this *Runtime) jsApi(env *environment, gen *generation, binding channelBinding, input interface{}, send func(value interface{})) map[string]interface{} {
 	environmentApi := this.jsEnvironmentApi(env, gen)
 	zoneApi := this.jsZoneApi(env, gen, binding.zoneId)

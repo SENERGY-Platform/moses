@@ -34,13 +34,11 @@ func init() {
 	environmentEndpoints = append(environmentEndpoints, EnvironmentEndpoints)
 }
 
-// EnvironmentEndpoints serves the environment model. An environment is one
-// document: GET returns exactly what PUT accepts, so an export can be edited
-// and put back, and a whole site can be created in a single call.
+// EnvironmentEndpoints serves the environment model. GET returns exactly what
+// PUT accepts, so an export can be edited and put back.
 //
-// Each route lives in its own function returning method, path and handler. That
-// is not decoration: swaggo reads annotations above a function declaration only,
-// so a route registered inside a closure cannot be documented.
+// Each route is its own function returning method, path and handler, because
+// swaggo reads annotations above a function declaration only.
 func EnvironmentEndpoints(config config.Config, environments repo.Environments, notifier RuntimeNotifier, router gin.IRouter) {
 	for _, route := range []func(repo.Environments, RuntimeNotifier) (string, string, gin.HandlerFunc){
 		listEnvironmentsH,
@@ -109,8 +107,8 @@ func getEnvironmentH(environments repo.Environments, notifier RuntimeNotifier) (
 			return
 		}
 		if !mayAccess(token, env) {
-			// deliberately 404 and not 403: whether an environment exists is
-			// not information a caller without access should get
+			// 404 not 403: existence is not information for a caller
+			// without access
 			gc.String(http.StatusNotFound, "not found")
 			return
 		}
@@ -144,8 +142,7 @@ func putEnvironmentH(environments repo.Environments, notifier RuntimeNotifier) (
 			gc.String(http.StatusBadRequest, "unable to read the request body as an environment: %s", err.Error())
 			return
 		}
-		// the path wins over the body, so that a document can be copied to a
-		// new id without editing it first
+		// path wins over body, so a document can be copied to a new id
 		env.Id = gc.Param("id")
 
 		existing, err := environments.Get(gc.Request.Context(), env.Id)
@@ -179,9 +176,8 @@ func putEnvironmentH(environments repo.Environments, notifier RuntimeNotifier) (
 			gc.String(http.StatusInternalServerError, "unable to store environment")
 			return
 		}
-		// only this environment is reloaded, and only after it was stored: the
-		// runtime reads the definition back, so notifying before the write would
-		// restart it on the old one
+		// after the write: the runtime reads the definition back, so notifying
+		// earlier would restart it on the old one
 		notifyReload(notifier, env.Id)
 		gc.JSON(http.StatusOK, env)
 	}
@@ -293,31 +289,21 @@ func getSwaggerDocH(_ repo.Environments, _ RuntimeNotifier) (string, string, gin
 
 const swaggerDocPath = "docs/swagger.json"
 
-// requireUser reads the caller's token. Every handler in this service, the
-// legacy ones included, goes through here, which makes this the trust boundary.
+// requireUser reads the caller's token. Every handler goes through here, which
+// makes it the trust boundary.
 //
-// TRUST BOUNDARY, BY DESIGN: the token is parsed, not verified. service-commons
-// also offers GetParsedAndValidatedToken and this deliberately does not use it.
-// In the SENERGY platform the api gateway checks the signature and the standard
-// claims before a request reaches a service, and the sibling services behind it
-// parse only. Checking again here would need a keycloak cert provider in every
-// service and would take moses down whenever keycloak is briefly unreachable,
-// without adding a guarantee the gateway does not already give.
+// TRUST BOUNDARY, BY DESIGN: the token is parsed, not verified - the api gateway
+// checks signature and claims first, as it does for the sibling services, so a
+// garbage signature or expired token passes here. environment_test.go pins that
+// so it is not read as an oversight. Expose moses without a validating gateway
+// and this function is the one place to change.
 //
-// So a garbage signature, an expired token and an unknown issuer all pass. The
-// tests in environment_test.go pin that on purpose, so nobody reads the missing
-// verification as an oversight and nobody drops it as dead weight. If moses is
-// ever exposed without a validating gateway in front of it, this function is the
-// one place that has to change.
+// The check that is ours: a payload without a subject parses fine and yields an
+// empty user id, which would be stored as owner and match every other
+// subjectless token. That is a 401; an unparseable token is a 400.
 //
-// The check that is ours: a payload carrying no subject parses without error and
-// yields an empty user id, which would otherwise be stored as the owner and then
-// match every other subjectless token. That is an authentication failure, 401. A
-// token that cannot be parsed at all is a malformed request, 400.
-//
-// The returned token carries the raw credential in a field, because downstream
-// calls forward it. It must never be serialised into a response or a log line;
-// pass GetUserId() around instead.
+// The returned token carries the raw credential, because downstream calls
+// forward it. Never serialise it into a response or a log line.
 func requireUser(gc *gin.Context) (sc_jwt.Token, bool) {
 	token, err := sc_jwt.GetParsedToken(gc.Request)
 	if err != nil {
@@ -331,15 +317,14 @@ func requireUser(gc *gin.Context) (sc_jwt.Token, bool) {
 	return token, true
 }
 
-// mayAccess is the single place that decides access. It is owner based for now;
-// sharing through permissions-v2 replaces the body of this function without
-// touching any handler.
+// mayAccess is the single place that decides access; owner based for now,
+// permissions-v2 sharing replaces the body without touching a handler.
 func mayAccess(token sc_jwt.Token, env domain.Environment) bool {
 	return env.Owner == token.GetUserId() || token.IsAdmin()
 }
 
-// writeValidationError returns every problem with its path, so that a caller
-// can mark the offending fields instead of reporting that something is wrong.
+// writeValidationError returns every problem with its path, so a caller can
+// mark the offending fields.
 func writeValidationError(gc *gin.Context, err error) {
 	var invalid *domain.ValidationError
 	if !errors.As(err, &invalid) {

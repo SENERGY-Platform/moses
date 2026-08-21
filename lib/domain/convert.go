@@ -40,32 +40,20 @@ const legacyPathPrefix = "legacy:"
 
 // FromLegacyWorld converts a legacy World into an Environment.
 //
-// The conversion is lossy in exactly one place, and that place is reported
-// rather than hidden: the legacy model attaches change routines to worlds, rooms
-// and devices, while the new model drives values only through a channel's
-// Source. Every routine that cannot be mapped is returned as a Problem naming
-// its path, its id and its interval. The caller must keep the legacy world
-// document until those routines have been re-modelled as channel sources: their
-// javascript is not carried into the result.
+// Lossy in exactly one place, and that place is reported: the legacy model
+// attaches change routines to worlds, rooms and devices, the new one drives
+// values only through a channel's Source. Every unmappable routine comes back as
+// a Problem naming path, id and interval - its javascript is not in the result,
+// so the caller keeps the legacy document until they are re-modelled.
 //
-// Everything else is carried over, and the two fields that must never change -
-// Asset.ExternalRef and Asset.ExternalTypeId, plus Channel.ExternalRef - are
-// copied verbatim, because they are what keeps the platform devices and their
-// timeseries attached to this environment.
+// Asset.ExternalRef, Asset.ExternalTypeId and Channel.ExternalRef are copied
+// verbatim; they keep the platform devices and their timeseries attached.
 //
-// The returned problems are ordered by traversal, not by severity. Paths point
-// into the converted document, except for those prefixed with "legacy:", which
-// point into the input.
+// Problems are ordered by traversal. Paths point into the result, except those
+// prefixed "legacy:", which point into the input.
 //
-// The conversion does not validate: a caller that intends to store the result
-// must run Validate on it. Problems and validation errors are different things.
-// A legacy world with a name, at least one room and a device type on every
-// device converts into a document that passes Validate; a world that lacks one
-// of those produces a Problem here and a validation error there, because
-// neither a device type nor a zone can be invented without guessing.
-//
-// The error return is reserved for a caller mistake (an unknown envType); a
-// problem with the data is reported through problems.
+// Does not validate - a caller that stores the result must run Validate. The
+// error return is reserved for a caller mistake (unknown envType).
 func FromLegacyWorld(world state.World, envType EnvironmentType) (Environment, []Problem, error) {
 	if !validEnvironmentType(envType) {
 		return Environment{}, nil, fmt.Errorf("unknown environment type %q, expected one of %v", envType, environmentTypes())

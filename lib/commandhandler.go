@@ -27,22 +27,17 @@ import (
 	"github.com/SENERGY-Platform/platform-connector-lib/model"
 )
 
-// commandHandler is the shape both runtimes offer: the new runtime's
-// HandleCommand additionally says whether it was responsible, the legacy one
-// always tries.
+// commandHandler is the shape both runtimes offer; the new one additionally
+// reports whether it was responsible.
 type commandHandler func(externalDeviceRef string, externalServiceRef string, cmdMsg interface{}, responder func(respMsg interface{}))
 
 // asyncCommandHandler wraps a command handler into what the connector expects.
+// Moved unchanged out of state.StateRepo.Start(), which re-registered it on
+// every api call: the connector takes one handler, and the envelope handling
+// below is what both runtimes have to agree on.
 //
-// This used to live in state.StateRepo.Start(), where it was re-registered on
-// every legacy api call. It moved here unchanged, because the connector takes
-// exactly one handler and the handler now has to try the new runtime first: the
-// envelope handling below is the part both runtimes share, and duplicating it
-// would be the way to make the two disagree about the protocol segment.
-//
-// The decode is deliberately forgiving in the same way as before: a segment that
-// is not json is passed on as the raw string rather than dropped, because a
-// legacy script may well expect exactly that string.
+// The decode stays forgiving: a segment that is not json is passed on as the raw
+// string, because a legacy script may expect exactly that.
 func asyncCommandHandler(config config.Config, connector *platform_connector_lib.Connector, handle commandHandler) platform_connector_lib.AsyncCommandHandler {
 	return func(commandRequest model.ProtocolMsg, requestMsg platform_connector_lib.CommandRequestMsg, t time.Time) (err error) {
 		msg := map[string]interface{}{}

@@ -17,12 +17,9 @@
 // Command migratelegacy converts the legacy worlds of this service into
 // environments of the new domain model.
 //
-// It is a one-shot data migration against production data, so it is a dry run
-// unless -apply is given: without that flag it prints the complete plan and
-// writes nothing. It never deletes or modifies a legacy world - the legacy
-// runtime keeps running on those documents until the separate runtime switch -
-// and it never overwrites an environment that already exists, so re-running it
-// is safe.
+// A one-shot migration against production data, so a dry run unless -apply is
+// given. It never deletes or modifies a legacy world, and never overwrites an
+// existing environment, so re-running it is safe.
 //
 // Usage:
 //
@@ -32,10 +29,9 @@
 // world could not be written (an invalid document or a failed write), 2 the
 // migration could not be run at all (config, database, usage).
 //
-// The report goes to stdout and is the interface of this tool; only failures go
-// to stderr. The unmapped change routines it lists are the expected finding and
-// the work list for re-modelling them as channel sources: their javascript is
-// not carried into the converted document.
+// The report on stdout is the interface of this tool, only failures go to
+// stderr. The unmapped change routines it lists are the expected finding and the
+// work list: their javascript is not in the converted document.
 package main
 
 import (
@@ -253,15 +249,10 @@ func execute(ctx context.Context, environments repo.Environments, plan migration
 
 // create writes one environment.
 //
-// The Get() before the Put() is not a formality: Put() is an upsert and would
-// overwrite whatever is stored under that id, while the plan's decision to write
-// was made before the other worlds were processed. The window between this check
-// and the write cannot be closed with the store's current interface, which has
-// no insert-only write, so this narrows it rather than removing it. That is
-// acceptable for an operator-run one-shot migration and would not be for a
-// service: the only writers of this collection are this tool and the new api,
-// and the legacy runtime - the one thing that is certainly running - does not
-// touch it.
+// The Get() before the Put() is not a formality: Put() is an upsert, and the
+// plan decided to write before the other worlds were processed. The store has no
+// insert-only write, so this narrows the window rather than closing it -
+// acceptable for an operator-run one-shot, not for a service.
 func create(ctx context.Context, environments repo.Environments, plan migration.WorldPlan) (action, string, error) {
 	_, err := environments.Get(ctx, plan.Environment.Id)
 	if err == nil {

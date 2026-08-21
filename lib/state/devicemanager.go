@@ -27,26 +27,16 @@ import (
 	"github.com/SENERGY-Platform/moses/lib/util"
 )
 
-// The device-manager decides for itself what the caller may see, so its api is
-// called with the caller's own token instead of a service account. token is the
-// verbatim Authorization header value the caller sent, scheme included, and it
-// is forwarded unchanged and never logged.
+// The device-manager decides itself what the caller may see, so its api is
+// called with the caller's own token: the verbatim Authorization header value,
+// forwarded unchanged and never logged.
 //
-// These three helpers replace what lib/jwt offered as JwtImpersonate. The status
-// handling is deliberately unchanged: only 200 counts as success, 401 becomes
-// "access denied", every other status becomes an "unexpected statuscode" error.
-// A device-manager answering 201 or 204 therefore still looks like a failure —
-// whether that should change is a separate decision from swapping the token
-// library, and the tests below pin it so the question stays visible.
-//
-// The device-repository client in an already present dependency was considered
-// instead: it has no equivalent of the unparameterised GET /device-types this
-// service relies on, it does not escape the id in GET /device-types/{id}, and it
-// treats every 2xx as success. Each of those is a behaviour change, so the thin
-// helper stays.
+// Status handling is deliberately unchanged from the lib/jwt implementation
+// these replace: only 200 is success, 401 is "access denied", anything else an
+// error - so a 201 or 204 still looks like a failure. The tests below pin that
+// so the question stays visible.
 
-// errAccessDenied is returned when the device-manager rejects the caller's
-// token. The text is the one the previous implementation used.
+// errAccessDenied keeps the text the previous implementation used.
 var errAccessDenied = errors.New("access denied")
 
 // deviceManagerGetJson issues a GET and decodes the json response into result.
@@ -59,12 +49,10 @@ func deviceManagerGetJson(token string, endpoint string, result interface{}) err
 	return json.NewDecoder(response.Body).Decode(result)
 }
 
-// deviceManagerPostJson sends body as json and decodes the response into result,
-// which may be nil when the response is not wanted.
+// result may be nil when the response is not wanted.
 func deviceManagerPostJson(token string, endpoint string, body interface{}, result interface{}) error {
 	encoded := new(bytes.Buffer)
-	// encoded before the request is built, so an unencodable body never reaches
-	// the network
+	// encoded first, so an unencodable body never reaches the network
 	err := json.NewEncoder(encoded).Encode(body)
 	if err != nil {
 		return err
@@ -92,10 +80,9 @@ func deviceManagerDelete(token string, endpoint string) error {
 	return nil
 }
 
-// deviceManagerRequest sends one request and hands the response back only for a
-// 200; the caller then owns the body. Every other outcome closes the body here
-// and returns an error, so no caller has to guess whether it owns a body it also
-// got an error for — which is what the previous implementation left open.
+// deviceManagerRequest hands the response back only for a 200, and then the
+// caller owns the body. Every other outcome closes it here, so no caller has to
+// guess whether it owns a body it also got an error for.
 func deviceManagerRequest(token string, method string, endpoint string, contentType string, body io.Reader) (*http.Response, error) {
 	request, err := http.NewRequest(method, endpoint, body)
 	if err != nil {
@@ -110,8 +97,7 @@ func deviceManagerRequest(token string, method string, endpoint string, contentT
 		return nil, err
 	}
 	if response.StatusCode == http.StatusUnauthorized {
-		// the reason is only known downstream, so it is logged here; bounded,
-		// because the body is not ours and an error page can be large
+		// bounded: the body is not ours and an error page can be large
 		message, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
 		response.Body.Close()
 		util.Logger.Error("device manager denied access", "method", method, "url", endpoint, "response", string(message))

@@ -16,16 +16,13 @@
 
 // Command coveragegate is the `coverage_delta` quality gate for this repository.
 //
-// The gate criterion is "coverage of changed lines not below the repo average",
-// explicitly not an absolute repository wide percentage. That distinction is the
-// whole point: a repository at 12 % can meet "changed lines at least at the
-// average" on the first day, and the average then only rises. An absolute
-// threshold either blocks everything or is set so low it checks nothing.
+// The criterion is "coverage of changed lines not below the repo average", not
+// an absolute percentage: a repository at 12 % can meet it on day one, and the
+// average then only rises, where a fixed threshold either blocks everything or
+// checks nothing.
 //
-// So this program measures two numbers on the same profile — the coverage of the
-// statements the change touches, and the coverage of the repository as a whole —
-// and compares them. It has no default in the gate runner's adapter, which is
-// why it exists here.
+// So it measures both numbers on the same profile and compares them. The gate
+// runner's adapter has no default for this, which is why the tool exists.
 //
 // Exit codes: 0 green (or nothing to measure), 1 changed lines below the
 // average, 2 the measurement could not be taken.

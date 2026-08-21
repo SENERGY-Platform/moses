@@ -17,17 +17,14 @@
 // Command vulngate is the `vulns` quality gate for this repository.
 //
 // The gate criterion is "no new known vulnerability with an available fix in a
-// direct dependency", and it explicitly excludes "transitive findings without a
-// fix — those only make noise". Plain govulncheck is stricter than that: it
-// fails on any called vulnerability, whether or not anybody can act on it. This
-// repository has five called findings that are all transitive and all unfixed
-// upstream, so the plain command fails a gate the criterion calls green, and the
-// only way back to green would be to weaken the gate.
+// direct dependency", excluding unfixable transitive findings as noise. Plain
+// govulncheck fails on any called vulnerability instead, and this repository has
+// five that are transitive and unfixed upstream - so it would fail a gate the
+// criterion calls green.
 //
-// So this program runs govulncheck, keeps only the findings in reachable code,
-// and fails only on those that have a fix and sit in a direct requirement or in
-// the Go distribution. It prints the rest either way: a green run that says
-// nothing would hide five known, currently unfixable vulnerabilities.
+// So: keep the findings in reachable code, fail only on those with a fix in a
+// direct requirement or the Go distribution, and print the rest either way,
+// because a silent green run would hide five known vulnerabilities.
 //
 // Exit codes: 0 green, 1 at least one blocking finding, 2 the scan could not be
 // run or its output could not be trusted.

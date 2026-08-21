@@ -26,15 +26,12 @@ import (
 // CandidateIds returns the environment ids these worlds would be stored under,
 // sorted and without duplicates.
 //
-// It exists so that the caller which queries the environment store and Plan(),
-// which compares against the answer, cannot disagree about the id: if the caller
-// asked for a different id than the plan produces, the skip detection would
-// silently stop working and a second run would overwrite. The rule is that the
-// environment id is the legacy world id (ref domain.FromLegacyWorld, which is
-// given no map key fallback for the world itself), trimmed.
+// It exists so the caller that queries the store and Plan(), which compares
+// against the answer, cannot disagree about the id - a mismatch would silently
+// disable the skip detection and let a second run overwrite. The id is the
+// trimmed legacy world id (ref domain.FromLegacyWorld).
 //
-// A world without an id contributes nothing, because there is no id to ask
-// about; Plan() blocks it (ref ErrNoLegacyId).
+// A world without an id contributes nothing; Plan() blocks it (ErrNoLegacyId).
 func CandidateIds(worlds map[string]*state.World) []string {
 	seen := map[string]bool{}
 	result := []string{}
