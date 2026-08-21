@@ -1,17 +1,60 @@
 name: Tests
+
+# pull_request must sit at the top level. It used to be nested under push,
+# which silently meant no check ever ran on a pull request.
 on:
   push:
     branches:
       - master
       - main
       - dev
-    pull_request:
-      branches:
-        - master
-        - main
-        - dev
+  pull_request:
+    branches:
+      - master
+      - main
+      - dev
+
 jobs:
+  gates:
+    name: Gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks needs history to scan the pushed range rather than one commit
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # the checkout has LF line endings, so a plain gofmt check is meaningful
+      # here even though a windows working copy with core.autocrlf reports
+      # almost every file as unformatted
+      - name: Format
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt reports deviations in:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+      - name: Vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
   test:
+    name: Build and test
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -24,9 +67,6 @@ jobs:
 
       - name: Build
         run: go build -v ./...
-
-      - name: Vet
-        run: go vet ./...
 
       - name: Test
         timeout-minutes: 45

@@ -1,0 +1,34 @@
+# Secret scanning configuration.
+#
+# The findings allowlisted below are test fixtures: a keycloak realm export and
+# hardcoded tokens that the integration tests need in order to talk to their own
+# throwaway containers. None of them grants access to anything outside a test
+# run, and none of them is used in a deployment — production values come from
+# kubernetes secrets and are empty strings in config.json.
+#
+# Everything outside these paths is a finding. If one appears, the fix is to
+# rotate the credential, not to widen this file.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+description = "Generic API key"
+regex = '''(?i)(?:key|api|token|secret|client|passwd|password|auth)(?:[0-9a-z\-_\t .]{0,20})(?:[\s|']|[\s|"]){0,3}(?:=|>|:{1,3}=|\|\||:|<=|=>|:=)(?:'|\"|\s|=|\x60){0,5}([0-9a-z\-_.=]{10,150})(?:['|\"|\n|\r|\s|\x60|;]|$)'''
+keywords = ["key", "api", "token", "secret", "client", "passwd", "password", "auth"]
+
+[rules.allowlist]
+paths = [
+  '''lib/test/server/keycloak-export\.json''',
+  '''lib/test/server/server\.go''',
+]
+
+[allowlist]
+description = "test fixtures: tokens and a realm export used only against throwaway containers"
+paths = [
+  '''lib/test/helper/http\.go''',
+  '''lib/test/server/keycloak\.go''',
+  '''lib/test/server/keycloak-export\.json''',
+  '''lib/test/server/server\.go''',
+]
