@@ -19,12 +19,12 @@ package state
 import (
 	"encoding/json"
 	"errors"
+	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/config"
+	"github.com/SENERGY-Platform/moses/lib/util"
 	platform_connector_lib "github.com/SENERGY-Platform/platform-connector-lib"
 	"github.com/SENERGY-Platform/platform-connector-lib/connectionlog"
 	"github.com/SENERGY-Platform/platform-connector-lib/model"
-	"log"
-	"runtime/debug"
 	"sync"
 	"time"
 
@@ -47,6 +47,16 @@ type StateRepo struct {
 	mux                    sync.RWMutex
 	MosesProtocolId        string
 	StateLogger            connectionlog.Logger
+
+	// SkipWorldIds names the worlds this runtime must not start, because they
+	// exist as an environment and are run by lib/runtime instead. Both runtimes
+	// publish under the same platform device and service ids, so starting a
+	// migrated world here would send every value twice.
+	//
+	// It is a plain set of ids rather than a reference to the environment store
+	// on purpose: this package is being replaced, and it must not grow a
+	// dependency on the package replacing it. lib.New fills it in.
+	SkipWorldIds map[string]bool
 }
 
 // Update for HTTP-DEV-API
@@ -57,7 +67,7 @@ func (this *StateRepo) DevUpdateWorld(worldMsg WorldMsg) (err error) {
 	defer this.mux.Unlock()
 	world, err := worldMsg.ToModel()
 	if err != nil {
-		log.Println("ERROR: DevUpdateWorld()::worldMsg.ToModel()", err)
+		util.Logger.Error("unable to convert world message to model", attributes.ErrorKey, err)
 		return err
 	}
 	if this.Worlds == nil {
@@ -66,19 +76,19 @@ func (this *StateRepo) DevUpdateWorld(worldMsg WorldMsg) (err error) {
 	if world.Id == "" {
 		uid, err := uuid.NewRandom()
 		if err != nil {
-			log.Println("ERROR: DevUpdateWorld():: uuid.NewRandom()", err)
+			util.Logger.Error("unable to generate world id", attributes.ErrorKey, err)
 			return err
 		}
 		world.Id = uid.String()
 	}
 	err = this.persistWorld(world)
 	if err != nil {
-		log.Println("ERROR: DevUpdateWorld()::this.persistWorld(world)", err)
+		util.Logger.Error("unable to persist world", attributes.ErrorKey, err, "world", world.Id)
 		return err
 	}
 	err = this.Stop()
 	if err != nil {
-		log.Println("ERROR: DevUpdateWorld()::this.Stop()", err)
+		util.Logger.Error("unable to stop change routines", attributes.ErrorKey, err)
 		return err
 	}
 	this.Worlds[world.Id] = &world
@@ -108,7 +118,7 @@ func (this *StateRepo) DevDeleteWorld(id string) (err error) {
 	}
 	err = this.Stop()
 	if err != nil {
-		log.Println("ERROR: DevDeleteWorld()", err)
+		util.Logger.Error("unable to stop change routines", attributes.ErrorKey, err)
 		return err
 	}
 	delete(this.Worlds, id)
@@ -133,7 +143,7 @@ func (this *StateRepo) DevUpdateRoom(worldId string, room RoomMsg) (err error) {
 	if room.Id == "" {
 		uid, err := uuid.NewRandom()
 		if err != nil {
-			log.Println("ERROR: DevUpdateRoom::", err)
+			util.Logger.Error("unable to generate room id", attributes.ErrorKey, err)
 			return err
 		}
 		room.Id = uid.String()
@@ -188,7 +198,7 @@ func (this *StateRepo) DevUpdateDevice(worldId string, roomId string, device Dev
 	if device.Id == "" {
 		uid, err := uuid.NewRandom()
 		if err != nil {
-			log.Println("ERROR: DevUpdateDevice()::NewRandom()", err)
+			util.Logger.Error("unable to generate device id", attributes.ErrorKey, err)
 			return err
 		}
 		device.Id = uid.String()
@@ -219,17 +229,16 @@ func (this *StateRepo) DevUpdateDevice(worldId string, roomId string, device Dev
 func (this *StateRepo) Load() (err error) {
 	err = this.Stop()
 	if err != nil {
-		debug.PrintStack()
+		util.Logger.Error("unable to stop change routines", attributes.ErrorKey, err)
 		return err
 	}
 	this.MosesProtocolId, err = this.EnsureProtocol(this.Config.Protocol, []model.ProtocolSegment{{Name: this.Config.ProtocolSegmentName}})
 	if err != nil {
-		debug.PrintStack()
+		util.Logger.Error("unable to ensure protocol", attributes.ErrorKey, err)
 		return err
 	}
 	this.Worlds, err = this.Persistence.LoadWorlds()
 	if err != nil {
-		debug.PrintStack()
 		return err
 	}
 	return nil
@@ -268,7 +277,11 @@ func (this *StateRepo) Start() {
 	this.deviceRoomIndex = map[string]*Room{}
 	this.deviceWorldIndex = map[string]*World{}
 	this.roomWorldIndex = map[string]*World{}
-	for _, world := range this.Worlds {
+	for id, world := range this.Worlds {
+		if this.SkipWorldIds[id] || (world != nil && this.SkipWorldIds[world.Id]) {
+			util.Logger.Info("world migrated to an environment, legacy runtime skips it", "world", id)
+			continue
+		}
 		tickers, stops, err := this.StartWorld(world)
 		if err != nil {
 			panic(err)
@@ -277,35 +290,34 @@ func (this *StateRepo) Start() {
 		this.stopChannels = append(this.stopChannels, stops...)
 	}
 
-	this.Connector.SetAsyncCommandHandler(func(commandRequest model.ProtocolMsg, requestMsg platform_connector_lib.CommandRequestMsg, t time.Time) (err error) {
-		msg := map[string]interface{}{}
-		for key, value := range requestMsg {
-			var msgPart interface{}
-			err = json.Unmarshal([]byte(value), &msgPart)
-			if err != nil {
-				msgPart = value
-			}
-			msg[key] = msgPart
-		}
-		this.HandleCommand(commandRequest.Metadata.Device.Id, commandRequest.Metadata.Service.Id, msg[this.Config.ProtocolSegmentName], func(respMsg interface{}) {
-			msg := platform_connector_lib.CommandResponseMsg{}
-			msgStr, err := json.Marshal(respMsg)
-			if err != nil {
-				log.Println("ERROR: ", err)
-				debug.PrintStack()
-				return
-			}
-			msg[this.Config.ProtocolSegmentName] = string(msgStr)
-			err = this.Connector.HandleCommandResponse(commandRequest, msg, platform_connector_lib.Sync)
-			if err != nil {
-				log.Println("ERROR: ", err)
-				debug.PrintStack()
-				return
-			}
-		})
-		return nil
-	})
+	//the command handler is NOT registered here any more. It used to be, and it
+	//was re-registered on every Start(), which happens on every legacy api call.
+	//The registration now lives in lib.New, because a command has to be offered
+	//to the new runtime first and only fall back to this one: there is exactly
+	//one handler on the connector, and it cannot belong to one of the two
+	//runtimes. HandleCommand below is unchanged and is what the wiring calls.
 	return
+}
+
+// ExternalRefWorldIds maps every platform device the legacy runtime currently
+// acts on to the world it belongs to. It exists for one diagnostic the per world
+// cutover cannot make on its own: an environment may reference the devices of a
+// world that was never migrated, and then both runtimes publish for that device.
+func (this *StateRepo) ExternalRefWorldIds() map[string]string {
+	this.mux.RLock()
+	defer this.mux.RUnlock()
+	result := make(map[string]string, len(this.externalRefDeviceIndex))
+	for ref, device := range this.externalRefDeviceIndex {
+		if ref == "" || device == nil {
+			continue
+		}
+		world, ok := this.deviceWorldIndex[device.Id]
+		if !ok || world == nil {
+			continue
+		}
+		result[ref] = world.Id
+	}
+	return result
 }
 
 // persists given world; will not stop any change routines, nor will it request a lock on the world mutex
@@ -315,34 +327,32 @@ func (this *StateRepo) persistWorld(world World) (err error) {
 
 func (this *StateRepo) sendSensorData(device *Device, service Service, value interface{}) {
 	if this.Config.Debug {
-		log.Println("DEBUG: send sensor data for", device.Id, service.Id, value)
+		util.Logger.Debug("send sensor data", "device", device.Id, "service", service.Id, "value", value)
 	}
 	if device.ExternalRef == "" {
-		log.Println("WARNING: no external ref for device")
+		util.Logger.Warn("no external ref for device", "device", device.Id)
 		return
 	}
 	if service.ExternalRef == "" {
-		log.Println("WARNING: no external ref for service")
+		util.Logger.Warn("no external ref for service", "service", service.Id)
 		return
 	}
 	token, err := this.Connector.Security().Access()
 	if err != nil {
-		log.Println("ERROR: ", err)
-		debug.PrintStack()
+		util.Logger.Error("unable to get access token", attributes.ErrorKey, err)
 		return
 	}
 
 	msg := platform_connector_lib.CommandResponseMsg{}
 	msgStr, err := json.Marshal(value)
 	if err != nil {
-		log.Println("ERROR: ", err)
-		debug.PrintStack()
+		util.Logger.Error("unable to marshal sensor data", attributes.ErrorKey, err, "device", device.ExternalRef, "service", service.ExternalRef)
 		return
 	}
 	msg[this.Config.ProtocolSegmentName] = string(msgStr)
 	err = this.Connector.HandleDeviceEventWithAuthToken(token, device.ExternalRef, service.ExternalRef, msg, platform_connector_lib.Sync)
 	if err != nil {
-		log.Println("ERROR: while sending sensor data", value, device.ExternalRef, service.ExternalRef, err)
+		util.Logger.Error("unable to send sensor data", attributes.ErrorKey, err, "device", device.ExternalRef, "service", service.ExternalRef)
 	}
 }
 
@@ -351,17 +361,17 @@ func (this *StateRepo) HandleCommand(externalDeviceRef string, externalServiceRe
 	defer this.mux.RUnlock()
 	device, ok := this.externalRefDeviceIndex[externalDeviceRef]
 	if !ok {
-		log.Println("WARNING: no device with ref found ", externalDeviceRef)
+		util.Logger.Warn("no device with ref found", "external_ref", externalDeviceRef)
 		return
 	}
 	world, ok := this.deviceWorldIndex[device.Id]
 	if !ok {
-		log.Println("WARNING: no world for device found ", device.Id, " ", externalDeviceRef)
+		util.Logger.Warn("no world for device found", "device", device.Id, "external_ref", externalDeviceRef)
 		return
 	}
 	room, ok := this.deviceRoomIndex[device.Id]
 	if !ok {
-		log.Println("WARNING: no room for device found ", device.Id, " ", externalDeviceRef)
+		util.Logger.Warn("no room for device found", "device", device.Id, "external_ref", externalDeviceRef)
 		return
 	}
 
@@ -369,12 +379,12 @@ func (this *StateRepo) HandleCommand(externalDeviceRef string, externalServiceRe
 		if service.ExternalRef == externalServiceRef {
 			err := run(service.Code, this.getJsCommandApi(world, room, device, cmdMsg, responder), this.Config.JsTimeout, world.mux)
 			if err != nil {
-				log.Println("ERROR: while handling command in jsvm", err, device.Name, service.Name)
+				util.Logger.Warn("command handling failed", attributes.ErrorKey, err, "device", device.Name, "service", service.Name)
 			}
 			return
 		}
 	}
-	log.Println("WARNING: no matching service for device found ", externalServiceRef)
+	util.Logger.Warn("no matching service for device found", "external_ref", externalServiceRef)
 }
 
 func (this *StateRepo) RunService(serviceId string, cmdMsg interface{}) (resp interface{}, err error) {
@@ -382,24 +392,24 @@ func (this *StateRepo) RunService(serviceId string, cmdMsg interface{}) (resp in
 	defer this.mux.RUnlock()
 	device, ok := this.serviceDeviceIndex[serviceId]
 	if !ok {
-		log.Println("WARNING: no device with ref found ", serviceId)
+		util.Logger.Warn("no device with ref found", "service_id", serviceId)
 		return
 	}
 
 	service, ok := device.Services[serviceId]
 	if !ok {
-		log.Println("WARNING: no service with id found ", serviceId)
+		util.Logger.Warn("no service with id found", "service_id", serviceId)
 		return
 	}
 
 	world, ok := this.deviceWorldIndex[device.Id]
 	if !ok {
-		log.Println("WARNING: no world for device found ", device.Id, " ", serviceId)
+		util.Logger.Warn("no world for device found", "device", device.Id, "service_id", serviceId)
 		return
 	}
 	room, ok := this.deviceRoomIndex[device.Id]
 	if !ok {
-		log.Println("WARNING: no room for device found ", device.Id, " ", serviceId)
+		util.Logger.Warn("no room for device found", "device", device.Id, "service_id", serviceId)
 		return
 	}
 	err = run(service.Code, this.getJsCommandApi(world, room, device, cmdMsg, func(respMsg interface{}) {

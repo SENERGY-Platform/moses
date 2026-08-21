@@ -19,19 +19,20 @@ package state
 import (
 	"encoding/json"
 	"errors"
-	"github.com/SENERGY-Platform/moses/lib/jwt"
+	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
+	"github.com/SENERGY-Platform/moses/lib/util"
 	"github.com/SENERGY-Platform/platform-connector-lib/model"
+	sc_jwt "github.com/SENERGY-Platform/service-commons/pkg/jwt"
 	"github.com/cbroglie/mustache"
 	"github.com/google/uuid"
-	"log"
 	"strings"
 )
 
-func (this *StateRepo) ReadWorlds(jwt jwt.Jwt) (worlds []WorldMsg, err error) {
+func (this *StateRepo) ReadWorlds(token sc_jwt.Token) (worlds []WorldMsg, err error) {
 	this.mux.RLock()
 	defer this.mux.RUnlock()
 	for _, world := range this.Worlds {
-		if world.Owner == jwt.UserId {
+		if world.Owner == token.GetUserId() {
 			msg, err := world.ToMsg()
 			if err != nil {
 				return worlds, err
@@ -42,29 +43,29 @@ func (this *StateRepo) ReadWorlds(jwt jwt.Jwt) (worlds []WorldMsg, err error) {
 	return
 }
 
-func (this *StateRepo) CreateWorld(jwt jwt.Jwt, msg CreateWorldRequest) (world WorldMsg, err error) {
+func (this *StateRepo) CreateWorld(token sc_jwt.Token, msg CreateWorldRequest) (world WorldMsg, err error) {
 	uid, err := uuid.NewRandom()
 	if err != nil {
 		return world, err
 	}
-	world = WorldMsg{Id: uid.String(), Name: msg.Name, States: getDefaultWorldStates(msg.States), Owner: jwt.UserId, ChangeRoutines: getDefaultWorldChangeRoutines()}
+	world = WorldMsg{Id: uid.String(), Name: msg.Name, States: getDefaultWorldStates(msg.States), Owner: token.GetUserId(), ChangeRoutines: getDefaultWorldChangeRoutines()}
 	err = this.DevUpdateWorld(world)
 	return
 }
 
-func (this *StateRepo) ReadWorld(jwt jwt.Jwt, id string) (world WorldMsg, access bool, exists bool, err error) {
+func (this *StateRepo) ReadWorld(token sc_jwt.Token, id string) (world WorldMsg, access bool, exists bool, err error) {
 	world, exists, err = this.DevGetWorld(id)
 	if err != nil || !exists {
 		return
 	}
-	if world.Owner != jwt.UserId {
+	if world.Owner != token.GetUserId() {
 		return WorldMsg{}, false, exists, err
 	}
 	return world, true, true, err
 }
 
-func (this *StateRepo) UpdateWorld(jwt jwt.Jwt, msg UpdateWorldRequest) (world WorldMsg, access bool, exists bool, err error) {
-	world, access, exists, err = this.ReadWorld(jwt, msg.Id)
+func (this *StateRepo) UpdateWorld(token sc_jwt.Token, msg UpdateWorldRequest) (world WorldMsg, access bool, exists bool, err error) {
+	world, access, exists, err = this.ReadWorld(token, msg.Id)
 	if err != nil || !access || !exists {
 		world = WorldMsg{}
 		return
@@ -76,32 +77,32 @@ func (this *StateRepo) UpdateWorld(jwt jwt.Jwt, msg UpdateWorldRequest) (world W
 	return
 }
 
-func (this *StateRepo) DeleteWorld(jwt jwt.Jwt, id string) (access bool, exists bool, err error) {
+func (this *StateRepo) DeleteWorld(token sc_jwt.Token, id string) (access bool, exists bool, err error) {
 	world, exists, err := this.DevGetWorld(id)
 	if err != nil || !exists {
-		log.Println("ERROR:", err, exists)
+		util.Logger.Warn("world not found", attributes.ErrorKey, err, "id", id, "exists", exists)
 		return access, exists, err
 	}
-	if world.Owner != jwt.UserId {
-		log.Println("ERROR: access denied", world.Owner, jwt.UserId)
+	if world.Owner != token.GetUserId() {
+		util.Logger.Warn("access denied", "owner", world.Owner, "user_id", token.GetUserId())
 		return false, exists, err
 	}
 	err = this.DevDeleteWorld(id)
 	return true, exists, err
 }
 
-func (this *StateRepo) ReadRoom(jwt jwt.Jwt, id string) (room RoomResponse, access bool, exists bool, err error) {
+func (this *StateRepo) ReadRoom(token sc_jwt.Token, id string) (room RoomResponse, access bool, exists bool, err error) {
 	this.mux.RLock()
 	defer this.mux.RUnlock()
 	world, exists := this.roomWorldIndex[id]
 	if !exists {
-		log.Println("WARNING: room world index id not found", id, this.roomWorldIndex)
+		util.Logger.Warn("no world for room id found", "id", id)
 		return room, false, exists, nil
 	}
 	world.mux.Lock()
 	defer world.mux.Unlock()
-	if world.Owner != jwt.UserId {
-		log.Println("WARNING: room access denied", world.Owner, " != ", jwt.UserId)
+	if world.Owner != token.GetUserId() {
+		util.Logger.Warn("access denied", "owner", world.Owner, "user_id", token.GetUserId())
 		return room, false, exists, nil
 	}
 	room.World = world.Id
@@ -109,10 +110,10 @@ func (this *StateRepo) ReadRoom(jwt jwt.Jwt, id string) (room RoomResponse, acce
 	return room, true, true, err
 }
 
-func (this *StateRepo) UpdateRoom(jwt jwt.Jwt, msg UpdateRoomRequest) (room RoomResponse, access bool, exists bool, err error) {
-	room, access, exists, err = this.ReadRoom(jwt, msg.Id)
+func (this *StateRepo) UpdateRoom(token sc_jwt.Token, msg UpdateRoomRequest) (room RoomResponse, access bool, exists bool, err error) {
+	room, access, exists, err = this.ReadRoom(token, msg.Id)
 	if err != nil || !access || !exists {
-		log.Println("WARNING: update world", access, exists, err)
+		util.Logger.Warn("unable to update room", attributes.ErrorKey, err, "id", msg.Id, "access", access, "exists", exists)
 		return
 	}
 	room.Room.States = msg.States
@@ -123,9 +124,9 @@ func (this *StateRepo) UpdateRoom(jwt jwt.Jwt, msg UpdateRoomRequest) (room Room
 	return
 }
 
-func (this *StateRepo) CreateRoom(jwt jwt.Jwt, msg CreateRoomRequest) (room RoomResponse, access bool, worldExists bool, err error) {
+func (this *StateRepo) CreateRoom(token sc_jwt.Token, msg CreateRoomRequest) (room RoomResponse, access bool, worldExists bool, err error) {
 	worldMsg := WorldMsg{}
-	worldMsg, access, worldExists, err = this.ReadWorld(jwt, msg.World)
+	worldMsg, access, worldExists, err = this.ReadWorld(token, msg.World)
 	if err != nil || !access || !worldExists {
 		return room, access, worldExists, err
 	}
@@ -145,8 +146,8 @@ func (this *StateRepo) CreateRoom(jwt jwt.Jwt, msg CreateRoomRequest) (room Room
 	return room, true, true, err
 }
 
-func (this *StateRepo) DeleteRoom(jwt jwt.Jwt, id string) (room RoomResponse, access bool, exists bool, err error) {
-	room, access, exists, err = this.ReadRoom(jwt, id)
+func (this *StateRepo) DeleteRoom(token sc_jwt.Token, id string) (room RoomResponse, access bool, exists bool, err error) {
+	room, access, exists, err = this.ReadRoom(token, id)
 	if err != nil || !access || !exists {
 		return
 	}
@@ -164,7 +165,7 @@ func (this *StateRepo) DeleteRoom(jwt jwt.Jwt, id string) (room RoomResponse, ac
 	return room, true, exists, err
 }
 
-func (this *StateRepo) ReadDevice(jwt jwt.Jwt, id string) (device DeviceResponse, access bool, exists bool, err error) {
+func (this *StateRepo) ReadDevice(token sc_jwt.Token, id string) (device DeviceResponse, access bool, exists bool, err error) {
 	this.mux.RLock()
 	defer this.mux.RUnlock()
 	world, exists := this.deviceWorldIndex[id]
@@ -173,7 +174,7 @@ func (this *StateRepo) ReadDevice(jwt jwt.Jwt, id string) (device DeviceResponse
 	}
 	world.mux.Lock()
 	defer world.mux.Unlock()
-	if world.Owner != jwt.UserId {
+	if world.Owner != token.GetUserId() {
 		return device, false, exists, nil
 	}
 
@@ -188,9 +189,9 @@ func (this *StateRepo) ReadDevice(jwt jwt.Jwt, id string) (device DeviceResponse
 	return device, true, true, err
 }
 
-func (this *StateRepo) CreateDevice(jwt jwt.Jwt, msg CreateDeviceRequest) (device DeviceResponse, access bool, worldAndExists bool, err error) {
+func (this *StateRepo) CreateDevice(token sc_jwt.Token, msg CreateDeviceRequest) (device DeviceResponse, access bool, worldAndExists bool, err error) {
 	room := RoomResponse{}
-	room, access, worldAndExists, err = this.ReadRoom(jwt, msg.Room)
+	room, access, worldAndExists, err = this.ReadRoom(token, msg.Room)
 	if err != nil || !access || !worldAndExists {
 		return device, access, worldAndExists, err
 	}
@@ -209,8 +210,8 @@ func (this *StateRepo) CreateDevice(jwt jwt.Jwt, msg CreateDeviceRequest) (devic
 	return device, true, true, err
 }
 
-func (this *StateRepo) UpdateDevice(jwt jwt.Jwt, msg UpdateDeviceRequest) (device DeviceResponse, access bool, exists bool, err error) {
-	device, access, exists, err = this.ReadDevice(jwt, msg.Id)
+func (this *StateRepo) UpdateDevice(token sc_jwt.Token, msg UpdateDeviceRequest) (device DeviceResponse, access bool, exists bool, err error) {
+	device, access, exists, err = this.ReadDevice(token, msg.Id)
 	if err != nil || !access || !exists {
 		return
 	}
@@ -221,9 +222,9 @@ func (this *StateRepo) UpdateDevice(jwt jwt.Jwt, msg UpdateDeviceRequest) (devic
 	device.Device.ChangeRoutines = msg.ChangeRoutines
 	device.Device.Services = msg.Services
 	for key, value := range msg.Services {
-		device.Device.Services[key], err = this.PopulateServiceService(jwt, UpdateServiceRequest{Id: value.Id, Code: value.Code, SensorInterval: value.SensorInterval, ExternalRef: value.ExternalRef, Name: value.Name})
+		device.Device.Services[key], err = this.PopulateServiceService(token, UpdateServiceRequest{Id: value.Id, Code: value.Code, SensorInterval: value.SensorInterval, ExternalRef: value.ExternalRef, Name: value.Name})
 		if err != nil {
-			log.Println("ERROR:", err)
+			util.Logger.Warn("unable to populate service", attributes.ErrorKey, err, "service_id", value.Id)
 			return device, true, true, err
 		}
 	}
@@ -231,8 +232,8 @@ func (this *StateRepo) UpdateDevice(jwt jwt.Jwt, msg UpdateDeviceRequest) (devic
 	return device, true, true, err
 }
 
-func (this *StateRepo) DeleteDevice(jwt jwt.Jwt, id string) (device DeviceResponse, access bool, exists bool, err error) {
-	device, access, exists, err = this.ReadDevice(jwt, id)
+func (this *StateRepo) DeleteDevice(token sc_jwt.Token, id string) (device DeviceResponse, access bool, exists bool, err error) {
+	device, access, exists, err = this.ReadDevice(token, id)
 	if err != nil || !access || !exists {
 		return
 	}
@@ -248,12 +249,12 @@ func (this *StateRepo) DeleteDevice(jwt jwt.Jwt, id string) (device DeviceRespon
 	delete(world.Rooms[device.Room].Devices, device.Device.Id)
 	err = this.DevUpdateWorld(world) //update world is more efficient than update room
 	if err == nil {
-		this.DeleteExternalDevice(jwt, device.Device.ExternalRef)
+		this.DeleteExternalDevice(token, device.Device.ExternalRef)
 	}
 	return device, true, true, err
 }
 
-func (this *StateRepo) ReadService(jwt jwt.Jwt, id string) (service ServiceResponse, access bool, exists bool, err error) {
+func (this *StateRepo) ReadService(token sc_jwt.Token, id string) (service ServiceResponse, access bool, exists bool, err error) {
 	this.mux.RLock()
 	defer this.mux.RUnlock()
 	devicep, exists := this.serviceDeviceIndex[id]
@@ -266,7 +267,7 @@ func (this *StateRepo) ReadService(jwt jwt.Jwt, id string) (service ServiceRespo
 	}
 	world.mux.Lock()
 	defer world.mux.Unlock()
-	if world.Owner != jwt.UserId {
+	if world.Owner != token.GetUserId() {
 		return service, false, exists, nil
 	}
 
@@ -287,9 +288,9 @@ func (this *StateRepo) ReadService(jwt jwt.Jwt, id string) (service ServiceRespo
 	return service, true, true, err
 }
 
-func (this *StateRepo) CreateService(jwt jwt.Jwt, msg CreateServiceRequest) (service ServiceResponse, access bool, worldAndExists bool, err error) {
+func (this *StateRepo) CreateService(token sc_jwt.Token, msg CreateServiceRequest) (service ServiceResponse, access bool, worldAndExists bool, err error) {
 	device := DeviceResponse{}
-	device, access, worldAndExists, err = this.ReadDevice(jwt, msg.Device)
+	device, access, worldAndExists, err = this.ReadDevice(token, msg.Device)
 	if err != nil || !access || !worldAndExists {
 		return service, access, worldAndExists, err
 	}
@@ -308,7 +309,7 @@ func (this *StateRepo) CreateService(jwt jwt.Jwt, msg CreateServiceRequest) (ser
 	if device.Device.Services == nil {
 		device.Device.Services = map[string]Service{}
 	}
-	device.Device.Services[service.Service.Id], err = this.PopulateServiceService(jwt, service.Service)
+	device.Device.Services[service.Service.Id], err = this.PopulateServiceService(token, service.Service)
 	if err != nil {
 		return service, access, worldAndExists, err
 	}
@@ -316,7 +317,7 @@ func (this *StateRepo) CreateService(jwt jwt.Jwt, msg CreateServiceRequest) (ser
 	return service, true, true, err
 }
 
-func (this *StateRepo) PopulateServiceService(jwt jwt.Jwt, serviceMsg UpdateServiceRequest) (service Service, err error) {
+func (this *StateRepo) PopulateServiceService(token sc_jwt.Token, serviceMsg UpdateServiceRequest) (service Service, err error) {
 	service.Id = serviceMsg.Id
 	service.Name = serviceMsg.Name
 	service.SensorInterval = serviceMsg.SensorInterval
@@ -325,12 +326,12 @@ func (this *StateRepo) PopulateServiceService(jwt jwt.Jwt, serviceMsg UpdateServ
 	return
 }
 
-func (this *StateRepo) UpdateService(jwt jwt.Jwt, msg UpdateServiceRequest) (service ServiceResponse, access bool, exists bool, err error) {
-	service, access, exists, err = this.ReadService(jwt, msg.Id)
+func (this *StateRepo) UpdateService(token sc_jwt.Token, msg UpdateServiceRequest) (service ServiceResponse, access bool, exists bool, err error) {
+	service, access, exists, err = this.ReadService(token, msg.Id)
 	if err != nil || !access || !exists {
 		return
 	}
-	device, access, exists, err := this.ReadDevice(jwt, service.Device)
+	device, access, exists, err := this.ReadDevice(token, service.Device)
 	if err != nil || !access || !exists {
 		return service, access, exists, err
 	}
@@ -338,7 +339,7 @@ func (this *StateRepo) UpdateService(jwt jwt.Jwt, msg UpdateServiceRequest) (ser
 	service.Service.ExternalRef = msg.ExternalRef
 	service.Service.Code = msg.Code
 	service.Service.SensorInterval = msg.SensorInterval
-	device.Device.Services[service.Service.Id], err = this.PopulateServiceService(jwt, service.Service)
+	device.Device.Services[service.Service.Id], err = this.PopulateServiceService(token, service.Service)
 	if err != nil {
 		return service, access, exists, err
 	}
@@ -346,12 +347,12 @@ func (this *StateRepo) UpdateService(jwt jwt.Jwt, msg UpdateServiceRequest) (ser
 	return service, true, true, err
 }
 
-func (this *StateRepo) DeleteService(jwt jwt.Jwt, id string) (service ServiceResponse, access bool, exists bool, err error) {
-	service, access, exists, err = this.ReadService(jwt, id)
+func (this *StateRepo) DeleteService(token sc_jwt.Token, id string) (service ServiceResponse, access bool, exists bool, err error) {
+	service, access, exists, err = this.ReadService(token, id)
 	if err != nil || !access || !exists {
 		return
 	}
-	device, access, exists, err := this.ReadDevice(jwt, service.Device)
+	device, access, exists, err := this.ReadDevice(token, service.Device)
 	if err != nil || !access || !exists {
 		return service, access, exists, err
 	}
@@ -360,17 +361,17 @@ func (this *StateRepo) DeleteService(jwt jwt.Jwt, id string) (service ServiceRes
 	return service, true, true, err
 }
 
-func (this *StateRepo) CreateDeviceByType(jwt jwt.Jwt, msg CreateDeviceByTypeRequest) (result DeviceResponse, access bool, worldAndExists bool, err error) {
+func (this *StateRepo) CreateDeviceByType(token sc_jwt.Token, msg CreateDeviceByTypeRequest) (result DeviceResponse, access bool, worldAndExists bool, err error) {
 	room := RoomResponse{}
-	room, access, worldAndExists, err = this.ReadRoom(jwt, msg.Room)
+	room, access, worldAndExists, err = this.ReadRoom(token, msg.Room)
 	if err != nil || !access || !worldAndExists {
 		return result, access, worldAndExists, err
 	}
-	services, err := this.prepareServices(jwt, msg.DeviceTypeId)
+	services, err := this.prepareServices(token, msg.DeviceTypeId)
 	if err != nil {
 		return result, access, worldAndExists, err
 	}
-	externalDevice, err := this.GenerateExternalDevice(jwt, msg)
+	externalDevice, err := this.GenerateExternalDevice(token, msg)
 	if err != nil {
 		return result, access, worldAndExists, err
 	}
@@ -389,9 +390,9 @@ func (this *StateRepo) CreateDeviceByType(jwt jwt.Jwt, msg CreateDeviceByTypeReq
 	return result, true, true, err
 }
 
-func (this *StateRepo) prepareServices(jwt jwt.Jwt, deviceTypeId string) (result map[string]Service, err error) {
+func (this *StateRepo) prepareServices(token sc_jwt.Token, deviceTypeId string) (result map[string]Service, err error) {
 	result = map[string]Service{}
-	devicetype, err := this.GetIotDeviceType(jwt, deviceTypeId)
+	devicetype, err := this.GetIotDeviceType(token, deviceTypeId)
 	if err != nil {
 		return result, err
 	}
@@ -439,7 +440,7 @@ moses.service.send(output);{{/output}}`
 	return mustache.Render(template, templateParamer)
 }
 
-func (this *StateRepo) CreateChangeRoutine(jwt jwt.Jwt, msg CreateChangeRoutineRequest) (result ChangeRoutineResponse, access bool, exists bool, err error) {
+func (this *StateRepo) CreateChangeRoutine(token sc_jwt.Token, msg CreateChangeRoutineRequest) (result ChangeRoutineResponse, access bool, exists bool, err error) {
 	uid, err := uuid.NewRandom()
 	if err != nil {
 		return result, access, exists, err
@@ -448,7 +449,7 @@ func (this *StateRepo) CreateChangeRoutine(jwt jwt.Jwt, msg CreateChangeRoutineR
 	result = ChangeRoutineResponse{Id: routine.Id, Code: routine.Code, Interval: routine.Interval, RefId: msg.RefId, RefType: msg.RefType}
 	switch msg.RefType {
 	case "world":
-		world, access, exists, err := this.ReadWorld(jwt, msg.RefId)
+		world, access, exists, err := this.ReadWorld(token, msg.RefId)
 		if err != nil || !access || !exists {
 			return result, access, exists, err
 		}
@@ -458,7 +459,7 @@ func (this *StateRepo) CreateChangeRoutine(jwt jwt.Jwt, msg CreateChangeRoutineR
 		world.ChangeRoutines[routine.Id] = routine
 		err = this.DevUpdateWorld(world)
 	case "room":
-		room, access, exists, err := this.ReadRoom(jwt, msg.RefId)
+		room, access, exists, err := this.ReadRoom(token, msg.RefId)
 		if err != nil || !access || !exists {
 			return result, access, exists, err
 		}
@@ -468,7 +469,7 @@ func (this *StateRepo) CreateChangeRoutine(jwt jwt.Jwt, msg CreateChangeRoutineR
 		room.Room.ChangeRoutines[routine.Id] = routine
 		err = this.DevUpdateRoom(room.World, room.Room)
 	case "device":
-		device, access, exists, err := this.ReadDevice(jwt, msg.RefId)
+		device, access, exists, err := this.ReadDevice(token, msg.RefId)
 		if err != nil || !access || !exists {
 			return result, access, exists, err
 		}
@@ -483,8 +484,8 @@ func (this *StateRepo) CreateChangeRoutine(jwt jwt.Jwt, msg CreateChangeRoutineR
 	return result, true, true, err
 }
 
-func (this *StateRepo) UpdateChangeRoutine(jwt jwt.Jwt, msg UpdateChangeRoutineRequest) (routine ChangeRoutineResponse, access bool, exists bool, err error) {
-	routine, access, exists, err = this.ReadChangeRoutine(jwt, msg.Id)
+func (this *StateRepo) UpdateChangeRoutine(token sc_jwt.Token, msg UpdateChangeRoutineRequest) (routine ChangeRoutineResponse, access bool, exists bool, err error) {
+	routine, access, exists, err = this.ReadChangeRoutine(token, msg.Id)
 	if err != nil || !access || !exists {
 		return routine, access, exists, err
 	}
@@ -493,21 +494,21 @@ func (this *StateRepo) UpdateChangeRoutine(jwt jwt.Jwt, msg UpdateChangeRoutineR
 	routine.Interval = changeRoutine.Interval
 	switch routine.RefType {
 	case "world":
-		world, access, exists, err := this.ReadWorld(jwt, routine.RefId)
+		world, access, exists, err := this.ReadWorld(token, routine.RefId)
 		if err != nil || !access || !exists {
 			return routine, access, exists, err
 		}
 		world.ChangeRoutines[msg.Id] = changeRoutine
 		err = this.DevUpdateWorld(world)
 	case "room":
-		room, access, exists, err := this.ReadRoom(jwt, routine.RefId)
+		room, access, exists, err := this.ReadRoom(token, routine.RefId)
 		if err != nil || !access || !exists {
 			return routine, access, exists, err
 		}
 		room.Room.ChangeRoutines[msg.Id] = changeRoutine
 		err = this.DevUpdateRoom(room.World, room.Room)
 	case "device":
-		device, access, exists, err := this.ReadDevice(jwt, routine.RefId)
+		device, access, exists, err := this.ReadDevice(token, routine.RefId)
 		if err != nil || !access || !exists {
 			return routine, access, exists, err
 		}
@@ -526,7 +527,7 @@ func (this *StateRepo) getChangeRoutineFromIndex(id string) (routine ChangeRouti
 	return
 }
 
-func (this *StateRepo) ReadChangeRoutine(jwt jwt.Jwt, id string) (routine ChangeRoutineResponse, access bool, exists bool, err error) {
+func (this *StateRepo) ReadChangeRoutine(token sc_jwt.Token, id string) (routine ChangeRoutineResponse, access bool, exists bool, err error) {
 	index, exists := this.getChangeRoutineFromIndex(id)
 	if !exists {
 		return routine, access, exists, err
@@ -536,7 +537,7 @@ func (this *StateRepo) ReadChangeRoutine(jwt jwt.Jwt, id string) (routine Change
 	routine.Id = id
 	switch routine.RefType {
 	case "world":
-		world, access, exists, err := this.ReadWorld(jwt, routine.RefId)
+		world, access, exists, err := this.ReadWorld(token, routine.RefId)
 		if err != nil || !access || !exists {
 			return routine, access, exists, err
 		}
@@ -547,7 +548,7 @@ func (this *StateRepo) ReadChangeRoutine(jwt jwt.Jwt, id string) (routine Change
 		routine.Code = worldRoutine.Code
 		routine.Interval = worldRoutine.Interval
 	case "room":
-		room, access, exists, err := this.ReadRoom(jwt, routine.RefId)
+		room, access, exists, err := this.ReadRoom(token, routine.RefId)
 		if err != nil || !access || !exists {
 			return routine, access, exists, err
 		}
@@ -558,7 +559,7 @@ func (this *StateRepo) ReadChangeRoutine(jwt jwt.Jwt, id string) (routine Change
 		routine.Code = roomRoutine.Code
 		routine.Interval = roomRoutine.Interval
 	case "device":
-		device, access, exists, err := this.ReadDevice(jwt, routine.RefId)
+		device, access, exists, err := this.ReadDevice(token, routine.RefId)
 		if err != nil || !access || !exists {
 			return routine, access, exists, err
 		}
@@ -574,26 +575,26 @@ func (this *StateRepo) ReadChangeRoutine(jwt jwt.Jwt, id string) (routine Change
 	return routine, true, true, err
 }
 
-func (this *StateRepo) DeleteChangeRoutine(jwt jwt.Jwt, id string) (routine ChangeRoutineResponse, access bool, exists bool, err error) {
-	routine, access, exists, err = this.ReadChangeRoutine(jwt, id)
+func (this *StateRepo) DeleteChangeRoutine(token sc_jwt.Token, id string) (routine ChangeRoutineResponse, access bool, exists bool, err error) {
+	routine, access, exists, err = this.ReadChangeRoutine(token, id)
 	if err != nil || !access || !exists {
 		return
 	}
 	switch routine.RefType {
 	case "world":
-		world, access, exists, err := this.ReadWorld(jwt, routine.RefId)
+		world, access, exists, err := this.ReadWorld(token, routine.RefId)
 		if err != nil || !access || !exists {
 			return routine, access, exists, err
 		}
 		err = this.DevUpdateWorld(world)
 	case "room":
-		room, access, exists, err := this.ReadRoom(jwt, routine.RefId)
+		room, access, exists, err := this.ReadRoom(token, routine.RefId)
 		if err != nil || !access || !exists {
 			return routine, access, exists, err
 		}
 		err = this.DevUpdateRoom(room.World, room.Room)
 	case "device":
-		device, access, exists, err := this.ReadDevice(jwt, routine.RefId)
+		device, access, exists, err := this.ReadDevice(token, routine.RefId)
 		if err != nil || !access || !exists {
 			return routine, access, exists, err
 		}
@@ -604,7 +605,7 @@ func (this *StateRepo) DeleteChangeRoutine(jwt jwt.Jwt, id string) (routine Chan
 	return routine, true, true, err
 }
 
-func (this *StateRepo) CreateTemplate(jwt jwt.Jwt, request CreateTemplateRequest) (result RoutineTemplate, err error) {
+func (this *StateRepo) CreateTemplate(token sc_jwt.Token, request CreateTemplateRequest) (result RoutineTemplate, err error) {
 	uid, err := uuid.NewRandom()
 	if err != nil {
 		return result, err
@@ -618,10 +619,10 @@ func (this *StateRepo) CreateTemplate(jwt jwt.Jwt, request CreateTemplateRequest
 	return result, err
 }
 
-func (this *StateRepo) UpdateTemplate(jwt jwt.Jwt, request UpdateTemplateRequest) (result RoutineTemplate, exists bool, err error) {
+func (this *StateRepo) UpdateTemplate(token sc_jwt.Token, request UpdateTemplateRequest) (result RoutineTemplate, exists bool, err error) {
 	result, err = this.Persistence.GetTemplate(request.Id)
 	if errors.Is(err, ErrNotFound) {
-		log.Println("WARNING: template not found", request.Id)
+		util.Logger.Warn("template not found", "id", request.Id)
 		return result, false, nil
 	}
 	if err != nil {
@@ -636,7 +637,7 @@ func (this *StateRepo) UpdateTemplate(jwt jwt.Jwt, request UpdateTemplateRequest
 	return result, true, err
 }
 
-func (this *StateRepo) ReadTemplate(jwt jwt.Jwt, id string) (result RoutineTemplate, exists bool, err error) {
+func (this *StateRepo) ReadTemplate(token sc_jwt.Token, id string) (result RoutineTemplate, exists bool, err error) {
 	result, ok := defaultTemplates[id]
 	if ok {
 		return result, true, nil
@@ -648,11 +649,11 @@ func (this *StateRepo) ReadTemplate(jwt jwt.Jwt, id string) (result RoutineTempl
 	return result, true, err
 }
 
-func (this *StateRepo) DeleteTemplate(jwt jwt.Jwt, id string) (err error) {
+func (this *StateRepo) DeleteTemplate(token sc_jwt.Token, id string) (err error) {
 	return this.Persistence.DeleteTemplate(id)
 }
 
-func (this *StateRepo) ReadTemplates(jwt jwt.Jwt) (result []RoutineTemplate, err error) {
+func (this *StateRepo) ReadTemplates(token sc_jwt.Token) (result []RoutineTemplate, err error) {
 	result, err = this.Persistence.GetTemplates()
 	if err != nil {
 		return
@@ -665,24 +666,24 @@ func (this *StateRepo) ReadTemplates(jwt jwt.Jwt) (result []RoutineTemplate, err
 	return
 }
 
-func (this *StateRepo) UpdateChangeRoutineByTemplate(jwt jwt.Jwt, msg UpdateChangeRoutineByTemplateRequest) (routine ChangeRoutineResponse, access bool, exists bool, err error) {
-	templ, exists, err := this.ReadTemplate(jwt, msg.TemplId)
+func (this *StateRepo) UpdateChangeRoutineByTemplate(token sc_jwt.Token, msg UpdateChangeRoutineByTemplateRequest) (routine ChangeRoutineResponse, access bool, exists bool, err error) {
+	templ, exists, err := this.ReadTemplate(token, msg.TemplId)
 	if err != nil || !exists {
 		return routine, true, exists, err
 	}
 	updateRequest := UpdateChangeRoutineRequest{Id: msg.RoutineId, Interval: msg.Interval}
 	updateRequest.Code, err = RenderTempl(templ.Template, msg.Parameter)
-	return this.UpdateChangeRoutine(jwt, updateRequest)
+	return this.UpdateChangeRoutine(token, updateRequest)
 }
 
-func (this *StateRepo) CreateChangeRoutineByTemplate(jwt jwt.Jwt, msg CreateChangeRoutineByTemplateRequest) (routine ChangeRoutineResponse, access bool, exists bool, err error) {
-	templ, exists, err := this.ReadTemplate(jwt, msg.TemplId)
+func (this *StateRepo) CreateChangeRoutineByTemplate(token sc_jwt.Token, msg CreateChangeRoutineByTemplateRequest) (routine ChangeRoutineResponse, access bool, exists bool, err error) {
+	templ, exists, err := this.ReadTemplate(token, msg.TemplId)
 	if err != nil || !exists {
 		return routine, true, exists, err
 	}
 	createRequest := CreateChangeRoutineRequest{RefId: msg.RefId, RefType: msg.RefType, Interval: msg.Interval}
 	createRequest.Code, err = RenderTempl(templ.Template, msg.Parameter)
-	return this.CreateChangeRoutine(jwt, createRequest)
+	return this.CreateChangeRoutine(token, createRequest)
 }
 
 func inputOutputSkeletonString(variable model.ContentVariable) (result string, err error) {

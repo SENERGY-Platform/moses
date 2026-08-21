@@ -18,9 +18,10 @@ package state
 
 import (
 	"encoding/json"
-	"log"
-	"runtime/debug"
 	"sync"
+
+	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
+	"github.com/SENERGY-Platform/moses/lib/util"
 )
 
 type CreateWorldRequest struct {
@@ -187,14 +188,12 @@ type DeviceMsg struct {
 func jsonCopy(from interface{}, to interface{}) (err error) {
 	temp, err := json.Marshal(from)
 	if err != nil {
-		log.Printf("ERROR: %#v \n", from)
-		debug.PrintStack()
+		util.Logger.Error("unable to marshal world model for conversion", attributes.ErrorKey, err)
 		return err
 	}
 	err = json.Unmarshal(temp, to)
 	if err != nil {
-		log.Printf("ERROR: %#v \n", string(temp))
-		debug.PrintStack()
+		util.Logger.Error("unable to unmarshal world model for conversion", attributes.ErrorKey, err)
 		return err
 	}
 	return

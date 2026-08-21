@@ -24,7 +24,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/SENERGY-Platform/moses/lib/jwt"
+	sc_jwt "github.com/SENERGY-Platform/service-commons/pkg/jwt"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 )
@@ -274,32 +274,32 @@ func TestTemplateNotFoundSentinel(t *testing.T) {
 	repo := &StateRepo{Persistence: notFoundPersistence{}}
 
 	//not found
-	_, exists, err := repo.ReadTemplate(jwt.Jwt{UserId: "user"}, "unknown")
+	_, exists, err := repo.ReadTemplate(sc_jwt.Token{Sub: "user"}, "unknown")
 	if err != nil || exists {
 		t.Fatalf("expected exists=false without error, got exists=%v err=%v", exists, err)
 	}
-	_, exists, err = repo.UpdateTemplate(jwt.Jwt{UserId: "user"}, UpdateTemplateRequest{Id: "unknown"})
+	_, exists, err = repo.UpdateTemplate(sc_jwt.Token{Sub: "user"}, UpdateTemplateRequest{Id: "unknown"})
 	if err != nil || exists {
 		t.Fatalf("expected exists=false without error, got exists=%v err=%v", exists, err)
 	}
 
 	//wrapped not found
 	repoWrapped := &StateRepo{Persistence: notFoundPersistence{wrap: true}}
-	_, exists, err = repoWrapped.ReadTemplate(jwt.Jwt{UserId: "user"}, "unknown")
+	_, exists, err = repoWrapped.ReadTemplate(sc_jwt.Token{Sub: "user"}, "unknown")
 	if err != nil || exists {
 		t.Fatalf("expected exists=false without error for wrapped error, got exists=%v err=%v", exists, err)
 	}
 
 	//other errors must be propagated
 	repoErr := &StateRepo{Persistence: notFoundPersistence{err: errors.New("some other error")}}
-	_, _, err = repoErr.ReadTemplate(jwt.Jwt{UserId: "user"}, "unknown")
+	_, _, err = repoErr.ReadTemplate(sc_jwt.Token{Sub: "user"}, "unknown")
 	if err == nil {
 		t.Fatal("expected error to be propagated")
 	}
 
 	//default templates are served without persistence access
 	for id := range defaultTemplates {
-		_, exists, err = repo.ReadTemplate(jwt.Jwt{UserId: "user"}, id)
+		_, exists, err = repo.ReadTemplate(sc_jwt.Token{Sub: "user"}, id)
 		if err != nil || !exists {
 			t.Fatalf("expected default template %v to exist, got exists=%v err=%v", id, exists, err)
 		}

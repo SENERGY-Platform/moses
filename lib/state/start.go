@@ -18,8 +18,10 @@ package state
 
 import (
 	"fmt"
-	"log"
 	"time"
+
+	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
+	"github.com/SENERGY-Platform/moses/lib/util"
 )
 
 func (this *StateRepo) StartWorld(world *World) (tickers []*time.Ticker, stops []chan bool, err error) {
@@ -76,7 +78,7 @@ func (this *StateRepo) StartRoom(world *World, room *Room) (tickers []*time.Tick
 func (this *StateRepo) StartDevice(world *World, room *Room, device *Device) (tickers []*time.Ticker, stops []chan bool, err error) {
 	err = this.StateLogger.LogDeviceConnect(device.ExternalRef)
 	if err != nil {
-		log.Println("WARNING: unable to log device as online", err)
+		util.Logger.Error("unable to log device as online", attributes.ErrorKey, err, "external_ref", device.ExternalRef)
 	}
 	this.externalRefDeviceIndex[device.ExternalRef] = device
 	this.deviceRoomIndex[device.Id] = room

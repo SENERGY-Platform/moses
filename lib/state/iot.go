@@ -18,33 +18,33 @@ package state
 
 import (
 	deviceRepo "github.com/SENERGY-Platform/device-repository/lib/client"
+	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/models/go/models"
-	"github.com/SENERGY-Platform/moses/lib/jwt"
+	"github.com/SENERGY-Platform/moses/lib/util"
 	permClient "github.com/SENERGY-Platform/permissions-v2/pkg/client"
 	"github.com/SENERGY-Platform/platform-connector-lib/model"
+	sc_jwt "github.com/SENERGY-Platform/service-commons/pkg/jwt"
 	"github.com/google/uuid"
-	"log"
 	"net/url"
-	"runtime/debug"
 )
 
-func (this *StateRepo) GetIotDeviceType(jwt jwt.Jwt, id string) (dt model.DeviceType, err error) {
-	err = jwt.Impersonate.GetJSON(this.Config.DeviceManagerUrl+"/device-types/"+url.PathEscape(id), &dt)
+func (this *StateRepo) GetIotDeviceType(token sc_jwt.Token, id string) (dt model.DeviceType, err error) {
+	err = deviceManagerGetJson(token.Jwt(), this.Config.DeviceManagerUrl+"/device-types/"+url.PathEscape(id), &dt)
 	if err != nil {
-		log.Println("ERROR: unable to get device type", err)
+		util.Logger.Error("unable to get device type", attributes.ErrorKey, err, "id", id)
 	}
 	return
 }
 
-func (this *StateRepo) GetIotDeviceTypes(jwt jwt.Jwt) (result []model.DeviceType, err error) {
-	err = jwt.Impersonate.GetJSON(this.Config.DeviceManagerUrl+"/device-types", &result)
+func (this *StateRepo) GetIotDeviceTypes(token sc_jwt.Token) (result []model.DeviceType, err error) {
+	err = deviceManagerGetJson(token.Jwt(), this.Config.DeviceManagerUrl+"/device-types", &result)
 	if err != nil {
-		log.Println("ERROR: unable to query service", err)
+		util.Logger.Error("unable to list device types", attributes.ErrorKey, err)
 	}
 	return
 }
 
-func (this *StateRepo) GetIotDeviceTypesIds(jwt jwt.Jwt) (result []string, err error) {
+func (this *StateRepo) GetIotDeviceTypesIds(token sc_jwt.Token) (result []string, err error) {
 	steps := 1000
 	limit := 0
 	offset := 0
@@ -65,7 +65,7 @@ func (this *StateRepo) GetIotDeviceTypesIds(jwt jwt.Jwt) (result []string, err e
 	return
 }
 
-func (this *StateRepo) GetMosesDeviceTypesIds(jwt jwt.Jwt) (result []string, err error) {
+func (this *StateRepo) GetMosesDeviceTypesIds(token sc_jwt.Token) (result []string, err error) {
 	steps := 1000
 	limit := 0
 	offset := 0
@@ -90,18 +90,18 @@ func (this *StateRepo) GetMosesDeviceTypesIds(jwt jwt.Jwt) (result []string, err
 	return
 }
 
-func (this *StateRepo) GenerateExternalDevice(jwt jwt.Jwt, request CreateDeviceByTypeRequest) (device model.Device, err error) {
+func (this *StateRepo) GenerateExternalDevice(token sc_jwt.Token, request CreateDeviceByTypeRequest) (device model.Device, err error) {
 	deviceInp := model.Device{Name: request.Name, DeviceTypeId: request.DeviceTypeId, LocalId: uuid.NewString()}
-	err = jwt.Impersonate.PostJSON(this.Config.DeviceManagerUrl+"/devices", deviceInp, &device)
+	err = deviceManagerPostJson(token.Jwt(), this.Config.DeviceManagerUrl+"/devices", deviceInp, &device)
 	if err != nil {
-		log.Println("ERROR: unable to create device in iot repository: ", err, device)
+		util.Logger.Error("unable to create device in device repository", attributes.ErrorKey, err, "device_type_id", request.DeviceTypeId, "name", request.Name)
 	}
 	return
 }
 
-func (this *StateRepo) DeleteExternalDevice(jwt jwt.Jwt, id string) (err error) {
+func (this *StateRepo) DeleteExternalDevice(token sc_jwt.Token, id string) (err error) {
 	if id != "" {
-		_, err = jwt.Impersonate.Delete(this.Config.DeviceManagerUrl + "/devices/" + url.PathEscape(id))
+		err = deviceManagerDelete(token.Jwt(), this.Config.DeviceManagerUrl+"/devices/"+url.PathEscape(id))
 	}
 	return
 }
@@ -109,7 +109,6 @@ func (this *StateRepo) DeleteExternalDevice(jwt jwt.Jwt, id string) (err error) 
 func (this *StateRepo) GetProtocolList(handler string) (result []models.Protocol, err error) {
 	token, err := this.Connector.Security().Access()
 	if err != nil {
-		debug.PrintStack()
 		return result, err
 	}
 	result, err, _ = deviceRepo.NewClient(this.Config.DeviceRepoUrl, nil).ListProtocols(string(token), 1000, 0, "name.asc")
@@ -119,14 +118,13 @@ func (this *StateRepo) GetProtocolList(handler string) (result []models.Protocol
 func (this *StateRepo) EnsureProtocol(handler string, segments []model.ProtocolSegment) (protocolId string, err error) {
 	protocols, err := this.GetProtocolList(handler)
 	if err != nil {
-		debug.PrintStack()
 		return protocolId, err
 	}
 	if len(protocols) == 1 {
 		return protocols[0].Id, err
 	}
 	if len(protocols) > 1 {
-		log.Println("WARNING: found multiple existing moses protocols")
+		util.Logger.Warn("found multiple existing moses protocols")
 		return protocols[0].Id, err
 	}
 	protocol, err := this.CreateProtocol(handler, segments)
@@ -148,9 +146,7 @@ func (this *StateRepo) CreateProtocol(handler string, segments []model.ProtocolS
 		ProtocolSegments: segments,
 	}, &protocol)
 	if err != nil {
-		log.Println("ERROR:", err)
-		log.Println("DEBUG: token=", token)
-		debug.PrintStack()
+		util.Logger.Error("unable to create protocol", attributes.ErrorKey, err, "handler", handler)
 	}
 	return
 }

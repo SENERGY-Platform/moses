@@ -20,12 +20,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
-	"runtime/debug"
 	"sync"
 	"time"
 
+	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
+	"github.com/SENERGY-Platform/moses/lib/util"
 	"github.com/robertkrimen/otto"
 )
 
@@ -38,7 +38,7 @@ func startChangeRoutine(routine ChangeRoutine, callbacks map[string]interface{},
 			case <-ticker.C:
 				err := run(routine.Code, callbacks, timeout, mux)
 				if err != nil {
-					log.Println("ERROR: startChangeRoutine()", err, "\n", locationInfoForErrorLogging, "\n", trimCodeDefault(routine.Code))
+					util.Logger.Warn("change routine failed", attributes.ErrorKey, err, "location", locationInfoForErrorLogging, "code", trimCodeDefault(routine.Code))
 				}
 			case <-stop:
 				return
@@ -90,8 +90,7 @@ func run(code string, moses interface{}, timeout time.Duration, mux sync.Locker)
 
 	err = vm.Set("httpGet", httpGet)
 	if err != nil {
-		log.Println("ERROR", err)
-		debug.PrintStack()
+		util.Logger.Warn("unable to set up httpGet in javascript vm", attributes.ErrorKey, err)
 		return
 	}
 
@@ -106,12 +105,12 @@ func run(code string, moses interface{}, timeout time.Duration, mux sync.Locker)
 func httpGet(endpoint string) string {
 	resp, err := http.Get(endpoint)
 	if err != nil {
-		log.Println("ERROR: httpGet", endpoint, err)
+		util.Logger.Warn("httpGet failed", attributes.ErrorKey, err, "endpoint", endpoint)
 		return ""
 	}
 	temp, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Println("ERROR: httpGet::ReadAll", endpoint, err)
+		util.Logger.Warn("httpGet unable to read response body", attributes.ErrorKey, err, "endpoint", endpoint)
 		return ""
 	}
 	return string(temp)

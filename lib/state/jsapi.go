@@ -17,8 +17,8 @@
 package state
 
 import (
-	"log"
-	"runtime/debug"
+	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
+	"github.com/SENERGY-Platform/moses/lib/util"
 )
 
 func (this *StateRepo) getJsWorldApi(world *World) map[string]interface{} {
@@ -38,8 +38,7 @@ func (this *StateRepo) getJsWorldSubApi(world *World) map[string]interface{} {
 				if world != nil {
 					err := this.persistWorld(*world)
 					if err != nil {
-						log.Println("ERROR:", err)
-						debug.PrintStack()
+						util.Logger.Error("unable to persist world state", attributes.ErrorKey, err, "world", world.Id, "field", field)
 					}
 				}
 			},
@@ -58,7 +57,7 @@ func (this *StateRepo) getJsWorldSubApi(world *World) map[string]interface{} {
 		"getRoom": func(roomid string) map[string]interface{} {
 			room, ok := world.Rooms[roomid]
 			if !ok {
-				log.Println("WARNING: js-api getRoom(), room not found ", roomid)
+				util.Logger.Warn("no room for id found", "id", roomid)
 				return map[string]interface{}{}
 			}
 			return this.getJsRoomSubApi(world, room)
@@ -84,8 +83,7 @@ func (this *StateRepo) getJsRoomSubApi(world *World, room *Room) map[string]inte
 				if world != nil {
 					err := this.persistWorld(*world)
 					if err != nil {
-						log.Println("ERROR:", err)
-						debug.PrintStack()
+						util.Logger.Error("unable to persist world state", attributes.ErrorKey, err, "world", world.Id, "room", room.Id, "field", field)
 					}
 				}
 			},
@@ -104,7 +102,7 @@ func (this *StateRepo) getJsRoomSubApi(world *World, room *Room) map[string]inte
 		"getDevice": func(deviceid string) map[string]interface{} {
 			device, ok := room.Devices[deviceid]
 			if !ok {
-				log.Println("WARNING: js-api getDevice(), device not found ", deviceid)
+				util.Logger.Warn("no device for id found", "id", deviceid)
 				return map[string]interface{}{}
 			}
 			return this.getJsDeviceSubApi(world, device)
@@ -131,8 +129,7 @@ func (this *StateRepo) getJsDeviceSubApi(world *World, device *Device) map[strin
 				if world != nil {
 					err := this.persistWorld(*world)
 					if err != nil {
-						log.Println("ERROR:", err)
-						debug.PrintStack()
+						util.Logger.Error("unable to persist world state", attributes.ErrorKey, err, "world", world.Id, "device", device.Id, "field", field)
 					}
 				}
 			},

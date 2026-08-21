@@ -19,12 +19,13 @@ package state
 import (
 	"context"
 	"errors"
-	"log"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/config"
+	"github.com/SENERGY-Platform/moses/lib/util"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/bsoncodec"
 	"go.mongodb.org/mongo-driver/bson/mgocompat"
@@ -80,7 +81,7 @@ func NewMongoPersistence(config config.Config) (result MongoPersistence, err err
 	result.templateCollectionName = config.TemplateCollectionName
 	result.tableName = config.MongoTable
 	//mgo.Dial() accepted urls without a scheme, ApplyURI() rejects them
-	mongoUrl := config.MongoUrl
+	mongoUrl := config.MongoUrl.Value()
 	if !strings.Contains(mongoUrl, "://") {
 		mongoUrl = "mongodb://" + mongoUrl
 	}
@@ -90,12 +91,12 @@ func NewMongoPersistence(config config.Config) (result MongoPersistence, err err
 	defer cancel()
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoUrl).SetRegistry(mongoRegistry).SetMaxPoolSize(mongoMaxPoolSize))
 	if err != nil {
-		log.Println("ERROR: NewMongoPersistence()::mongo.Connect()", err)
+		util.Logger.Error("unable to connect to mongodb", attributes.ErrorKey, err)
 		return result, err
 	}
 	err = client.Ping(ctx, nil)
 	if err != nil {
-		log.Println("ERROR: NewMongoPersistence()::client.Ping()", err)
+		util.Logger.Error("unable to reach mongodb", attributes.ErrorKey, err)
 		disconnect(client)
 		return result, err
 	}
@@ -115,7 +116,7 @@ func disconnect(client *mongo.Client) {
 	defer cancel()
 	err := client.Disconnect(ctx)
 	if err != nil {
-		log.Println("ERROR: unable to disconnect from mongodb", err)
+		util.Logger.Error("unable to disconnect from mongodb", attributes.ErrorKey, err)
 	}
 }
 
@@ -149,7 +150,7 @@ func (this MongoPersistence) PersistTemplate(templ RoutineTemplate) (err error) 
 	defer cancel()
 	_, err = this.getTemplateCollection().ReplaceOne(ctx, bson.M{"id": templ.Id}, templ, options.Replace().SetUpsert(true))
 	if err != nil {
-		log.Println("ERROR: PersistTemplate()", err)
+		util.Logger.Error("unable to persist template", attributes.ErrorKey, err)
 	}
 	return
 }
@@ -163,7 +164,7 @@ func (this MongoPersistence) GetTemplate(id string) (templ RoutineTemplate, err 
 		return templ, ErrNotFound
 	}
 	if err != nil {
-		log.Println("ERROR: GetTemplate()", err)
+		util.Logger.Error("unable to get template", attributes.ErrorKey, err)
 	}
 	return
 }
@@ -174,12 +175,12 @@ func (this MongoPersistence) GetTemplates() (templ []RoutineTemplate, err error)
 	defer cancel()
 	cursor, err := this.getTemplateCollection().Find(ctx, bson.M{})
 	if err != nil {
-		log.Println("ERROR: GetTemplates()", err)
+		util.Logger.Error("unable to list templates", attributes.ErrorKey, err)
 		return templ, err
 	}
 	err = cursor.All(ctx, &templ)
 	if err != nil {
-		log.Println("ERROR: GetTemplates()::cursor.All()", err)
+		util.Logger.Error("unable to decode templates", attributes.ErrorKey, err)
 	}
 	return
 }
@@ -190,7 +191,7 @@ func (this MongoPersistence) LoadWorlds() (result map[string]*World, err error) 
 	defer cancel()
 	cursor, err := this.getWorldCollection().Find(ctx, bson.M{})
 	if err != nil {
-		log.Println("ERROR: LoadWorlds()", err)
+		util.Logger.Error("unable to list worlds", attributes.ErrorKey, err)
 		return result, err
 	}
 	defer cursor.Close(context.Background())
@@ -202,7 +203,7 @@ func (this MongoPersistence) LoadWorlds() (result map[string]*World, err error) 
 		world := World{}
 		err = cursor.Decode(&world)
 		if err != nil {
-			log.Println("ERROR: LoadWorlds() skipping undecodable world document:", err)
+			util.Logger.Error("skipping undecodable world document", attributes.ErrorKey, err)
 			continue
 		}
 		world.mux = &sync.Mutex{}
@@ -211,7 +212,7 @@ func (this MongoPersistence) LoadWorlds() (result map[string]*World, err error) 
 	}
 	err = cursor.Err()
 	if err != nil {
-		log.Println("ERROR: LoadWorlds()::cursor.Err()", err)
+		util.Logger.Error("unable to iterate worlds", attributes.ErrorKey, err)
 		return result, err
 	}
 	return result, nil
@@ -222,7 +223,7 @@ func (this MongoPersistence) DeleteWorld(id string) (err error) {
 	defer cancel()
 	_, err = this.getWorldCollection().DeleteMany(ctx, bson.M{"id": id})
 	if err != nil {
-		log.Println("ERROR: DeleteWorld()", err)
+		util.Logger.Error("unable to delete world", attributes.ErrorKey, err)
 	}
 	return
 }
@@ -232,7 +233,7 @@ func (this MongoPersistence) DeleteTemplate(id string) (err error) {
 	defer cancel()
 	_, err = this.getTemplateCollection().DeleteMany(ctx, bson.M{"id": id})
 	if err != nil {
-		log.Println("ERROR: DeleteTemplate()", err)
+		util.Logger.Error("unable to delete template", attributes.ErrorKey, err)
 	}
 	return
 }
