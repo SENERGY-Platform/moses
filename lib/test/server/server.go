@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"sync"
 
+	sb_config_types "github.com/SENERGY-Platform/go-service-base/config-hdl/types"
 	"github.com/SENERGY-Platform/moses/lib"
 	"github.com/SENERGY-Platform/moses/lib/config"
 )
@@ -49,7 +50,7 @@ func New(ctx context.Context, wg *sync.WaitGroup, startConfig config.Config, key
 		debug.PrintStack()
 		return config, err
 	}
-	config.MongoUrl = "mongodb://localhost:" + mongoHostPort
+	config.MongoUrl = sb_config_types.Secret("mongodb://localhost:" + mongoHostPort)
 	containerMongoUrl := "mongodb://" + mongoIp + ":27017"
 
 	permV2HostPort, permV2Ip, err := PermissionsV2(ctx, wg, containerMongoUrl, containerKafkaUrl)
@@ -85,7 +86,7 @@ func New(ctx context.Context, wg *sync.WaitGroup, startConfig config.Config, key
 		debug.PrintStack()
 		return config, err
 	}
-	config.AuthClientSecret = "d61daec4-40d6-4d3e-98c9-f3b515696fc6"
+	config.AuthClientSecret = sb_config_types.Secret("d61daec4-40d6-4d3e-98c9-f3b515696fc6")
 	config.AuthClientId = "connector"
 
 	apiPort, err := getFreePort()

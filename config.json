@@ -1,8 +1,11 @@
 {
     "server_port":"8080",
-    "log_level":"CALL",
+    "logger_handler":"json",
+    "logger_level":"info",
     "world_collection_name":"worlds",
     "template_collection_name":"templates",
+    "environment_collection_name":"environments",
+    "state_collection_name":"environment_states",
     "mongo_url":"mongodb://db",
     "mongo_table": "moses",
     "js_timeout":2000000000,

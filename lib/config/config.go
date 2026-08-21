@@ -17,89 +17,108 @@
 package config
 
 import (
-	"encoding/json"
+	"errors"
 	"flag"
-	"fmt"
-	"github.com/segmentio/kafka-go"
 	"log"
-	"os"
-	"reflect"
-	"regexp"
-	"strconv"
-	"strings"
 	"time"
+
+	sb_config_hdl "github.com/SENERGY-Platform/go-service-base/config-hdl"
+	sb_config_types "github.com/SENERGY-Platform/go-service-base/config-hdl/types"
+	"github.com/segmentio/kafka-go"
 )
 
+// Every field carries an explicit env_var tag. The names are NOT derived from
+// the field names: the previous loader derived them with its own camel-case
+// splitter, and any library deriving them even slightly differently would
+// silently rename a deployment variable. TestConfigFieldsMapToTheExpectedEnvironmentVariableNames
+// pins the complete set.
+//
+// Fields holding a credential use sb_config_types.Secret, whose String and
+// MarshalJSON return a random placeholder, so the value cannot leak through a
+// log line or an error message. Read it with .Value().
 type Config struct {
-	ServerPort             string        `json:"server_port"`
-	LogLevel               string        `json:"log_level"`
-	WorldCollectionName    string        `json:"world_collection_name"`
-	TemplateCollectionName string        `json:"template_collection_name"`
-	MongoUrl               string        `json:"mongo_url" config:"secret"`
-	MongoTable             string        `json:"mongo_table"`
-	JsTimeout              time.Duration `json:"js_timeout"`
-	ProtocolSegmentName    string        `json:"protocol_segment_name"`
+	ServerPort             string                 `json:"server_port" env_var:"SERVER_PORT"`
+	LoggerHandler          string                 `json:"logger_handler" env_var:"LOGGER_HANDLER"` //json | text
+	LoggerLevel            string                 `json:"logger_level" env_var:"LOGGER_LEVEL"`     //debug | info | warn | error
+	WorldCollectionName    string                 `json:"world_collection_name" env_var:"WORLD_COLLECTION_NAME"`
+	TemplateCollectionName string                 `json:"template_collection_name" env_var:"TEMPLATE_COLLECTION_NAME"`
+	MongoUrl               sb_config_types.Secret `json:"mongo_url" env_var:"MONGO_URL"` //may embed credentials
+	MongoTable             string                 `json:"mongo_table" env_var:"MONGO_TABLE"`
+	JsTimeout              time.Duration          `json:"js_timeout" env_var:"JS_TIMEOUT"` //json: nanoseconds, env: duration string ("2s")
+	ProtocolSegmentName    string                 `json:"protocol_segment_name" env_var:"PROTOCOL_SEGMENT_NAME"`
 
-	KafkaUrl           string `json:"kafka_url"`
-	KafkaResponseTopic string `json:"kafka_response_topic"`
-	KafkaGroupName     string `json:"kafka_group_name"`
-	FatalKafkaError    bool   `json:"fatal_kafka_error"` // "true" || "false"; "" -> "true", else -> "false"
-	Protocol           string `json:"protocol"`
+	// EnvironmentCollectionName holds the environment definitions of the new
+	// domain model and StateCollectionName their runtime state. They are separate
+	// collections from the legacy worlds, so both models can coexist during the
+	// migration.
+	EnvironmentCollectionName string `json:"environment_collection_name" env_var:"ENVIRONMENT_COLLECTION_NAME"`
+	StateCollectionName       string `json:"state_collection_name" env_var:"STATE_COLLECTION_NAME"`
 
-	PermissionsV2Url string `json:"permissions_v2_url"`
-	DeviceManagerUrl string `json:"device_manager_url"`
-	DeviceRepoUrl    string `json:"device_repo_url"`
+	KafkaUrl           string `json:"kafka_url" env_var:"KAFKA_URL"`
+	KafkaResponseTopic string `json:"kafka_response_topic" env_var:"KAFKA_RESPONSE_TOPIC"`
+	KafkaGroupName     string `json:"kafka_group_name" env_var:"KAFKA_GROUP_NAME"`
+	FatalKafkaError    bool   `json:"fatal_kafka_error" env_var:"FATAL_KAFKA_ERROR"`
+	Protocol           string `json:"protocol" env_var:"PROTOCOL"`
 
-	AuthClientId             string  `json:"auth_client_id" config:"secret"`     //keycloak-client
-	AuthClientSecret         string  `json:"auth_client_secret" config:"secret"` //keycloak-secret
-	AuthExpirationTimeBuffer float64 `json:"auth_expiration_time_buffer"`
-	AuthEndpoint             string  `json:"auth_endpoint"`
+	PermissionsV2Url string `json:"permissions_v2_url" env_var:"PERMISSIONS_V2_URL"`
+	DeviceManagerUrl string `json:"device_manager_url" env_var:"DEVICE_MANAGER_URL"`
+	DeviceRepoUrl    string `json:"device_repo_url" env_var:"DEVICE_REPO_URL"`
 
-	JwtPrivateKey string `json:"jwt_private_key"`
-	JwtExpiration int64  `json:"jwt_expiration"`
-	JwtIssuer     string `json:"jwt_issuer"`
+	//AuthClientId is the keycloak client id. An OAuth2 client id is a public
+	//identifier, not a credential (RFC 6749 section 2.2), so it stays a plain
+	//string and remains readable in diagnostics. Only the secret is masked.
+	AuthClientId             string                 `json:"auth_client_id" env_var:"AUTH_CLIENT_ID"`
+	AuthClientSecret         sb_config_types.Secret `json:"auth_client_secret" env_var:"AUTH_CLIENT_SECRET"`
+	AuthExpirationTimeBuffer float64                `json:"auth_expiration_time_buffer" env_var:"AUTH_EXPIRATION_TIME_BUFFER"`
+	AuthEndpoint             string                 `json:"auth_endpoint" env_var:"AUTH_ENDPOINT"`
 
-	GatewayLogTopic string `json:"gateway_log_topic"`
-	DeviceLogTopic  string `json:"device_log_topic"`
+	JwtPrivateKey sb_config_types.Secret `json:"jwt_private_key" env_var:"JWT_PRIVATE_KEY"`
+	JwtExpiration int64                  `json:"jwt_expiration" env_var:"JWT_EXPIRATION"`
+	JwtIssuer     string                 `json:"jwt_issuer" env_var:"JWT_ISSUER"`
 
-	Debug bool `json:"debug"`
+	GatewayLogTopic string `json:"gateway_log_topic" env_var:"GATEWAY_LOG_TOPIC"`
+	DeviceLogTopic  string `json:"device_log_topic" env_var:"DEVICE_LOG_TOPIC"`
 
-	DeviceExpiration         int64 `json:"device_expiration"`
-	DeviceTypeExpiration     int64 `json:"device_type_expiration"`
-	CharacteristicExpiration int64 `json:"characteristic_expiration"`
+	Debug bool `json:"debug" env_var:"DEBUG"`
 
-	KafkaPartitionNum      int `json:"kafka_partition_num"`
-	KafkaReplicationFactor int `json:"kafka_replication_factor"`
+	DeviceExpiration         int64 `json:"device_expiration" env_var:"DEVICE_EXPIRATION"`
+	DeviceTypeExpiration     int64 `json:"device_type_expiration" env_var:"DEVICE_TYPE_EXPIRATION"`
+	CharacteristicExpiration int64 `json:"characteristic_expiration" env_var:"CHARACTERISTIC_EXPIRATION"`
 
-	PublishToPostgres bool   `json:"publish_to_postgres"`
-	PostgresHost      string `json:"postgres_host"`
-	PostgresPort      int    `json:"postgres_port"`
-	PostgresUser      string `json:"postgres_user" config:"secret"`
-	PostgresPw        string `json:"postgres_pw" config:"secret"`
-	PostgresDb        string `json:"postgres_db"`
+	KafkaPartitionNum      int `json:"kafka_partition_num" env_var:"KAFKA_PARTITION_NUM"`
+	KafkaReplicationFactor int `json:"kafka_replication_factor" env_var:"KAFKA_REPLICATION_FACTOR"`
 
-	AsyncPgThreadMax    int64  `json:"async_pg_thread_max"`
-	AsyncFlushMessages  int64  `json:"async_flush_messages"`
-	AsyncFlushFrequency string `json:"async_flush_frequency"`
-	AsyncCompression    string `json:"async_compression"`
-	SyncCompression     string `json:"sync_compression"`
+	PublishToPostgres bool                   `json:"publish_to_postgres" env_var:"PUBLISH_TO_POSTGRES"`
+	PostgresHost      string                 `json:"postgres_host" env_var:"POSTGRES_HOST"`
+	PostgresPort      int                    `json:"postgres_port" env_var:"POSTGRES_PORT"`
+	PostgresUser      sb_config_types.Secret `json:"postgres_user" env_var:"POSTGRES_USER"`
+	PostgresPw        sb_config_types.Secret `json:"postgres_pw" env_var:"POSTGRES_PW"`
+	PostgresDb        string                 `json:"postgres_db" env_var:"POSTGRES_DB"`
 
-	KafkaConsumerMaxWait  string `json:"kafka_consumer_max_wait"`
-	KafkaConsumerMinBytes int64  `json:"kafka_consumer_min_bytes"`
-	KafkaConsumerMaxBytes int64  `json:"kafka_consumer_max_bytes"`
+	AsyncPgThreadMax    int64  `json:"async_pg_thread_max" env_var:"ASYNC_PG_THREAD_MAX"`
+	AsyncFlushMessages  int64  `json:"async_flush_messages" env_var:"ASYNC_FLUSH_MESSAGES"`
+	AsyncFlushFrequency string `json:"async_flush_frequency" env_var:"ASYNC_FLUSH_FREQUENCY"`
+	AsyncCompression    string `json:"async_compression" env_var:"ASYNC_COMPRESSION"`
+	SyncCompression     string `json:"sync_compression" env_var:"SYNC_COMPRESSION"`
 
-	IotCacheUrls         string `json:"iot_cache_urls"`
-	IotCacheMaxIdleConns int64  `json:"iot_cache_max_idle_conns"`
-	IotCacheTimeout      string `json:"iot_cache_timeout"`
+	KafkaConsumerMaxWait  string `json:"kafka_consumer_max_wait" env_var:"KAFKA_CONSUMER_MAX_WAIT"`
+	KafkaConsumerMinBytes int64  `json:"kafka_consumer_min_bytes" env_var:"KAFKA_CONSUMER_MIN_BYTES"`
+	KafkaConsumerMaxBytes int64  `json:"kafka_consumer_max_bytes" env_var:"KAFKA_CONSUMER_MAX_BYTES"`
 
-	TokenCacheUrls       string `json:"token_cache_urls"`
-	TokenCacheExpiration int64  `json:"token_cache_expiration"`
+	IotCacheUrls         string `json:"iot_cache_urls" env_var:"IOT_CACHE_URLS"`
+	IotCacheMaxIdleConns int64  `json:"iot_cache_max_idle_conns" env_var:"IOT_CACHE_MAX_IDLE_CONNS"`
+	IotCacheTimeout      string `json:"iot_cache_timeout" env_var:"IOT_CACHE_TIMEOUT"`
 
-	DeviceTypeTopic string `json:"device_type_topic"`
+	TokenCacheUrls       string `json:"token_cache_urls" env_var:"TOKEN_CACHE_URLS"`
+	TokenCacheExpiration int64  `json:"token_cache_expiration" env_var:"TOKEN_CACHE_EXPIRATION"`
 
-	NotificationUrl string `json:"notification_url"`
+	DeviceTypeTopic string `json:"device_type_topic" env_var:"DEVICE_TYPE_TOPIC"`
 
-	KafkaTopicConfigs map[string][]kafka.ConfigEntry `json:"kafka_topic_configs"`
+	NotificationUrl string `json:"notification_url" env_var:"NOTIFICATION_URL"`
+
+	//KafkaTopicConfigs is read as JSON from the environment, for example
+	//KAFKA_TOPIC_CONFIGS='{"response":[{"ConfigName":"retention.ms","ConfigValue":"86400000"}]}'
+	KafkaTopicConfigs map[string][]kafka.ConfigEntry `json:"kafka_topic_configs" env_var:"KAFKA_TOPIC_CONFIGS"`
 }
 
 func LoadConfig() (result Config, err error) {
@@ -112,79 +131,22 @@ func LoadConfigFlag(configLocationFlag string) (result Config, err error) {
 	return LoadConfigLocation(*configLocation)
 }
 
+// LoadConfigLocation reads location as json and then applies the environment
+// variables named by the env_var tags on top of it. A missing file, malformed
+// json and an unparsable environment value are all returned as an error; none
+// of them is silently ignored.
 func LoadConfigLocation(location string) (result Config, err error) {
-	file, err := os.Open(location)
+	if location == "" {
+		//config_hdl.Load skips empty paths, which would start the service on a
+		//zero-valued config instead of reporting the missing file
+		err = errors.New("no config location given")
+		log.Println("error on config load: ", err)
+		return result, err
+	}
+	err = sb_config_hdl.Load(&result, nil, envTypeParsers, nil, location)
 	if err != nil {
 		log.Println("error on config load: ", err)
 		return result, err
 	}
-	decoder := json.NewDecoder(file)
-	err = decoder.Decode(&result)
-	if err != nil {
-		log.Println("invalid config json: ", err)
-		return result, err
-	}
-	log.Println("handle environment variables")
-	handleEnvironmentVars(&result)
-	return
-}
-
-var camel = regexp.MustCompile("(^[^A-Z]*|[A-Z]*)([A-Z][^A-Z]+|$)")
-
-func fieldNameToEnvName(s string) string {
-	var a []string
-	for _, sub := range camel.FindAllStringSubmatch(s, -1) {
-		if sub[1] != "" {
-			a = append(a, sub[1])
-		}
-		if sub[2] != "" {
-			a = append(a, sub[2])
-		}
-	}
-	return strings.ToUpper(strings.Join(a, "_"))
-}
-
-func handleEnvironmentVars(config interface{}) {
-	configValue := reflect.Indirect(reflect.ValueOf(config))
-	configType := configValue.Type()
-	for index := 0; index < configType.NumField(); index++ {
-		fieldName := configType.Field(index).Name
-		fieldConfig := configType.Field(index).Tag.Get("config")
-		envName := fieldNameToEnvName(fieldName)
-		envValue := os.Getenv(envName)
-		if envValue != "" {
-			if !strings.Contains(fieldConfig, "secret") {
-				fmt.Println("use environment variable: ", envName, " = ", envValue)
-			}
-			if configValue.FieldByName(fieldName).Kind() == reflect.Int64 {
-				i, _ := strconv.ParseInt(envValue, 10, 64)
-				configValue.FieldByName(fieldName).SetInt(i)
-			}
-			if configValue.FieldByName(fieldName).Kind() == reflect.String {
-				configValue.FieldByName(fieldName).SetString(envValue)
-			}
-			if configValue.FieldByName(fieldName).Kind() == reflect.Bool {
-				b, _ := strconv.ParseBool(envValue)
-				configValue.FieldByName(fieldName).SetBool(b)
-			}
-			if configValue.FieldByName(fieldName).Kind() == reflect.Slice {
-				val := []string{}
-				for _, element := range strings.Split(envValue, ",") {
-					val = append(val, strings.TrimSpace(element))
-				}
-				configValue.FieldByName(fieldName).Set(reflect.ValueOf(val))
-			}
-			if configValue.FieldByName(fieldName).Kind() == reflect.Map {
-				value := map[string]string{}
-				for _, element := range strings.Split(envValue, ",") {
-					keyVal := strings.Split(element, ":")
-					key := strings.TrimSpace(keyVal[0])
-					val := strings.TrimSpace(keyVal[1])
-					value[key] = val
-				}
-				configValue.FieldByName(fieldName).Set(reflect.ValueOf(value))
-			}
-
-		}
-	}
+	return result, nil
 }
