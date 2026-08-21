@@ -1,0 +1,14 @@
+# Line endings are decided by the repository, not by each machine.
+#
+# core.autocrlf is a per-machine setting and defaults to true in Git for
+# Windows, which makes a checkout on a windows working copy CRLF while the same
+# repository edited from WSL writes LF. The consequence is not cosmetic: a local
+# `gofmt -l` then reports almost every file as unformatted, which hides the
+# files that genuinely are.
+#
+# eol=lf overrides core.autocrlf for this repository, for everyone who clones it.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.pdf binary
