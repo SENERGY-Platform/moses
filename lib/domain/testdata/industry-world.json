@@ -1,0 +1,362 @@
+{
+	"id": "4d273cd0-838f-4f84-9974-e56d18245255",
+	"owner": "aae7e87b-63a2-477f-afb4-caa0db84e3fa",
+	"name": "Industry",
+	"states": {
+		"temperature": 0,
+		"co-ppm": 0,
+		"humidity": 0
+	},
+	"rooms": {
+		"0dd26e66-b61a-4718-b365-1c63d2945e81": {
+			"id": "0dd26e66-b61a-4718-b365-1c63d2945e81",
+			"name": "Fabric",
+			"states": {
+				"humidity": 0,
+				"temperature": 0,
+				"co-ppm": 0
+			},
+			"devices": {
+				"6b70f29f-3b3e-41d6-bca2-d52aff6bd13f": {
+					"id": "6b70f29f-3b3e-41d6-bca2-d52aff6bd13f",
+					"name": "ZRS (c163d155)",
+					"image_url": "",
+					"external_type_id": "urn:infai:ses:device-type:dc5bf705-4216-40c2-ba3f-24f57dc8f3e5",
+					"external_ref": "urn:infai:ses:device:7283f08c-d41f-4d00-b89b-e88f932cfb3f",
+					"states": {
+						"kwh": 290508.57080252626,
+						"celsius": 110.18832824535683,
+						"cmh2": 23.794069004693,
+						"bar2": 2.6806321113577165,
+						"rpm": 21,
+						"amp": 1.311,
+						"cmh1": 24.224041253936605,
+						"bar1": 1.6796247342101964
+					},
+					"change_routines": {
+						"ad60c8f7-d8cc-49be-97ef-5a7169ec1d97": {
+							"id": "ad60c8f7-d8cc-49be-97ef-5a7169ec1d97",
+							"interval": 5,
+							"code": "var hours = (new Date()).getHours();\nvar celsius = moses.device.state.get(\"celsius\");\nvar rpm = moses.device.state.get(\"rpm\");\nvar min = 19;\nvar max = 110;\n\nvar heat = (Math.random() * 1) + 0.5;\nvar cool = (Math.random() * 0.12) + 0.01;\n\nif (rpm > 0) {\n\nif (celsius <= (max-20)){\ncelsius = celsius + heat;\n}\nif (hours > 6 && hours < 10 && celsius <= max){\ncelsius = celsius + heat;\n}else{\nif (hours < 6 || hours > 10 && celsius > (max-20)){\ncelsius = celsius - cool;\n}\n}\n}\n\nif (rpm == 0) {\nif (celsius >= min) {\ncelsius = celsius - cool;\n}\n}\n\nmoses.device.state.set(\"celsius\", celsius);"
+						},
+						"d77fd881-677d-4a63-890e-40a0a484d6ea": {
+							"id": "d77fd881-677d-4a63-890e-40a0a484d6ea",
+							"interval": 5,
+							"code": "var hours = (new Date()).getHours();\nvar bar1 = moses.device.state.get(\"bar1\");\nvar rpm = moses.device.state.get(\"rpm\");\nvar prob = Math.random();\nvar min = 1.1;\nvar max = 1.7\n\nif (rpm > 0){\n\nif (bar1 == 0) {\n\nbar1 = 1.4;\n}\n\nvar delta = (Math.random() * 0.2) + 0.1;\n\nif (prob > 0.9 && prob < 0.95 && bar1 + delta <= max){\n\nbar1 = bar1 + delta;\n\n}\n\nif (prob > 0.95 && bar1 - delta >= min){\n\nbar1 = bar1 - delta;\n\n}\n\nif(hours >= 14 && hours <= 16){\nvar bar2 = bar1 + (Math.random() * 0.1) + 2.41;\n}else{\nvar bar2 = bar1 + (Math.random() * 0.1) + 1;\n}\n\nmoses.device.state.set(\"bar1\", bar1);\nmoses.device.state.set(\"bar2\", bar2);\n\n}else {\n\nvar bar2 = (Math.random() * 0.1) + 1;\n\nmoses.device.state.set(\"bar1\", 0);\nmoses.device.state.set(\"bar2\", bar2);\n\n}"
+						},
+						"ed76f785-0fe6-4407-b277-9c3f7d7c3ed9": {
+							"id": "ed76f785-0fe6-4407-b277-9c3f7d7c3ed9",
+							"interval": 5,
+							"code": "var cmh1 = moses.device.state.get(\"cmh1\");\nvar cmh2 = moses.device.state.get(\"cmh2\");\nvar rpm = moses.device.state.get(\"rpm\");\nvar cmh1_min = 25;\nvar cmh1_max = 26;\nvar cmh2_min = 24;\nvar cmh2_max = 25;\nvar prob = Math.random();\n\nif (rpm > 0) {\nif (cmh1 == 0){\ncmh1 = cmh1_min + ((Math.random() * 0.2) + 0.1);\n}\nif (cmh2 == 0){\ncmh2 = cmh2_max - ((Math.random() * 0.2) + 0.1);\n}\nif (prob > 0.5 && cmh1 < cmh1_max){\ncmh1 = cmh1 + ((Math.random() * 1) + 0.1); \n}\nif (prob < 0.5 && cmh1 > cmh1_min){\ncmh1 = cmh1 - ((Math.random() * 1) + 0.1); \n}\nif (prob > 0.5 && cmh2 < cmh2_max){\ncmh2 = cmh2 + ((Math.random() * 1) + 0.1); \n}\nif (prob < 0.5 && cmh2 > cmh2_min){\ncmh2 = cmh2 - ((Math.random() * 1) + 0.1); \n}\n}else{\ncmh1 = 0;\ncmh2 = 0;\n}\n\nmoses.device.state.set(\"cmh1\", cmh1);\nmoses.device.state.set(\"cmh2\", cmh2);"
+						},
+						"0d670a8d-d845-4126-8cfa-95dc6165ea4a": {
+							"id": "0d670a8d-d845-4126-8cfa-95dc6165ea4a",
+							"interval": 120,
+							"code": "var kwh = moses.device.state.get(\"kwh\");\nvar rpm = moses.device.state.get(\"rpm\");\n\nif (rpm > 0) {\nvar consumption = (Math.random() * 1) + 0.5;\nvar kwh = kwh + consumption;\n\nmoses.device.state.set(\"kwh\", kwh);\n}"
+						},
+						"2a0e3efe-00c7-4600-bbbb-d3c60765b162": {
+							"id": "2a0e3efe-00c7-4600-bbbb-d3c60765b162",
+							"interval": 5,
+							"code": "var hours = (new Date()).getHours();\nvar amp = 0;\nvar rpm = moses.device.state.get(\"rpm\");\nvar amp_std = 1.3;\nvar amp_peak = 1.311;\n\nif (rpm > 0){\nif(hours%2 == 0){\namp = amp_std;\n}else {\namp = amp_peak;\n}\nif(hours == 7){\namp = 1.6;\n}\n}\n\nmoses.device.state.set(\"amp\", amp);"
+						},
+						"7371f5bc-8e05-494f-83f1-953af3868401": {
+							"id": "7371f5bc-8e05-494f-83f1-953af3868401",
+							"interval": 60,
+							"code": "var hours = (new Date()).getHours();\nvar rpm = 21;\n\nif(hours > 10 && hours < 13){\nrpm = 0;\n}\nif(hours < 5 || hours > 16){\nrpm = 0;\n}\n\nmoses.device.state.set(\"rpm\", rpm);"
+						}
+					},
+					"services": {
+						"85607dcb-7bcf-4a37-b098-82fe25156ef5": {
+							"id": "85607dcb-7bcf-4a37-b098-82fe25156ef5",
+							"name": "getBackPressureService",
+							"external_ref": "urn:infai:ses:service:0cc94599-0b50-4f7e-8937-0583459e6573",
+							"sensor_interval": 30,
+							"code": "var bar1 = moses.device.state.get(\"bar1\");\nvar output = {\"value\":bar1};\nmoses.service.send(output);"
+						},
+						"9d0a0706-a639-4bfe-912a-85c2ef76fd8f": {
+							"id": "9d0a0706-a639-4bfe-912a-85c2ef76fd8f",
+							"name": "getSealGasSupplyPressureService",
+							"external_ref": "urn:infai:ses:service:aec580b1-0b2c-4848-b871-13baed65469e",
+							"sensor_interval": 30,
+							"code": "var bar2 = moses.device.state.get(\"bar2\");\nvar output = {\"value\":bar2};\nmoses.service.send(output);"
+						},
+						"cc47cb44-c5d2-449b-af50-29479f57d2c2": {
+							"id": "cc47cb44-c5d2-449b-af50-29479f57d2c2",
+							"name": "getVolumeFlow2Service",
+							"external_ref": "urn:infai:ses:service:818a895b-101a-4261-8011-fba0f7a5f679",
+							"sensor_interval": 30,
+							"code": "var cmh2 = moses.device.state.get(\"cmh2\");\nvar output = {\"value\":cmh2};\nmoses.service.send(output);"
+						},
+						"025c158b-7eae-4011-9f07-ef00e44d1584": {
+							"id": "025c158b-7eae-4011-9f07-ef00e44d1584",
+							"name": "getCurrentConsumptionService",
+							"external_ref": "urn:infai:ses:service:557a8519-c801-42c6-a5e0-d6d6450ec9ab",
+							"sensor_interval": 30,
+							"code": "var amp = moses.device.state.get(\"amp\");\nvar output = {\"value\":amp};\nmoses.service.send(output);"
+						},
+						"3e1ebcfd-8248-4d77-a054-13dfdc8c7ce7": {
+							"id": "3e1ebcfd-8248-4d77-a054-13dfdc8c7ce7",
+							"name": "getTemperatureService",
+							"external_ref": "urn:infai:ses:service:38657ee1-0769-425c-8d3f-c7548bebc9f5",
+							"sensor_interval": 30,
+							"code": "var celsius = moses.device.state.get(\"celsius\");\nvar output = {\"value\":celsius};\nmoses.service.send(output);"
+						},
+						"4acc0173-16eb-49db-a339-38e9e2aa0a0c": {
+							"id": "4acc0173-16eb-49db-a339-38e9e2aa0a0c",
+							"name": "getEnergyConsumptionService",
+							"external_ref": "urn:infai:ses:service:ada05323-1f51-4eea-abe2-25720acbdbc6",
+							"sensor_interval": 60,
+							"code": "var kwh = moses.device.state.get(\"kwh\");\nvar output = {\"value\":kwh};\nmoses.service.send(output);"
+						},
+						"4c94b13b-24c1-412e-a7c9-2dc9de9c35d2": {
+							"id": "4c94b13b-24c1-412e-a7c9-2dc9de9c35d2",
+							"name": "getVolumeFlow1Service",
+							"external_ref": "urn:infai:ses:service:c6395149-130d-4953-8990-af185ca62923",
+							"sensor_interval": 30,
+							"code": "var cmh1 = moses.device.state.get(\"cmh1\");\nvar output = {\"value\":cmh1};\nmoses.service.send(output);"
+						},
+						"7de2bcc2-7c7f-41cb-b968-3d89822ee742": {
+							"id": "7de2bcc2-7c7f-41cb-b968-3d89822ee742",
+							"name": "getSpeedLevelService",
+							"external_ref": "urn:infai:ses:service:df4d6ed4-a9d3-434a-9143-1e9c2a63b05f",
+							"sensor_interval": 3600,
+							"code": "var rpm = moses.device.state.get(\"rpm\");\nvar output = {\"value\":rpm};\nmoses.service.send(output);"
+						}
+					}
+				},
+				"b62f8401-c474-4c3b-a41e-059eef33f49b": {
+					"id": "b62f8401-c474-4c3b-a41e-059eef33f49b",
+					"name": "ZRS (b434c371)",
+					"image_url": "",
+					"external_type_id": "urn:infai:ses:device-type:dc5bf705-4216-40c2-ba3f-24f57dc8f3e5",
+					"external_ref": "urn:infai:ses:device:0e5b77ec-dc79-4176-b52b-a507d337174e",
+					"states": {
+						"cmh1": 24.414763750815336,
+						"amp": 1.241,
+						"celsius": 70.2477901660349,
+						"bar1": 1.3770953000691744,
+						"cmh2": 24.557624366102992,
+						"bar2": 2.4342710013411626,
+						"kwh": 348738.44436064106,
+						"rpm": 21
+					},
+					"change_routines": {
+						"e86b700a-9019-4b87-9bb5-d13b849aeb40": {
+							"id": "e86b700a-9019-4b87-9bb5-d13b849aeb40",
+							"interval": 5,
+							"code": "var hours = (new Date()).getHours();\nvar amp = 0;\nvar rpm = moses.device.state.get(\"rpm\");\nvar amp_std = 1.2;\nvar amp_peak = 1.241;\n\nif (rpm > 0){\nif(hours%2 == 0){\namp = amp_std;\n}else {\namp = amp_peak;\n}\n}\n\nmoses.device.state.set(\"amp\", amp);"
+						},
+						"effb6e29-3701-4541-a2fb-98c96265b827": {
+							"id": "effb6e29-3701-4541-a2fb-98c96265b827",
+							"interval": 60,
+							"code": "var hours = (new Date()).getHours();\nvar rpm = 21;\n\nif(hours > 10 && hours < 13){\nrpm = 0;\n}\nif(hours > 15 && hours < 18){\nrpm = 0;\n}\nif(hours < 6 || hours > 21){\nrpm = 0;\n}\n\nmoses.device.state.set(\"rpm\", rpm);"
+						},
+						"62705d51-1eee-49ee-a22a-765e7f7731b6": {
+							"id": "62705d51-1eee-49ee-a22a-765e7f7731b6",
+							"interval": 5,
+							"code": "var cmh1 = moses.device.state.get(\"cmh1\");\nvar cmh2 = moses.device.state.get(\"cmh2\");\nvar rpm = moses.device.state.get(\"rpm\");\nvar cmh1_min = 25;\nvar cmh1_max = 26;\nvar cmh2_min = 24;\nvar cmh2_max = 25;\nvar prob = Math.random();\n\nif (rpm > 0) {\nif (cmh1 == 0){\ncmh1 = cmh1_min + ((Math.random() * 0.2) + 0.1);\n}\nif (cmh2 == 0){\ncmh2 = cmh2_max - ((Math.random() * 0.2) + 0.1);\n}\nif (prob > 0.5 && cmh1 < cmh1_max){\ncmh1 = cmh1 + ((Math.random() * 1) + 0.1); \n}\nif (prob < 0.5 && cmh1 > cmh1_min){\ncmh1 = cmh1 - ((Math.random() * 1) + 0.1); \n}\nif (prob > 0.5 && cmh2 < cmh2_max){\ncmh2 = cmh2 + ((Math.random() * 1) + 0.1); \n}\nif (prob < 0.5 && cmh2 > cmh2_min){\ncmh2 = cmh2 - ((Math.random() * 1) + 0.1); \n}\n}else{\ncmh1 = 0;\ncmh2 = 0;\n}\n\nmoses.device.state.set(\"cmh1\", cmh1);\nmoses.device.state.set(\"cmh2\", cmh2);"
+						},
+						"6d12e3bd-488e-4fe4-a4cd-719c16583965": {
+							"id": "6d12e3bd-488e-4fe4-a4cd-719c16583965",
+							"interval": 120,
+							"code": "var kwh = moses.device.state.get(\"kwh\");\nvar rpm = moses.device.state.get(\"rpm\");\n\nif (rpm > 0) {\nvar consumption = (Math.random() * 1) + 0.5;\nvar kwh = kwh + consumption;\n\nmoses.device.state.set(\"kwh\", kwh);\n}"
+						},
+						"8bdac5bc-84e6-4a2a-8f19-3786b0494098": {
+							"id": "8bdac5bc-84e6-4a2a-8f19-3786b0494098",
+							"interval": 5,
+							"code": "var celsius = moses.device.state.get(\"celsius\");\nvar rpm = moses.device.state.get(\"rpm\");\nvar min = 19;\nvar max = 70;\n\nvar heat = (Math.random() * 1) + 0.5;\nvar cool = (Math.random() * 0.12) + 0.01;\n\nif (rpm > 0) {\n\nif (celsius <= max){\ncelsius = celsius + heat;\n}\n}\n\nif (rpm == 0) {\nif (celsius >= min) {\ncelsius = celsius - cool;\n}\n}\n\nmoses.device.state.set(\"celsius\", celsius);"
+						},
+						"c75d3945-fd6a-4a73-83cf-a22e3558e377": {
+							"id": "c75d3945-fd6a-4a73-83cf-a22e3558e377",
+							"interval": 5,
+							"code": "var bar1 = moses.device.state.get(\"bar1\");\nvar rpm = moses.device.state.get(\"rpm\");\nvar prob = Math.random();\nvar min = 1.1;\nvar max = 1.7\n\nif (rpm > 0){\n\nif (bar1 == 0) {\n\nbar1 = 1.4;\n}\n\nvar delta = (Math.random() * 0.2) + 0.1;\n\nif (prob > 0.9 && prob < 0.95 && bar1 + delta <= max){\n\nbar1 = bar1 + delta;\n\n}\n\nif (prob > 0.95 && bar1 - delta >= min){\n\nbar1 = bar1 - delta;\n\n}\n\nvar bar2 = bar1 + (Math.random() * 0.1) + 1;\n\nmoses.device.state.set(\"bar1\", bar1);\nmoses.device.state.set(\"bar2\", bar2);\n\n}else {\n\nvar bar2 = (Math.random() * 0.1) + 1;\n\nmoses.device.state.set(\"bar1\", 0);\nmoses.device.state.set(\"bar2\", bar2);\n\n}"
+						}
+					},
+					"services": {
+						"c1bbd0a9-998f-4f88-9495-de6c6fd45e70": {
+							"id": "c1bbd0a9-998f-4f88-9495-de6c6fd45e70",
+							"name": "getCurrentConsumptionService",
+							"external_ref": "urn:infai:ses:service:557a8519-c801-42c6-a5e0-d6d6450ec9ab",
+							"sensor_interval": 30,
+							"code": "var amp = moses.device.state.get(\"amp\");\nvar output = {\"value\":amp};\nmoses.service.send(output);"
+						},
+						"ef653b02-7ff9-4fef-8382-af22c73e8926": {
+							"id": "ef653b02-7ff9-4fef-8382-af22c73e8926",
+							"name": "getEnergyConsumptionService",
+							"external_ref": "urn:infai:ses:service:ada05323-1f51-4eea-abe2-25720acbdbc6",
+							"sensor_interval": 60,
+							"code": "var kwh = moses.device.state.get(\"kwh\");\nvar output = {\"value\":kwh};\nmoses.service.send(output);"
+						},
+						"fa089406-ebc8-410f-8bb1-449772929b29": {
+							"id": "fa089406-ebc8-410f-8bb1-449772929b29",
+							"name": "getTemperatureService",
+							"external_ref": "urn:infai:ses:service:38657ee1-0769-425c-8d3f-c7548bebc9f5",
+							"sensor_interval": 30,
+							"code": "var celsius = moses.device.state.get(\"celsius\");\nvar output = {\"value\":celsius};\nmoses.service.send(output);"
+						},
+						"211da7cd-a5a9-486f-8e2b-988c5822a0a5": {
+							"id": "211da7cd-a5a9-486f-8e2b-988c5822a0a5",
+							"name": "getSealGasSupplyPressureService",
+							"external_ref": "urn:infai:ses:service:aec580b1-0b2c-4848-b871-13baed65469e",
+							"sensor_interval": 30,
+							"code": "var bar2 = moses.device.state.get(\"bar2\");\nvar output = {\"value\":bar2};\nmoses.service.send(output);"
+						},
+						"3e651d6b-ba97-40a2-aaf4-9ce7a0dec07e": {
+							"id": "3e651d6b-ba97-40a2-aaf4-9ce7a0dec07e",
+							"name": "getVolumeFlow2Service",
+							"external_ref": "urn:infai:ses:service:818a895b-101a-4261-8011-fba0f7a5f679",
+							"sensor_interval": 30,
+							"code": "var cmh2 = moses.device.state.get(\"cmh2\");\nvar output = {\"value\":cmh2};\nmoses.service.send(output);"
+						},
+						"88310461-6c35-4fac-9406-f28b5378e646": {
+							"id": "88310461-6c35-4fac-9406-f28b5378e646",
+							"name": "getVolumeFlow1Service",
+							"external_ref": "urn:infai:ses:service:c6395149-130d-4953-8990-af185ca62923",
+							"sensor_interval": 30,
+							"code": "var cmh1 = moses.device.state.get(\"cmh1\");\nvar output = {\"value\":cmh1};\nmoses.service.send(output);"
+						},
+						"b47ab58e-4a35-42e1-bc88-36cfbd6b855b": {
+							"id": "b47ab58e-4a35-42e1-bc88-36cfbd6b855b",
+							"name": "getBackPressureService",
+							"external_ref": "urn:infai:ses:service:0cc94599-0b50-4f7e-8937-0583459e6573",
+							"sensor_interval": 30,
+							"code": "var bar1 = moses.device.state.get(\"bar1\");\nvar output = {\"value\":bar1};\nmoses.service.send(output);"
+						},
+						"ba86634c-5194-4df4-a9c5-2cb09cb588bd": {
+							"id": "ba86634c-5194-4df4-a9c5-2cb09cb588bd",
+							"name": "getSpeedLevelService",
+							"external_ref": "urn:infai:ses:service:df4d6ed4-a9d3-434a-9143-1e9c2a63b05f",
+							"sensor_interval": 3600,
+							"code": "var rpm = moses.device.state.get(\"rpm\");\nvar output = {\"value\":rpm};\nmoses.service.send(output);"
+						}
+					}
+				},
+				"e26932f6-add7-49d8-91f5-ece5d96b1ecf": {
+					"id": "e26932f6-add7-49d8-91f5-ece5d96b1ecf",
+					"name": "ZRS (a232b901)",
+					"image_url": "",
+					"external_type_id": "urn:infai:ses:device-type:dc5bf705-4216-40c2-ba3f-24f57dc8f3e5",
+					"external_ref": "urn:infai:ses:device:aea20b62-883c-4c4c-82a8-fce2b5347240",
+					"states": {
+						"cmh2": 24.51102171582773,
+						"bar1": 1.3716215204472548,
+						"amp": 1.332,
+						"rpm": 21,
+						"celsius": 80.67298090577503,
+						"cmh1": 26.206735999102534,
+						"bar2": 2.4673427664443306,
+						"kwh": 406909.19042964466
+					},
+					"change_routines": {
+						"162a59c8-e81f-4b71-b5dd-b2d0981cb6d1": {
+							"id": "162a59c8-e81f-4b71-b5dd-b2d0981cb6d1",
+							"interval": 60,
+							"code": "var hours = (new Date()).getHours();\nvar rpm = 0;\n\nif(hours < 5 || hours > 18){\n}else{\nrpm = 21;\n}\n\nmoses.device.state.set(\"rpm\", rpm);"
+						},
+						"24e7412d-f76e-470d-8e1c-2df63285ccc4": {
+							"id": "24e7412d-f76e-470d-8e1c-2df63285ccc4",
+							"interval": 5,
+							"code": "var hours = (new Date()).getHours();\nvar amp = 0;\nvar rpm = moses.device.state.get(\"rpm\");\nvar amp_std = 1.3;\nvar amp_peak = 1.332;\n\nif (rpm > 0){\nif(hours%2 == 0){\namp = amp_std;\n}else {\namp = amp_peak;\n}\n}\n\nmoses.device.state.set(\"amp\", amp);"
+						},
+						"47cb08b5-3093-4cae-93ab-6a7b66ee1086": {
+							"id": "47cb08b5-3093-4cae-93ab-6a7b66ee1086",
+							"interval": 5,
+							"code": "var bar1 = moses.device.state.get(\"bar1\");\nvar rpm = moses.device.state.get(\"rpm\");\nvar prob = Math.random();\nvar min = 1.1;\nvar max = 1.7\n\nif (rpm > 0){\n\nif (bar1 == 0) {\n\nbar1 = 1.4;\n}\n\nvar delta = (Math.random() * 0.2) + 0.1;\n\nif (prob > 0.9 && prob < 0.95 && bar1 + delta <= max){\n\nbar1 = bar1 + delta;\n\n}\n\nif (prob > 0.95 && bar1 - delta >= min){\n\nbar1 = bar1 - delta;\n\n}\n\nvar bar2 = bar1 + (Math.random() * 0.1) + 1;\n\nmoses.device.state.set(\"bar1\", bar1);\nmoses.device.state.set(\"bar2\", bar2);\n\n}else {\n\nvar bar2 = (Math.random() * 0.1) + 1;\n\nmoses.device.state.set(\"bar1\", 0);\nmoses.device.state.set(\"bar2\", bar2);\n\n}"
+						},
+						"702a713e-bdcf-4828-ad5d-b852c435cc70": {
+							"id": "702a713e-bdcf-4828-ad5d-b852c435cc70",
+							"interval": 5,
+							"code": "var cmh1 = moses.device.state.get(\"cmh1\");\nvar cmh2 = moses.device.state.get(\"cmh2\");\nvar rpm = moses.device.state.get(\"rpm\");\nvar cmh1_min = 25;\nvar cmh1_max = 26;\nvar cmh2_min = 24;\nvar cmh2_max = 25;\nvar prob = Math.random();\n\nif (rpm > 0) {\nif (cmh1 == 0){\ncmh1 = cmh1_min + ((Math.random() * 0.2) + 0.1);\n}\nif (cmh2 == 0){\ncmh2 = cmh2_max - ((Math.random() * 0.2) + 0.1);\n}\nif (prob > 0.5 && cmh1 < cmh1_max){\ncmh1 = cmh1 + ((Math.random() * 1) + 0.1); \n}\nif (prob < 0.5 && cmh1 > cmh1_min){\ncmh1 = cmh1 - ((Math.random() * 1) + 0.1); \n}\nif (prob > 0.5 && cmh2 < cmh2_max){\ncmh2 = cmh2 + ((Math.random() * 1) + 0.1); \n}\nif (prob < 0.5 && cmh2 > cmh2_min){\ncmh2 = cmh2 - ((Math.random() * 1) + 0.1); \n}\n}else{\ncmh1 = 0;\ncmh2 = 0;\n}\n\nmoses.device.state.set(\"cmh1\", cmh1);\nmoses.device.state.set(\"cmh2\", cmh2);"
+						},
+						"862dde99-379a-4b7b-ac2f-563d7c34d25d": {
+							"id": "862dde99-379a-4b7b-ac2f-563d7c34d25d",
+							"interval": 120,
+							"code": "var kwh = moses.device.state.get(\"kwh\");\nvar rpm = moses.device.state.get(\"rpm\");\n\nif (rpm > 0) {\nvar consumption = (Math.random() * 1) + 0.5;\nvar kwh = kwh + consumption;\n\nmoses.device.state.set(\"kwh\", kwh);\n}"
+						},
+						"026abb9f-0233-4ddd-aa7f-3077c689ab92": {
+							"id": "026abb9f-0233-4ddd-aa7f-3077c689ab92",
+							"interval": 5,
+							"code": "var celsius = moses.device.state.get(\"celsius\");\nvar rpm = moses.device.state.get(\"rpm\");\nvar min = 19;\nvar max = 80;\n\nvar heat = (Math.random() * 1) + 0.5;\nvar cool = (Math.random() * 0.12) + 0.01;\n\nif (rpm > 0) {\n\nif (celsius <= max){\ncelsius = celsius + heat;\n}\n}\n\nif (rpm == 0) {\nif (celsius >= min) {\ncelsius = celsius - cool;\n}\n}\n\nmoses.device.state.set(\"celsius\", celsius);"
+						}
+					},
+					"services": {
+						"6aab2611-44a9-4a82-8841-ba6b79830f6c": {
+							"id": "6aab2611-44a9-4a82-8841-ba6b79830f6c",
+							"name": "getCurrentConsumptionService",
+							"external_ref": "urn:infai:ses:service:557a8519-c801-42c6-a5e0-d6d6450ec9ab",
+							"sensor_interval": 30,
+							"code": "var amp = moses.device.state.get(\"amp\");\nvar output = {\"value\":amp};\nmoses.service.send(output);"
+						},
+						"6c6405d1-6d52-4aa8-8985-b45582280a35": {
+							"id": "6c6405d1-6d52-4aa8-8985-b45582280a35",
+							"name": "getTemperatureService",
+							"external_ref": "urn:infai:ses:service:38657ee1-0769-425c-8d3f-c7548bebc9f5",
+							"sensor_interval": 30,
+							"code": "var celsius = moses.device.state.get(\"celsius\");\nvar output = {\"value\":celsius};\nmoses.service.send(output);"
+						},
+						"8373bc99-6e03-4e0c-88d7-2662f2ed5c43": {
+							"id": "8373bc99-6e03-4e0c-88d7-2662f2ed5c43",
+							"name": "getVolumeFlow2Service",
+							"external_ref": "urn:infai:ses:service:818a895b-101a-4261-8011-fba0f7a5f679",
+							"sensor_interval": 30,
+							"code": "var cmh2 = moses.device.state.get(\"cmh2\");\nvar output = {\"value\":cmh2};\nmoses.service.send(output);"
+						},
+						"bd9ca15b-e68e-40df-8e60-c01916178db1": {
+							"id": "bd9ca15b-e68e-40df-8e60-c01916178db1",
+							"name": "getVolumeFlow1Service",
+							"external_ref": "urn:infai:ses:service:c6395149-130d-4953-8990-af185ca62923",
+							"sensor_interval": 30,
+							"code": "var cmh1 = moses.device.state.get(\"cmh1\");\nvar output = {\"value\":cmh1};\nmoses.service.send(output);"
+						},
+						"22445dac-e888-4192-9fc2-4bd2972471b6": {
+							"id": "22445dac-e888-4192-9fc2-4bd2972471b6",
+							"name": "getEnergyConsumptionService",
+							"external_ref": "urn:infai:ses:service:ada05323-1f51-4eea-abe2-25720acbdbc6",
+							"sensor_interval": 60,
+							"code": "var kwh = moses.device.state.get(\"kwh\");\nvar output = {\"value\":kwh};\nmoses.service.send(output);"
+						},
+						"4d100121-c7ba-4238-86a2-fab19b45a5af": {
+							"id": "4d100121-c7ba-4238-86a2-fab19b45a5af",
+							"name": "getBackPressureService",
+							"external_ref": "urn:infai:ses:service:0cc94599-0b50-4f7e-8937-0583459e6573",
+							"sensor_interval": 30,
+							"code": "var bar1 = moses.device.state.get(\"bar1\");\nvar output = {\"value\":bar1};\nmoses.service.send(output);"
+						},
+						"55fd8b88-b51f-4637-94fc-a94115fccfed": {
+							"id": "55fd8b88-b51f-4637-94fc-a94115fccfed",
+							"name": "getSealGasSupplyPressureService",
+							"external_ref": "urn:infai:ses:service:aec580b1-0b2c-4848-b871-13baed65469e",
+							"sensor_interval": 30,
+							"code": "var bar2 = moses.device.state.get(\"bar2\");\nvar output = {\"value\":bar2};\nmoses.service.send(output);"
+						},
+						"61f6a2e3-73f2-4463-b32e-73d36dae1ae4": {
+							"id": "61f6a2e3-73f2-4463-b32e-73d36dae1ae4",
+							"name": "getSpeedLevelService",
+							"external_ref": "urn:infai:ses:service:df4d6ed4-a9d3-434a-9143-1e9c2a63b05f",
+							"sensor_interval": 3600,
+							"code": "var rpm = moses.device.state.get(\"rpm\");\nvar output = {\"value\":rpm};\nmoses.service.send(output);"
+						}
+					}
+				}
+			},
+			"change_routines": {
+				"4e780be4-cf6e-4930-a27c-c1cf2570075a": {
+					"id": "4e780be4-cf6e-4930-a27c-c1cf2570075a",
+					"interval": 10,
+					"code": "var temperature = moses.world.state.get(\"temperature\");\nvar room_temperature = moses.room.state.get(\"temperature\");\nif(temperature > room_temperature){\n\troom_temperature = room_temperature + 1;\n}else if(temperature < room_temperature){\n\troom_temperature = room_temperature - 1;\n}\nroom_temperature = Number(room_temperature.toFixed(1));\nmoses.room.state.set(\"temperature\", room_temperature);\n"
+				},
+				"9161a7f8-3f1c-4151-b643-af4b3f8b707c": {
+					"id": "9161a7f8-3f1c-4151-b643-af4b3f8b707c",
+					"interval": 10,
+					"code": "var humidity = moses.world.state.get(\"humidity\");\nvar room_humidity = moses.room.state.get(\"humidity\");\nif(humidity > room_humidity){\n\troom_humidity = room_humidity + 1;\n}else if(humidity < room_humidity){\n\troom_humidity = room_humidity - 1;\n}\nroom_humidity = Number(room_humidity.toFixed(1));\nmoses.room.state.set(\"humidity\", room_humidity);\n"
+				},
+				"9851af52-c42c-48b8-ad96-57405ed7963c": {
+					"id": "9851af52-c42c-48b8-ad96-57405ed7963c",
+					"interval": 10,
+					"code": "var co = moses.world.state.get(\"co-ppm\");\nvar room_co = moses.room.state.get(\"co-ppm\");\nif(co > room_co){\n\troom_co = room_co + 0.1;\n}else if(co < room_co){\n\troom_co = room_co - 0.1;\n}\nroom_co = Number(room_co.toFixed(2));\nmoses.room.state.set(\"co-ppm\", room_co);\n"
+				}
+			}
+		}
+	},
+	"change_routines": {}
+}
