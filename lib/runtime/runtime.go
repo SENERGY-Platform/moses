@@ -496,6 +496,80 @@ func (this *Runtime) snapshotEnvs() []*environment {
 	return result
 }
 
+// SetState merges values into the live state of one running environment. This is
+// how a boundary condition is turned from outside the simulation: an outdoor
+// temperature in the context, a hall temperature on a zone, a machine's speed on
+// an asset. The scripts read it on their next tick.
+//
+// The change is applied to the in memory state and marked dirty, not written
+// through to the store: the flusher owns that write, and a direct one would be
+// overwritten by it anyway.
+func (this *Runtime) SetState(id string, change repo.StateChange) error {
+	//gen is guarded by the runtime mux, the same way rebuildIndex reads it
+	this.mux.RLock()
+	env, running := this.envs[id]
+	var gen *generation
+	if running {
+		gen = env.gen
+	}
+	this.mux.RUnlock()
+	if !running {
+		return repo.ErrNotRunning
+	}
+	if err := validateChangeIds(gen, change); err != nil {
+		return err
+	}
+
+	env.mux.Lock()
+	defer env.mux.Unlock()
+	if env.removed {
+		return repo.ErrNotRunning
+	}
+	mergeInto(env.state.Context, change.Context)
+	for zoneId, values := range change.Zones {
+		if env.state.Zones[zoneId] == nil {
+			env.state.Zones[zoneId] = map[string]interface{}{}
+		}
+		mergeInto(env.state.Zones[zoneId], values)
+	}
+	for assetId, values := range change.Assets {
+		if env.state.Assets[assetId] == nil {
+			env.state.Assets[assetId] = map[string]interface{}{}
+		}
+		mergeInto(env.state.Assets[assetId], values)
+	}
+	env.dirty = true
+	return nil
+}
+
+func mergeInto(target map[string]interface{}, values map[string]interface{}) {
+	for key, value := range values {
+		target[key] = copyValue(value)
+	}
+}
+
+// validateChangeIds refuses a change naming a zone or asset the definition does
+// not have, and names every one of them rather than the first.
+func validateChangeIds(gen *generation, change repo.StateChange) error {
+	problem := &repo.UnknownIdsError{}
+	for zoneId := range change.Zones {
+		if gen == nil || gen.zones[zoneId] == nil {
+			problem.Zones = append(problem.Zones, zoneId)
+		}
+	}
+	for assetId := range change.Assets {
+		if gen == nil || gen.assets[assetId] == nil {
+			problem.Assets = append(problem.Assets, assetId)
+		}
+	}
+	if len(problem.Zones) == 0 && len(problem.Assets) == 0 {
+		return nil
+	}
+	sort.Strings(problem.Zones)
+	sort.Strings(problem.Assets)
+	return problem
+}
+
 // runChannel is one channel on a ticker. Without a source interval it is the
 // legacy shape: one ticker, and what the script sends goes out at once.
 func (this *Runtime) runChannel(ctx context.Context, env *environment, gen *generation, binding channelBinding) {

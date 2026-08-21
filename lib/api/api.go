@@ -18,6 +18,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"reflect"
 	"runtime"
@@ -51,6 +52,10 @@ type RuntimeNotifier interface {
 	Reload(id string)
 	// Remove stops one environment, after its definition was deleted.
 	Remove(id string)
+	// SetState merges values into the live state of one running environment. It
+	// reports ErrNotRunning for an environment the runtime does not hold, and a
+	// *repo.UnknownIdsError for zone or asset ids the definition does not have.
+	SetState(id string, change repo.StateChange) error
 }
 
 // notifyReload and notifyRemove tolerate a missing runtime: a nil notifier means
@@ -68,6 +73,18 @@ func notifyRemove(notifier RuntimeNotifier, id string) {
 		return
 	}
 	notifier.Remove(id)
+}
+
+// ErrNoRuntime is what a state change gets when the api runs as a store only.
+// Storing the change would be worse than refusing it: the runtime is what would
+// apply it, and a caller told "ok" would wait for an effect that never comes.
+var ErrNoRuntime = errors.New("this instance serves the store only and runs no simulation")
+
+func setState(notifier RuntimeNotifier, id string, change repo.StateChange) error {
+	if notifier == nil {
+		return ErrNoRuntime
+	}
+	return notifier.SetState(id, change)
 }
 
 func Start(ctx context.Context, config config.Config, staterepo *state.StateRepo, environments repo.Environments, notifier RuntimeNotifier) {

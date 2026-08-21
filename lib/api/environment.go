@@ -48,6 +48,7 @@ func EnvironmentEndpoints(config config.Config, environments repo.Environments, 
 		putEnvironmentH,
 		postEnvironmentH,
 		deleteEnvironmentH,
+		patchEnvironmentStateH,
 		getSwaggerDocH,
 	} {
 		method, path, handler := route(environments, notifier)
@@ -269,6 +270,76 @@ func deleteEnvironmentH(environments repo.Environments, notifier RuntimeNotifier
 		}
 		notifyRemove(notifier, env.Id)
 		gc.Status(http.StatusNoContent)
+	}
+}
+
+// patchEnvironmentStateH turns a boundary condition from outside the simulation.
+// The room climate case is what it exists for: set a hall temperature and the
+// sensors in that hall pick it up on their next tick, which is what the legacy
+// world/room state was reaching for and never finished.
+//
+// @Summary Set live state of one running environment
+// @Description Merges the given values into the live state. Only the keys named are touched; everything else keeps running. Context is the shared surroundings every zone reads, zones and assets are keyed by their id from the definition. Takes effect on the next tick of the scripts that read it, and is not a change to the definition.
+// @Tags Environment
+// @Accept json
+// @Produce json
+// @Security Bearer
+// @Param id path string true "environment id"
+// @Param state body repo.StateChange true "the values to set"
+// @Success 204 {string} string "applied"
+// @Failure 400 {string} string "the body is unreadable, empty, or names a zone or asset the definition does not have"
+// @Failure 401 {string} string "the token carries no subject"
+// @Failure 404 {string} string "no such environment, no access to it, or it is not running here"
+// @Failure 500 {string} string "error message"
+// @Router /environments/{id}/state [patch]
+func patchEnvironmentStateH(environments repo.Environments, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
+	return http.MethodPatch, "/environments/:id/state", func(gc *gin.Context) {
+		token, ok := requireUser(gc)
+		if !ok {
+			return
+		}
+		id := gc.Param("id")
+
+		existing, err := environments.Get(gc.Request.Context(), id)
+		switch {
+		case errors.Is(err, repo.ErrNotFound):
+			gc.String(http.StatusNotFound, "not found")
+			return
+		case err != nil:
+			util.Logger.Error("unable to read environment", attributes.ErrorKey, err)
+			gc.String(http.StatusInternalServerError, "unable to read environment")
+			return
+		}
+		if !mayAccess(token, existing) {
+			gc.String(http.StatusNotFound, "not found")
+			return
+		}
+
+		change := repo.StateChange{}
+		if err = gc.ShouldBindJSON(&change); err != nil {
+			gc.String(http.StatusBadRequest, "unable to read the request body as a state change: %s", err.Error())
+			return
+		}
+		if change.Empty() {
+			gc.String(http.StatusBadRequest, "the state change is empty, so it would do nothing")
+			return
+		}
+
+		err = setState(notifier, id, change)
+		unknownIds := &repo.UnknownIdsError{}
+		switch {
+		case err == nil:
+			gc.Status(http.StatusNoContent)
+		case errors.As(err, &unknownIds):
+			gc.String(http.StatusBadRequest, "%s", unknownIds.Error())
+		case errors.Is(err, repo.ErrNotRunning), errors.Is(err, ErrNoRuntime):
+			//404 and not 409: from outside, an environment this instance does not
+			//run is indistinguishable from one that does not exist here
+			gc.String(http.StatusNotFound, "the environment is not running here")
+		default:
+			util.Logger.Error("unable to set the environment state", attributes.ErrorKey, err, "environment", id)
+			gc.String(http.StatusInternalServerError, "unable to set the environment state")
+		}
 	}
 }
 

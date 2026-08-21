@@ -134,10 +134,20 @@ func testRouterWithNotifier(store repo.Environments, notifier RuntimeNotifier) *
 type recordingNotifier struct {
 	reloaded []string
 	removed  []string
+	changes  []repo.StateChange
+	setErr   error
 }
 
 func (this *recordingNotifier) Reload(id string) { this.reloaded = append(this.reloaded, id) }
 func (this *recordingNotifier) Remove(id string) { this.removed = append(this.removed, id) }
+
+func (this *recordingNotifier) SetState(id string, change repo.StateChange) error {
+	if this.setErr != nil {
+		return this.setErr
+	}
+	this.changes = append(this.changes, change)
+	return nil
+}
 
 func TestTheRuntimeIsToldAboutExactlyTheChangedEnvironment(t *testing.T) {
 	store := newFakeEnvironments()
@@ -865,5 +875,110 @@ func TestTheTokenTheIntegrationSuiteUsesStillIdentifiesItsSubjectAndRoles(t *tes
 	response = doWithAuthorization(t, testRouter(foreign), "GET", "/environments/env-2", string(helper.AdminJwt))
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected the admin role to be recognised, got %d: %s", response.Code, response.Body.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// PATCH /environments/{id}/state - turning a boundary condition from outside
+// ---------------------------------------------------------------------------
+
+func TestPatchStateHandsTheChangeToTheRuntimeAndAnswers204(t *testing.T) {
+	store := newFakeEnvironments()
+	notifier := &recordingNotifier{}
+	router := testRouterWithNotifier(store, notifier)
+	if resp := do(t, router, "PUT", "/environments/env-1", "user-a", minimalEnvironment()); resp.Code != http.StatusOK {
+		t.Fatalf("unable to create the environment: %d %s", resp.Code, resp.Body.String())
+	}
+
+	change := repo.StateChange{
+		Context: map[string]interface{}{"outdoor_temperature": -7.5},
+		Zones:   map[string]map[string]interface{}{"zone-1": {"temperature": 26.5}},
+	}
+	resp := do(t, router, "PATCH", "/environments/env-1/state", "user-a", change)
+	if resp.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if len(notifier.changes) != 1 {
+		t.Fatalf("expected exactly one change to reach the runtime, got %d", len(notifier.changes))
+	}
+	got := notifier.changes[0]
+	if got.Context["outdoor_temperature"] != -7.5 || got.Zones["zone-1"]["temperature"] != 26.5 {
+		t.Errorf("the change was not passed through unchanged: %#v", got)
+	}
+	//a state change is not a definition change, so nothing may be reloaded: a
+	//reload would restart the tickers this change is meant to be read by
+	if len(notifier.reloaded) != 1 {
+		t.Errorf("expected only the reload of the PUT, got %v", notifier.reloaded)
+	}
+}
+
+func TestPatchStateRefusesAnEmptyChange(t *testing.T) {
+	store := newFakeEnvironments()
+	notifier := &recordingNotifier{}
+	router := testRouterWithNotifier(store, notifier)
+	do(t, router, "PUT", "/environments/env-1", "user-a", minimalEnvironment())
+
+	resp := do(t, router, "PATCH", "/environments/env-1/state", "user-a", repo.StateChange{})
+	if resp.Code != http.StatusBadRequest {
+		t.Errorf("an empty change does nothing and has to be refused, got %d", resp.Code)
+	}
+	if len(notifier.changes) != 0 {
+		t.Errorf("nothing may reach the runtime, got %v", notifier.changes)
+	}
+}
+
+func TestPatchStateOfSomebodyElsesEnvironmentIs404(t *testing.T) {
+	store := newFakeEnvironments()
+	notifier := &recordingNotifier{}
+	router := testRouterWithNotifier(store, notifier)
+	do(t, router, "PUT", "/environments/env-1", "user-a", minimalEnvironment())
+
+	change := repo.StateChange{Context: map[string]interface{}{"outdoor_temperature": 30.0}}
+	if resp := do(t, router, "PATCH", "/environments/env-1/state", "user-b", change); resp.Code != http.StatusNotFound {
+		t.Errorf("expected 404 rather than 403, got %d", resp.Code)
+	}
+	if len(notifier.changes) != 0 {
+		t.Errorf("a foreign environment must not be touched, got %v", notifier.changes)
+	}
+}
+
+func TestPatchStateWithoutARuntimeIs404(t *testing.T) {
+	store := newFakeEnvironments()
+	//nil notifier: this instance serves the store only
+	router := testRouter(store)
+	do(t, router, "PUT", "/environments/env-1", "user-a", minimalEnvironment())
+
+	change := repo.StateChange{Context: map[string]interface{}{"outdoor_temperature": 30.0}}
+	resp := do(t, router, "PATCH", "/environments/env-1/state", "user-a", change)
+	if resp.Code != http.StatusNotFound {
+		t.Errorf("without a runtime the change cannot be applied and must not be claimed, got %d", resp.Code)
+	}
+}
+
+func TestPatchStateReportsUnknownIdsAsABadRequest(t *testing.T) {
+	store := newFakeEnvironments()
+	notifier := &recordingNotifier{setErr: &repo.UnknownIdsError{Zones: []string{"no-zone"}}}
+	router := testRouterWithNotifier(store, notifier)
+	do(t, router, "PUT", "/environments/env-1", "user-a", minimalEnvironment())
+
+	change := repo.StateChange{Zones: map[string]map[string]interface{}{"no-zone": {"temperature": 20.0}}}
+	resp := do(t, router, "PATCH", "/environments/env-1/state", "user-a", change)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "no-zone") {
+		t.Errorf("the offending id has to be named, got %q", resp.Body.String())
+	}
+}
+
+func TestPatchStateOfAnEnvironmentThatIsNotRunningIs404(t *testing.T) {
+	store := newFakeEnvironments()
+	notifier := &recordingNotifier{setErr: repo.ErrNotRunning}
+	router := testRouterWithNotifier(store, notifier)
+	do(t, router, "PUT", "/environments/env-1", "user-a", minimalEnvironment())
+
+	change := repo.StateChange{Context: map[string]interface{}{"outdoor_temperature": 30.0}}
+	if resp := do(t, router, "PATCH", "/environments/env-1/state", "user-a", change); resp.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", resp.Code)
 	}
 }

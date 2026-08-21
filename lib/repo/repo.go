@@ -25,6 +25,7 @@ package repo
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/SENERGY-Platform/moses/lib/domain"
 )
@@ -46,6 +47,46 @@ type RuntimeState struct {
 
 	// UpdatedAtUnix is set by the store on every write.
 	UpdatedAtUnix int64 `json:"updated_at_unix" bson:"updated_at_unix"`
+}
+
+// StateChange is a partial RuntimeState: what a caller wants to set, and
+// nothing about the values it does not mention. It is the shape of the knob an
+// operator turns - outdoor temperature, a machine's speed - and it is applied to
+// the running environment, not to the store, because the runtime holds the live
+// state and its next flush would overwrite a direct write.
+type StateChange struct {
+	Context map[string]interface{}            `json:"context"`
+	Zones   map[string]map[string]interface{} `json:"zones"`
+	Assets  map[string]map[string]interface{} `json:"assets"`
+}
+
+// Empty reports whether the change would do nothing.
+func (this StateChange) Empty() bool {
+	return len(this.Context) == 0 && len(this.Zones) == 0 && len(this.Assets) == 0
+}
+
+// ErrNotRunning is returned when a state change addresses an environment the
+// runtime does not hold. Stored but not running is the normal case for an
+// environment whose definition was just written on another instance.
+var ErrNotRunning = errors.New("the environment is not running")
+
+// UnknownIdsError names the zone and asset ids a change referred to that the
+// definition does not have. Reported rather than ignored: a key written under an
+// id nothing reads is state that looks set and has no effect.
+type UnknownIdsError struct {
+	Zones  []string
+	Assets []string
+}
+
+func (this *UnknownIdsError) Error() string {
+	parts := []string{}
+	if len(this.Zones) > 0 {
+		parts = append(parts, "unknown zones: "+strings.Join(this.Zones, ", "))
+	}
+	if len(this.Assets) > 0 {
+		parts = append(parts, "unknown assets: "+strings.Join(this.Assets, ", "))
+	}
+	return strings.Join(parts, "; ")
 }
 
 // Environments stores environment definitions.

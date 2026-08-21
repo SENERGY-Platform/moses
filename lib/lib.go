@@ -235,6 +235,10 @@ func (this *environmentNotifier) Reload(id string) {
 	this.warn()
 }
 
+func (this *environmentNotifier) SetState(id string, change repo.StateChange) error {
+	return this.runtime.SetState(id, change)
+}
+
 func (this *environmentNotifier) Remove(id string) {
 	this.runtime.Remove(id)
 	this.warn()
