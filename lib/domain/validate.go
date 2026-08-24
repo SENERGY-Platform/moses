@@ -184,6 +184,9 @@ func (this *validator) checkChannel(path string, channel Channel) {
 		this.fail(path+".interval_seconds", "an actuator is driven from outside and must not have an interval")
 	}
 	this.checkSource(path+".source", channel.Source)
+	if channel.Source.Kind == SourceProfile && (channel.Direction != Sensor || channel.IntervalSeconds <= 0) {
+		this.fail(path, "a profile source computes when the channel publishes, so the channel must be a sensor with an interval")
+	}
 }
 
 func (this *validator) checkSource(path string, source Source) {
@@ -211,7 +214,9 @@ func (this *validator) checkSource(path string, source Source) {
 		} else if strings.TrimSpace(source.Script.Code) == "" {
 			this.fail(path+".script.code", "must not be empty")
 		}
-	case SourceProfile, SourceDataset, SourceFormula:
+	case SourceProfile:
+		this.checkProfile(path, source)
+	case SourceDataset, SourceFormula:
 		// the document format carries these from the start so that exports stay
 		// stable, but nothing executes them yet. accepting one here would store
 		// a channel that silently never produces a value.
@@ -226,6 +231,29 @@ func (this *validator) checkSource(path string, source Source) {
 // checkStates rejects values that cannot survive the round trip through bson
 // and json. NaN and infinity were previously silently rewritten to zero, which
 // hid the modelling error that produced them.
+// checkProfile: a profile computes when the channel publishes, so a channel
+// that never publishes would be stored and silently produce nothing - which is
+// exactly what refusing the other source kinds is meant to prevent.
+func (this *validator) checkProfile(path string, source Source) {
+	if source.Profile == nil {
+		this.fail(path+".profile", "must be set when kind is %q", SourceProfile)
+		return
+	}
+	if source.IntervalSeconds != 0 {
+		this.fail(path+".interval_seconds", "a profile computes when the channel publishes and has no own interval")
+	}
+	p := source.Profile
+	if len(p.HourFactors) != 0 && len(p.HourFactors) != 24 {
+		this.fail(path+".profile.hour_factors", "must have 24 entries or be empty, got %d", len(p.HourFactors))
+	}
+	if len(p.WeekdayFactors) != 0 && len(p.WeekdayFactors) != 7 {
+		this.fail(path+".profile.weekday_factors", "must have 7 entries (starting at monday) or be empty, got %d", len(p.WeekdayFactors))
+	}
+	if p.SpreadPercent < 0 {
+		this.fail(path+".profile.spread_percent", "must not be negative")
+	}
+}
+
 func (this *validator) checkStates(path string, states map[string]interface{}) {
 	for key, value := range states {
 		if key == "" {

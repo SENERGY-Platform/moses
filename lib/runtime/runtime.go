@@ -261,7 +261,7 @@ func (this *Runtime) HandleCommand(externalDeviceRef string, externalServiceRef 
 			"environment", env.id, "device_ref", externalDeviceRef)
 		return true
 	}
-	this.execute(env, channel.gen, channel.binding, cmdMsg, responder)
+	this.dispatch(env, channel.gen, channel.binding, cmdMsg, responder, false)
 	return true
 }
 
@@ -585,9 +585,9 @@ func (this *Runtime) runChannel(ctx context.Context, env *environment, gen *gene
 			return
 		case <-ticker.C:
 			//input is nil on a tick, as it was for a legacy sensor service
-			this.execute(env, gen, binding, nil, func(value interface{}) {
+			this.dispatch(env, gen, binding, nil, func(value interface{}) {
 				this.publish(env, binding, value)
-			})
+			}, true)
 		}
 	}
 }
@@ -619,7 +619,7 @@ func (this *Runtime) runSplitChannel(ctx context.Context, env *environment, gen 
 		case <-ctx.Done():
 			return
 		case <-source.C:
-			this.execute(env, gen, binding, nil, pending.put)
+			this.dispatch(env, gen, binding, nil, pending.put, true)
 		case <-publishC:
 			//nothing to send before the source has run once. Skipping is right
 			//rather than sending a zero value: the channel carries a unit, and a
@@ -629,6 +629,42 @@ func (this *Runtime) runSplitChannel(ctx context.Context, env *environment, gen 
 			}
 		}
 	}
+}
+
+// dispatch runs whatever drives the channel. tick separates a schedule tick
+// from a command: a cumulative profile advances its meter only on ticks, or
+// every read command would inflate the reading.
+func (this *Runtime) dispatch(env *environment, gen *generation, binding channelBinding, input interface{}, send func(value interface{}), tick bool) {
+	if binding.channel.Source.Kind == domain.SourceProfile {
+		this.executeProfile(env, gen, binding, send, tick)
+		return
+	}
+	this.execute(env, gen, binding, input, send)
+}
+
+// executeProfile computes the profile under the environment mutex, like a
+// script run, so the cumulative state in the asset map is as safe as any other
+// state. send happens under the mutex too, which is what a script's
+// moses.service.send does.
+func (this *Runtime) executeProfile(env *environment, gen *generation, binding channelBinding, send func(value interface{}), tick bool) {
+	p := *binding.channel.Source.Profile
+	env.mux.Lock()
+	defer env.mux.Unlock()
+	value := profileValue(p, gen.def.Seed, binding.channel.Id, binding.channel.IntervalSeconds, time.Now())
+	if p.Cumulative {
+		states := env.assetStates(binding.asset.id)
+		counter, _ := asFloat(states[binding.channel.Id])
+		if tick {
+			//the profile value is a rate per hour; one tick adds its share.
+			//a gap (restart, downtime) is not caught up: a stopped plant does
+			//not consume.
+			counter += value * float64(binding.channel.IntervalSeconds) / 3600
+			states[binding.channel.Id] = counter
+			env.dirty = true
+		}
+		value = counter
+	}
+	send(value)
 }
 
 func (this *Runtime) execute(env *environment, gen *generation, binding channelBinding, input interface{}, send func(value interface{})) {

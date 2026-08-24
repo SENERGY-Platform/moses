@@ -203,14 +203,19 @@ func (this *generation) addAsset(envId string, zoneId string, asset domain.Asset
 	}
 	ref := assetRef{id: asset.Id, externalRef: asset.ExternalRef}
 	for _, channel := range asset.Channels {
-		if channel.Source.Kind != domain.SourceScript || channel.Source.Script == nil {
+		script := channel.Source.Kind == domain.SourceScript && channel.Source.Script != nil
+		profile := channel.Source.Kind == domain.SourceProfile && channel.Source.Profile != nil
+		if !script && !profile {
 			//validation rejects these on the way in, so this is a document that
 			//bypassed the api or one written for a later version of the format
 			util.Logger.Warn("channel source kind is not executed yet, the channel does nothing",
 				"environment", envId, "asset", asset.Id, "channel", channel.Id, "kind", channel.Source.Kind)
 			continue
 		}
-		binding := channelBinding{zoneId: zoneId, asset: ref, channel: channel, code: channel.Source.Script.Code}
+		binding := channelBinding{zoneId: zoneId, asset: ref, channel: channel}
+		if script {
+			binding.code = channel.Source.Script.Code
+		}
 		//seconds times time.Second overflows int64 beyond this limit and produces
 		//a negative duration, which makes time.NewTicker panic and would take the
 		//process down. Validation only rejects a negative interval.

@@ -477,11 +477,11 @@ func TestAnEnvironmentWhoseStateCannotBeLoadedIsNotStarted(t *testing.T) {
 func TestASourceKindThatIsNotExecutedYetDoesNothing(t *testing.T) {
 	env := testEnvironment("env-a", domain.Channel{
 		Id:              "ch-1",
-		Name:            "profile",
+		Name:            "dataset",
 		Direction:       domain.Sensor,
 		ExternalRef:     serviceRefOf("env-a"),
 		IntervalSeconds: 1,
-		Source:          domain.Source{Kind: domain.SourceProfile, Profile: &domain.ProfileSource{Base: 1}},
+		Source:          domain.Source{Kind: domain.SourceDataset, Dataset: &domain.DatasetSource{}},
 	})
 	publisher := &fakePublisher{}
 	rt := startRuntime(t, testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), publisher)
