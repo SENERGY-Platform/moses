@@ -57,6 +57,11 @@ type Config struct {
 	// files live in a gridfs bucket named <collection>_content.
 	DatasetCollectionName string `json:"dataset_collection_name" env_var:"DATASET_COLLECTION_NAME"`
 
+	// TimescaleWrapperUrl is where dataset sources with the platform origin
+	// fetch real measurements from. Empty disables the origin: affected
+	// channels are reported and skipped.
+	TimescaleWrapperUrl string `json:"timescale_wrapper_url" env_var:"TIMESCALE_WRAPPER_URL"`
+
 	// StateFlushInterval is how often the runtime writes the changed runtime
 	// state of an environment to the database. The runtime keeps the live values
 	// in memory and persists them behind this interval, instead of writing on

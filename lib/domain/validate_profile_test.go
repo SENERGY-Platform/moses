@@ -67,11 +67,11 @@ func TestValidateRefusesBrokenProfiles(t *testing.T) {
 func TestValidateStillRefusesWhatNothingExecutes(t *testing.T) {
 	err := Validate(profileEnvironment(func(c *Channel) {
 		c.Source = Source{Kind: SourceDataset, Dataset: &DatasetSource{
-			Origin: OriginPlatform, Ref: "x", Resample: ResampleHold, Anchor: AnchorLoop,
+			Origin: OriginEndpoint, Ref: "https://example.org/data", Resample: ResampleHold, Anchor: AnchorLoop,
 		}}
 	}))
 	if err == nil || !strings.Contains(err.Error(), "not executed yet") {
-		t.Errorf("the platform origin has to stay refused, got %v", err)
+		t.Errorf("the endpoint origin has to stay refused, got %v", err)
 	}
 }
 
@@ -137,4 +137,31 @@ func TestValidateChecksChannelReferences(t *testing.T) {
 	}))); err != nil {
 		t.Errorf("a reference to an existing channel has to pass: %v", err)
 	}
+}
+
+func platformDatasetChannel(mutate func(*Channel)) func(*Channel) {
+	return func(c *Channel) {
+		c.Source = Source{Kind: SourceDataset, Dataset: &DatasetSource{
+			Origin: OriginPlatform, Ref: "urn:device:x", ServiceRef: "urn:service:x",
+			Column: "value", Window: "7d",
+			Resample: ResampleHold, Anchor: AnchorLoop,
+		}}
+		if mutate != nil {
+			mutate(c)
+		}
+	}
+}
+
+func TestValidateAcceptsAPlatformDataset(t *testing.T) {
+	if err := Validate(profileEnvironment(platformDatasetChannel(nil))); err != nil {
+		t.Errorf("a valid platform dataset has to be storable now: %v", err)
+	}
+}
+
+func TestValidateRefusesBrokenPlatformDatasets(t *testing.T) {
+	expectProfileProblem(t, platformDatasetChannel(func(c *Channel) { c.Source.Dataset.ServiceRef = "" }), "must name the service")
+	expectProfileProblem(t, platformDatasetChannel(func(c *Channel) { c.Source.Dataset.Column = "" }), "path of the output variable")
+	expectProfileProblem(t, platformDatasetChannel(func(c *Channel) { c.Source.Dataset.Window = "" }), "window")
+	expectProfileProblem(t, platformDatasetChannel(func(c *Channel) { c.Source.Dataset.Window = "sieben Tage" }), "unreadable window")
+	expectProfileProblem(t, datasetChannel(func(c *Channel) { c.Source.Dataset.Window = "7d" }), "only applies to a platform timeseries")
 }

@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SENERGY-Platform/moses/lib/state"
 	"github.com/google/uuid"
@@ -762,4 +763,23 @@ func sortedIntervals(in []int64) []int64 {
 
 func sameIntervals(a []int64, b []int64) bool {
 	return reflect.DeepEqual(sortedIntervals(a), sortedIntervals(b))
+}
+
+func TestParseWindow(t *testing.T) {
+	for _, tc := range []struct {
+		window string
+		hours  float64
+	}{
+		{"36h", 36}, {"7d", 168}, {"4w", 672}, {"90m", 1.5}, {"1.5d", 36},
+	} {
+		got, err := ParseWindow(tc.window)
+		if err != nil || got != time.Duration(tc.hours*float64(time.Hour)) {
+			t.Errorf("%q: expected %vh, got %v (%v)", tc.window, tc.hours, got, err)
+		}
+	}
+	for _, bad := range []string{"", "d", "-3h", "0h", "3x", "sieben"} {
+		if _, err := ParseWindow(bad); err == nil {
+			t.Errorf("%q has to be refused", bad)
+		}
+	}
 }

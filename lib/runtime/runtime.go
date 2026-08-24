@@ -41,8 +41,10 @@ import (
 	"github.com/SENERGY-Platform/moses/lib/domain"
 	"github.com/SENERGY-Platform/moses/lib/formula"
 	"github.com/SENERGY-Platform/moses/lib/repo"
+	"github.com/SENERGY-Platform/moses/lib/timeseries"
 	"github.com/SENERGY-Platform/moses/lib/util"
 	platform_connector_lib "github.com/SENERGY-Platform/platform-connector-lib"
+	"github.com/SENERGY-Platform/platform-connector-lib/model"
 )
 
 // defaultJsTimeout and defaultStateFlushInterval are fallbacks for a
@@ -63,6 +65,8 @@ type Runtime struct {
 	environments  repo.Environments
 	states        repo.States
 	datasets      repo.Datasets
+	fetcher       seriesFetcher
+	ownerToken    func(userId string) (string, error)
 	publisher     eventPublisher
 	stateLogger   deviceStateLogger
 	jsTimeout     time.Duration
@@ -101,7 +105,21 @@ func New(config config.Config, environments repo.Environments, states repo.State
 		segmentName: config.ProtocolSegmentName,
 	})
 	result.stateLogger = stateLogger
+	if config.TimescaleWrapperUrl != "" {
+		result.fetcher = timeseries.New(config.TimescaleWrapperUrl)
+	}
+	//the fetch runs with the owner's exchanged token, so the wrapper checks
+	//the owner's real permissions instead of trusting this service's account
+	result.ownerToken = func(userId string) (string, error) {
+		token, err := connector.Security().GetCachedUserToken(userId, model.RemoteInfo{})
+		return string(token), err
+	}
 	return result
+}
+
+// seriesFetcher is what the platform origin needs from the timescale-wrapper.
+type seriesFetcher interface {
+	Fetch(token string, deviceId string, serviceId string, column string, start time.Time, end time.Time) ([]dataset.Point, error)
 }
 
 // newRuntime is what the tests use: everything except the connector is already
@@ -717,22 +735,25 @@ func numericOrZero(value interface{}) float64 {
 func (this *Runtime) loadSeries(ctx context.Context, def domain.Environment) map[string][]dataset.Point {
 	result := map[string][]dataset.Point{}
 	for _, zone := range def.Zones {
-		this.loadZoneSeries(ctx, def.Id, zone, result)
+		this.loadZoneSeries(ctx, def.Id, def.Owner, zone, result)
 	}
 	return result
 }
 
-func (this *Runtime) loadZoneSeries(ctx context.Context, envId string, zone domain.Zone, result map[string][]dataset.Point) {
+func (this *Runtime) loadZoneSeries(ctx context.Context, envId string, owner string, zone domain.Zone, result map[string][]dataset.Point) {
 	for _, nested := range zone.Zones {
-		this.loadZoneSeries(ctx, envId, nested, result)
+		this.loadZoneSeries(ctx, envId, owner, nested, result)
 	}
 	for _, asset := range zone.Assets {
 		for _, channel := range asset.Channels {
 			source := channel.Source
-			if source.Kind != domain.SourceDataset || source.Dataset == nil || source.Dataset.Origin != domain.OriginFile {
+			if source.Kind != domain.SourceDataset || source.Dataset == nil {
 				continue
 			}
-			points, err := this.fetchSeries(ctx, source.Dataset)
+			if source.Dataset.Origin != domain.OriginFile && source.Dataset.Origin != domain.OriginPlatform {
+				continue
+			}
+			points, err := this.fetchSeries(ctx, owner, source.Dataset)
 			if err != nil {
 				util.Logger.Warn("unable to load the dataset of this channel, it does not play",
 					attributes.ErrorKey, err, "environment", envId, "channel", channel.Id, "dataset", source.Dataset.Ref)
@@ -743,7 +764,10 @@ func (this *Runtime) loadZoneSeries(ctx context.Context, envId string, zone doma
 	}
 }
 
-func (this *Runtime) fetchSeries(ctx context.Context, source *domain.DatasetSource) ([]dataset.Point, error) {
+func (this *Runtime) fetchSeries(ctx context.Context, owner string, source *domain.DatasetSource) ([]dataset.Point, error) {
+	if source.Origin == domain.OriginPlatform {
+		return this.fetchPlatformSeries(owner, source)
+	}
 	if this.datasets == nil {
 		return nil, errors.New("no dataset store configured")
 	}
@@ -774,6 +798,28 @@ func (this *Runtime) fetchSeries(ctx context.Context, source *domain.DatasetSour
 		}
 	}
 	return nil, fmt.Errorf("the dataset has no column %q", source.Column)
+}
+
+// fetchPlatformSeries pulls a window of a real timeseries, backwards from now.
+// The window is frozen until the next reload, which is what makes the replay
+// deterministic between reloads.
+func (this *Runtime) fetchPlatformSeries(owner string, source *domain.DatasetSource) ([]dataset.Point, error) {
+	if this.fetcher == nil {
+		return nil, errors.New("no timescale_wrapper_url configured, the platform origin is disabled")
+	}
+	if this.ownerToken == nil {
+		return nil, errors.New("no token source configured")
+	}
+	window, err := domain.ParseWindow(source.Window)
+	if err != nil {
+		return nil, err
+	}
+	token, err := this.ownerToken(owner)
+	if err != nil {
+		return nil, fmt.Errorf("unable to obtain a token for the owner: %w", err)
+	}
+	end := time.Now()
+	return this.fetcher.Fetch(token, source.Ref, source.ServiceRef, source.Column, end.Add(-window), end)
 }
 
 // executeDataset publishes the replay value for now. The anchor of a looping

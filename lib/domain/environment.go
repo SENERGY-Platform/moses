@@ -21,6 +21,13 @@
 // in RuntimeState, so ticking a channel does not rewrite the definition.
 package domain
 
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+)
+
 type EnvironmentType string
 
 const (
@@ -233,9 +240,16 @@ type DatasetSource struct {
 	Ref string `json:"ref" bson:"ref"`
 	// ServiceRef selects the service when Origin is OriginPlatform.
 	ServiceRef string `json:"service_ref,omitempty" bson:"service_ref,omitempty"`
-	// Column selects the value column of an uploaded dataset by name; empty
-	// means the first one.
+	// Column selects the value column: for an uploaded dataset the column name
+	// (empty means the first one), for a platform timeseries the path of the
+	// output variable, e.g. "value" or "energy.value".
 	Column string `json:"column,omitempty" bson:"column,omitempty"`
+
+	// Window is how much of a platform timeseries is fetched, backwards from
+	// the moment the environment starts: a duration like "36h", "7d" or "4w".
+	// The fetched window is then replayed like an uploaded dataset and only
+	// changes on the next reload.
+	Window string `json:"window,omitempty" bson:"window,omitempty"`
 
 	Resample ResampleMode `json:"resample" bson:"resample"`
 	Anchor   AnchorMode   `json:"anchor" bson:"anchor"`
@@ -252,4 +266,32 @@ type FormulaSource struct {
 	Expression string `json:"expression" bson:"expression"`
 	// Inputs maps a name usable in Expression to a channel id or context key.
 	Inputs map[string]string `json:"inputs" bson:"inputs"`
+}
+
+// ParseWindow reads a replay window. time.ParseDuration covers h/m/s; days and
+// weeks are worth having because "7d" is how people think about load data.
+func ParseWindow(window string) (time.Duration, error) {
+	trimmed := strings.TrimSpace(window)
+	if trimmed == "" {
+		return 0, fmt.Errorf("the window must not be empty")
+	}
+	multiplier := time.Duration(0)
+	switch trimmed[len(trimmed)-1] {
+	case 'd':
+		multiplier = 24 * time.Hour
+	case 'w':
+		multiplier = 7 * 24 * time.Hour
+	}
+	if multiplier > 0 {
+		count, err := strconv.ParseFloat(trimmed[:len(trimmed)-1], 64)
+		if err != nil || count <= 0 {
+			return 0, fmt.Errorf("unreadable window %q", window)
+		}
+		return time.Duration(count * float64(multiplier)), nil
+	}
+	duration, err := time.ParseDuration(trimmed)
+	if err != nil || duration <= 0 {
+		return 0, fmt.Errorf("unreadable window %q, use a duration like \"36h\", \"7d\" or \"4w\"", window)
+	}
+	return duration, nil
 }

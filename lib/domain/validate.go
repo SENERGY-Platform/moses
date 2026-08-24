@@ -296,7 +296,23 @@ func (this *validator) checkDataset(path string, source Source) {
 		if strings.TrimSpace(d.Ref) == "" {
 			this.fail(path+".dataset.ref", "must name the uploaded dataset")
 		}
-	case OriginPlatform, OriginEndpoint:
+		if d.Window != "" {
+			this.fail(path+".dataset.window", "an uploaded dataset is replayed whole, the window only applies to a platform timeseries")
+		}
+	case OriginPlatform:
+		if strings.TrimSpace(d.Ref) == "" {
+			this.fail(path+".dataset.ref", "must name the platform device")
+		}
+		if strings.TrimSpace(d.ServiceRef) == "" {
+			this.fail(path+".dataset.service_ref", "must name the service of the device")
+		}
+		if strings.TrimSpace(d.Column) == "" {
+			this.fail(path+".dataset.column", "must name the path of the output variable, e.g. \"value\"")
+		}
+		if _, err := ParseWindow(d.Window); err != nil {
+			this.fail(path+".dataset.window", "%s", err.Error())
+		}
+	case OriginEndpoint:
 		this.fail(path+".dataset.origin", "origin %q is part of the format but not executed yet", d.Origin)
 	default:
 		this.fail(path+".dataset.origin", "unknown origin %q", d.Origin)
