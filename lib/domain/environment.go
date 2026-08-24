@@ -17,11 +17,8 @@
 // Package domain holds the environment model: the definition of a simulated
 // site, building or apartment and everything it contains.
 //
-// An environment is one document. It is what a user imports, exports and edits,
-// and it contains no live measurements: the values a running simulation produces
-// live separately (ref RuntimeState), so that ticking a channel does not rewrite
-// the definition. That split is what keeps the document exportable and small
-// while allowing frequent state updates.
+// An environment is one document and carries no live measurements - those live
+// in RuntimeState, so ticking a channel does not rewrite the definition.
 package domain
 
 type EnvironmentType string
@@ -68,12 +65,12 @@ type Environment struct {
 	Name string          `json:"name" bson:"name"`
 	Type EnvironmentType `json:"type" bson:"type"`
 
-	// Owner is never serialised to json: it is taken from the caller's token,
-	// so that importing a document cannot transfer ownership.
+	// Never serialised to json: taken from the caller's token, so an import
+	// cannot transfer ownership.
 	Owner string `json:"-" bson:"owner"`
 
-	// Seed makes a run reproducible. Every stochastic source derives from it,
-	// so the same environment and the same clock produce the same values.
+	// Every stochastic source derives from Seed, so the same environment and
+	// clock produce the same values.
 	Seed int64 `json:"seed" bson:"seed"`
 
 	// Context is the shared surroundings every zone below can read: outdoor
@@ -84,8 +81,7 @@ type Environment struct {
 }
 
 // Zone is a recursive node: site, building, floor, unit, hall and room are the
-// same entity with a different type. A metal workshop needs one level below the
-// site, an apartment building needs four, and neither needs a schema change.
+// same entity with a different type, so depth is data rather than schema.
 type Zone struct {
 	Id   string   `json:"id" bson:"id"`
 	Name string   `json:"name" bson:"name"`
@@ -114,9 +110,8 @@ type Asset struct {
 	Name string    `json:"name" bson:"name"`
 	Kind AssetKind `json:"kind" bson:"kind"`
 
-	// ExternalRef is the platform device id and ExternalTypeId its device type.
-	// Both are preserved verbatim across a migration: they are what keeps the
-	// existing timeseries in timescale attached to this asset.
+	// Preserved verbatim across a migration: they keep the existing timeseries
+	// in timescale attached to this asset.
 	ExternalRef    string `json:"external_ref" bson:"external_ref"`
 	ExternalTypeId string `json:"external_type_id" bson:"external_type_id"`
 
@@ -125,8 +120,8 @@ type Asset struct {
 	Channels []Channel `json:"channels" bson:"channels"`
 }
 
-// Channel is a measuring point or a manipulated variable. Unlike the service it
-// replaces it carries its unit, so a value is never just a bare number.
+// Channel is a measuring point or a manipulated variable, carrying its unit so
+// a value is never a bare number.
 type Channel struct {
 	Id        string    `json:"id" bson:"id"`
 	Name      string    `json:"name" bson:"name"`
@@ -135,9 +130,8 @@ type Channel struct {
 	// ExternalRef is the platform service id this channel publishes to.
 	ExternalRef string `json:"external_ref" bson:"external_ref"`
 
-	// CharacteristicId and Unit come from the device type's content variable.
-	// Unit is denormalised on purpose: it is display information and must stay
-	// readable in an exported document without resolving the characteristic.
+	// From the device type's content variable. Unit is denormalised so an
+	// exported document stays readable without resolving the characteristic.
 	CharacteristicId string `json:"characteristic_id" bson:"characteristic_id"`
 	Unit             string `json:"unit" bson:"unit"`
 
@@ -161,13 +155,10 @@ const (
 	SourceFormula SourceKind = "formula"
 )
 
-// Source is what drives a channel. Exactly one variant matches Kind.
-//
-// All four kinds are part of the document format from the start so that the
-// export format does not change when the declarative sources are implemented.
-// Only SourceScript is executed today; validation rejects the others with an
-// explicit "not yet supported" rather than accepting a document that would
-// silently produce nothing.
+// Source is what drives a channel; exactly one variant matches Kind. All four
+// kinds are in the format from the start so it does not change when the
+// declarative sources land. Only SourceScript executes today - validation
+// rejects the others rather than accepting a document that produces nothing.
 type Source struct {
 	Kind SourceKind `json:"kind" bson:"kind"`
 
@@ -187,9 +178,8 @@ type ScriptSource struct {
 	Code string `json:"code" bson:"code"`
 }
 
-// ProfileSource is a declarative shape rather than a script: a base value with
-// per-hour and per-weekday factors, plus a spread that is drawn from the
-// environment seed so that repeated runs match.
+// ProfileSource is a base value with per-hour and per-weekday factors, plus a
+// spread drawn from the environment seed so repeated runs match.
 type ProfileSource struct {
 	Base float64 `json:"base" bson:"base"`
 	// HourFactors has 24 entries, WeekdayFactors 7 starting at monday.
@@ -234,9 +224,8 @@ const (
 )
 
 // DatasetSource replays a real timeseries. The mapping fields exist because a
-// naive import of a german energy export silently produces wrong values rather
-// than failing: semicolon separated, comma as decimal mark, local time without
-// an offset.
+// german energy export imported naively produces wrong values instead of
+// failing: semicolon separated, comma decimal mark, local time without offset.
 type DatasetSource struct {
 	Origin DatasetOrigin `json:"origin" bson:"origin"`
 
@@ -249,8 +238,8 @@ type DatasetSource struct {
 	Anchor   AnchorMode   `json:"anchor" bson:"anchor"`
 	// Scale multiplies every value, for adapting a foreign profile in size.
 	Scale float64 `json:"scale" bson:"scale"`
-	// Cumulative marks the values as a meter reading, which must keep counting
-	// across a loop boundary instead of jumping back to the first value.
+	// A meter reading keeps counting across a loop boundary instead of jumping
+	// back to the first value.
 	Cumulative bool `json:"cumulative" bson:"cumulative"`
 }
 

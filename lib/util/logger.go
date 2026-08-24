@@ -14,10 +14,8 @@
  * limitations under the License.
  */
 
-// Package util holds the process wide structured logger.
-//
-// A package level logger mirrors how the other services in the platform wire
-// struct-logger, so that a reader moving between them finds the same shape.
+// Package util holds the process wide structured logger, wired the way the other
+// platform services wire struct-logger.
 package util
 
 import (
@@ -32,17 +30,14 @@ const (
 	project      = "moses"
 )
 
-// Logger is the structured logger every package logs through. It is replaced
-// once by InitLogger during start up; until then it discards nothing and writes
-// to stderr, so logging from an init function or a test cannot panic.
+// Logger is replaced once by InitLogger at start up; until then it writes to
+// stderr, so logging from an init function or a test cannot panic.
 var Logger *slog.Logger = struct_logger.New(struct_logger.Config{Handler: "text", Level: "info"}, os.Stderr, organization, project)
 
 // InitLogger configures the logger from the service configuration.
 //
-// A note on levels, because it has an operational consequence: an entry at
-// ERROR raises an automatic notification. Only failures that need someone to
-// act belong there — an expected or self healing condition is a WARN. Most of
-// what this service used to print as "ERROR: ..." is the latter.
+// ERROR raises an automatic notification, so only failures that need someone to
+// act belong there; an expected or self healing condition is a WARN.
 func InitLogger(handler string, level string) {
 	if handler == "" {
 		handler = "json"

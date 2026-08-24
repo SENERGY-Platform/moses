@@ -93,19 +93,15 @@ func isRelevantGoFile(path string) bool {
 // parseDiff extracts the added line numbers per file from a unified diff
 // produced with --unified=0.
 //
-// Only the hunk headers carry the answer: with zero context every added line is
-// described by its header, so no body line ever has to be counted. But a body
-// line still has to be *recognised* as one, because prefixes alone do not
-// separate structure from content. An added source line that itself begins with
-// "++ " appears in the diff as "+++ …", which is exactly the shape of a file
-// header — a raw string literal in Go can contain such a line. Reading it as a
-// header would silently retarget the parser and drop every remaining hunk of
-// that file, and under-reporting the changed lines is the direction that
-// weakens the gate.
+// The hunk headers carry the answer, but a body line still has to be recognised
+// as one: an added source line beginning with "++ " appears as "+++ …", the
+// shape of a file header, and a Go raw string literal can contain one. Read as a
+// header it would drop every remaining hunk of that file - under-reporting, the
+// direction that weakens the gate.
 //
-// So the body is tracked rather than guessed: a --unified=0 hunk is followed by
-// exactly oldCount removed plus newCount added lines, and while those are
-// outstanding nothing is interpreted as structure.
+// So the body is counted, not guessed: a --unified=0 hunk is followed by exactly
+// oldCount removed plus newCount added lines, and nothing in between is read as
+// structure.
 func parseDiff(r io.Reader) (changedLines, error) {
 	result := changedLines{}
 	scanner := bufio.NewScanner(r)

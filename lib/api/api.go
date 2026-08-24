@@ -35,18 +35,15 @@ import (
 
 var endpoints = []func(config config.Config, states *state.StateRepo, router gin.IRouter){}
 
-// environmentEndpoints serve the environment model and need the environment
-// store rather than the legacy state repo, which is why they register separately.
+// environmentEndpoints need the environment store rather than the legacy state
+// repo, hence a separate registration.
 var environmentEndpoints = []func(config config.Config, environments repo.Environments, notifier RuntimeNotifier, router gin.IRouter){}
 
 // RuntimeNotifier is how a change to a stored environment reaches the running
-// simulation. It is an interface and not the runtime itself so that this package
-// keeps knowing nothing about how an environment is executed - and so that the
-// api can be served without a runtime at all, which is what the tests do.
+// simulation. An interface so the api can be served without a runtime at all.
 //
-// Both methods concern exactly one environment: this is the point of the new
-// runtime, and passing the whole store instead would invite the global restart
-// the legacy runtime did on every edit.
+// Both methods concern exactly one environment - passing the whole store would
+// invite the global restart the legacy runtime did on every edit.
 type RuntimeNotifier interface {
 	// Reload picks up the current definition of one environment.
 	Reload(id string)
@@ -58,8 +55,7 @@ type RuntimeNotifier interface {
 	SetState(id string, change repo.StateChange) error
 }
 
-// notifyReload and notifyRemove tolerate a missing runtime: a nil notifier means
-// the api runs as a store only, which is a valid configuration for a test and
+// A nil notifier means the api runs as a store only, valid in a test, so this
 // must not panic in a handler.
 func notifyReload(notifier RuntimeNotifier, id string) {
 	if notifier == nil {
@@ -110,10 +106,8 @@ func Start(ctx context.Context, config config.Config, staterepo *state.StateRepo
 	}()
 }
 
-// NewRouter builds the gin engine. Access logging, panic recovery and the error
-// to status mapping come from gin-middleware instead of being hand written, so
-// this service logs like the other services in the platform — and so a panic in
-// a handler no longer kills the request without a trace.
+// NewRouter builds the gin engine. Access logging, panic recovery and error to
+// status mapping come from gin-middleware rather than being hand written.
 //
 // @title MOSES API
 // @version 1.0.0

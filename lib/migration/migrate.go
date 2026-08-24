@@ -15,13 +15,9 @@
  */
 
 // Package migration plans the one-shot conversion of the legacy worlds into the
-// environment model of lib/domain.
-//
-// Everything in here is pure: Plan() reads a map of legacy worlds and a set of
-// already existing environment ids and returns what it intends to do. It does
-// not read the database and it does not write anything, so the interesting part
-// of a migration against production data can be unit tested, and the caller
-// decides whether the plan is printed or executed.
+// environment model of lib/domain. Plan() is pure - it neither reads nor writes
+// the database - so a migration of production data can be unit tested and the
+// caller decides whether to print or execute the plan.
 package migration
 
 import (
@@ -34,101 +30,71 @@ import (
 	"github.com/SENERGY-Platform/moses/lib/state"
 )
 
-// ErrNilWorld is reported for a null entry in the world map. LoadWorlds() never
-// produces one, but a nil pointer would panic in the conversion, and losing the
-// rest of the migration to one broken entry is the wrong failure mode.
+// ErrNilWorld is reported rather than panicking, so one broken entry does not
+// take down the rest of the migration.
 var ErrNilWorld = errors.New("the legacy world is null")
 
-// ErrNoLegacyId is reported for a legacy world without an id.
-//
-// This blocks the world rather than migrating it: the environment id is the
-// legacy world id, and FromLegacyWorld generates a fresh uuid when there is
-// none. That uuid differs on every run, so a second run could not recognise the
-// world as already migrated and would insert another copy of it - exactly the
-// duplicate the skip detection exists to prevent.
+// ErrNoLegacyId blocks the world instead of migrating it: FromLegacyWorld would
+// generate a fresh uuid, which differs per run, so a second run would not
+// recognise the world as migrated and would insert a duplicate.
 var ErrNoLegacyId = errors.New("the legacy world has no id, so a repeated migration could not recognise it")
 
-// ErrDuplicateEnvironmentId is reported when two legacy worlds of the same run
-// convert into the same environment id. Writing both would mean the second
-// silently replaces the first, because Put() is keyed by the id.
+// ErrDuplicateEnvironmentId: Put() is keyed by id, so writing both would let
+// the second silently replace the first.
 var ErrDuplicateEnvironmentId = errors.New("two legacy worlds convert into the same environment id")
 
-// WorldPlan is what the migration intends to do with one legacy world.
+// WorldPlan is what the migration intends to do with one legacy world. Problems
+// do not block a write; they are the work list for re-modelling change routines.
 //
-// A plan is only written when Writable() is true, which means: the world is not
-// already migrated and nothing blocks it. Problems are not blocking - they are
-// the expected outcome of the conversion (ref domain.FromLegacyWorld) and the
-// work list for re-modelling the change routines.
-//
-// On the skip: a world whose environment id already exists in the environment
-// store is never overwritten. Re-running the migration has to be safe, and by
-// the time it is re-run the stored environment may carry runtime state, manual
-// corrections of the device kinds and zone types the conversion had to guess,
-// and channel sources that replaced the change routines. All of that lives only
-// in the new document; the legacy world does not know about it, so a second
-// conversion would throw it away. Skipping is therefore not an optimisation but
-// the only safe behaviour, and an intentional re-import has to delete the
-// environment first.
+// An existing environment id is skipped, never overwritten: the stored document
+// may carry runtime state, hand corrections of the kinds and types the
+// conversion had to guess, and channel sources that replaced change routines.
+// None of that exists in the legacy world, so a second conversion would discard
+// it. A deliberate re-import deletes the environment first.
 type WorldPlan struct {
-	// WorldId identifies the legacy world: its own id, or the key it was loaded
-	// under when the document itself has none (which is a blocking condition,
-	// ref ErrNoLegacyId, but still has to be reportable).
+	// WorldId is the world's own id, or the key it was loaded under when it has
+	// none - blocking (ErrNoLegacyId), but still reportable.
 	WorldId string
 
-	// WorldName is the legacy name, unsubstituted. Environment.Name may differ:
-	// the conversion substitutes a placeholder for an empty name and reports
-	// that as a Problem.
+	// WorldName is the legacy name; Environment.Name may carry a substituted
+	// placeholder instead.
 	WorldName string
 
-	// Environment is the conversion result. It is filled even when the plan is
-	// skipped or blocked, so that a dry run can report what would have been
-	// written. It is the zero value only when the conversion never ran.
+	// Environment is filled even for a skipped or blocked plan, so a dry run can
+	// report what would have been written.
 	Environment domain.Environment
 
-	// Problems are the findings of the conversion, plus the findings of the
-	// planning itself (a world without an owner). None of them blocks a write.
 	Problems []domain.Problem
 
-	// Err is why this plan must not be written, or nil. It carries the
-	// *domain.ValidationError of domain.Validate in the normal case, and
-	// ErrNilWorld, ErrNoLegacyId, ErrDuplicateEnvironmentId or the conversion's
-	// own error otherwise.
-	//
-	// It is also set for a skipped world whose conversion would not validate.
-	// That is information, not a failure: nothing is written either way, and the
-	// stored environment - not this conversion - is what runs.
+	// Err is why this plan must not be written. Also set for a skipped world
+	// whose conversion would not validate - information, not a failure, since
+	// the stored environment is what runs.
 	Err error
 
-	// Skip marks a world that already exists in the environment store.
 	Skip bool
 
 	// SkipReason is empty exactly when Skip is false.
 	SkipReason string
 }
 
-// Writable reports whether this plan may be stored.
 func (this WorldPlan) Writable() bool {
 	return !this.Skip && this.Err == nil
 }
 
-// Blocked reports whether this plan wanted to be written but must not be. A
-// skipped world is not blocked: nothing is wrong with it.
+// Blocked: a skipped world is not blocked, nothing is wrong with it.
 func (this WorldPlan) Blocked() bool {
 	return !this.Skip && this.Err != nil
 }
 
-// Counts returns the size of the converted environment.
 func (this WorldPlan) Counts() (zones int, assets int, channels int) {
 	return countZones(this.Environment.Zones)
 }
 
-// routineMarker appears in the path of every problem that reports an unmapped
-// change routine. FromLegacyWorld builds those paths as "...change_routines[key]".
+// routineMarker matches the paths FromLegacyWorld builds for unmapped routines.
 const routineMarker = "change_routines["
 
-// UnmappedRoutines returns the problems that report a change routine which was
-// not migrated. They are the reason the legacy world has to be kept: their
-// javascript is not in the converted document.
+// UnmappedRoutines is why the legacy world has to be kept: their javascript is
+// not in the converted document.
 func (this WorldPlan) UnmappedRoutines() []domain.Problem {
 	result := []domain.Problem{}
 	for _, problem := range this.Problems {
@@ -139,7 +105,6 @@ func (this WorldPlan) UnmappedRoutines() []domain.Problem {
 	return result
 }
 
-// OtherProblems returns every problem that is not an unmapped change routine.
 func (this WorldPlan) OtherProblems() []domain.Problem {
 	result := []domain.Problem{}
 	for _, problem := range this.Problems {
@@ -150,23 +115,16 @@ func (this WorldPlan) OtherProblems() []domain.Problem {
 	return result
 }
 
-// Plan decides what to do with every legacy world.
-//
-// existingIds is the set of environment ids that already exist in the
-// environment store; the caller queries it. A world whose environment id is in
-// that set is planned as a skip and never overwritten (ref WorldPlan).
-//
-// The result is ordered by world name and then by world id, so that two runs
-// over the same data print the same report and a diff of two runs shows what
-// changed rather than how the map happened to iterate.
+// Plan decides what to do with every legacy world. existingIds is queried by the
+// caller; a world found in it is skipped (ref WorldPlan). The result is ordered
+// by name then id, so two runs over the same data print the same report.
 func Plan(worlds map[string]*state.World, envType domain.EnvironmentType, existingIds map[string]bool) []WorldPlan {
 	keys := make([]string, 0, len(worlds))
 	for key := range worlds {
 		keys = append(keys, key)
 	}
-	// sorted before converting, not after: the duplicate id detection below
-	// depends on which world is seen first, so the input order has to be total
-	// as well, not only the output order.
+	// sorted before converting: the duplicate detection below depends on which
+	// world is seen first, so the input order has to be total too.
 	sort.Slice(keys, func(a, b int) bool {
 		nameA, nameB := worldName(worlds[keys[a]]), worldName(worlds[keys[b]])
 		if nameA != nameB {
@@ -180,8 +138,7 @@ func Plan(worlds map[string]*state.World, envType domain.EnvironmentType, existi
 	})
 
 	result := make([]WorldPlan, 0, len(keys))
-	// produced maps an environment id to the world id that produced it, so that
-	// a collision can name both sides.
+	// environment id -> world id, so a collision can name both sides
 	produced := map[string]string{}
 	for _, key := range keys {
 		result = append(result, planWorld(key, worlds[key], envType, existingIds, produced))
@@ -203,13 +160,11 @@ func planWorld(key string, world *state.World, envType domain.EnvironmentType, e
 		return result
 	}
 
-	// the world is passed by value, and FromLegacyWorld deep copies every state
-	// map, so nothing of the legacy document is shared with the plan
+	// by value, and FromLegacyWorld deep copies every state map, so the plan
+	// shares nothing with the legacy document
 	environment, problems, err := domain.FromLegacyWorld(*world, envType)
 	if err != nil {
-		// a caller mistake, currently only an unknown environment type. reported
-		// per world rather than returned, because Plan has no error return and
-		// the report has to name what was not migrated.
+		// per world rather than returned: the report has to name what was skipped
 		result.Err = err
 		return result
 	}
@@ -219,11 +174,9 @@ func planWorld(key string, world *state.World, envType domain.EnvironmentType, e
 	}
 
 	if strings.TrimSpace(environment.Owner) == "" {
-		// an environment without an owner is not in anybody's list: ListByOwner
-		// filters by exactly this field. The usual cause is not broken data but
-		// the wrong input - state.World.Owner is bson only (json:"-"), so a world
-		// read from a json export has no owner while the same world read from
-		// mongo has.
+		// ListByOwner filters on this field, so an unowned environment is in
+		// nobody's list. Usual cause is the input, not the data: World.Owner is
+		// bson only, so a world from a json export never carries one.
 		result.Problems = append(result.Problems, domain.Problem{
 			Path:    "owner",
 			Message: "the legacy world has no owner, so the environment would belong to nobody and would not appear in any user's list; note that a world read from a json export never carries an owner because the legacy field is bson only",
@@ -241,10 +194,8 @@ func planWorld(key string, world *state.World, envType domain.EnvironmentType, e
 		result.SkipReason = fmt.Sprintf("an environment with the id %v already exists and is not overwritten; delete it first to import the legacy world again", environment.Id)
 	}
 
-	// validated for a skipped world as well: it costs nothing and a converted
-	// document that would not validate is worth seeing even when it is not
-	// written, because it means the legacy world and the stored environment have
-	// drifted apart.
+	// validated for a skipped world too: a conversion that would not validate
+	// means the legacy world and the stored environment have drifted apart
 	result.Err = domain.Validate(environment)
 	return result
 }

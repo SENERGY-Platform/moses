@@ -16,16 +16,13 @@
 
 package runtime
 
-// This file is a deliberate copy of the otto runner in lib/state/jsvm.go, not a
-// shared helper. The new runtime must not import the legacy package: the legacy
-// one is going away, and an import would keep it alive and let a change to the
-// old runner reach the new one. The duplication is temporary and dies with
-// lib/state.
+// A deliberate copy of the otto runner in lib/state/jsvm.go rather than a shared
+// helper: importing the legacy package would keep it alive. Dies with lib/state.
 //
-// Two things are deliberately NOT copied verbatim, both marked below: when the
-// interrupt timer is armed, and how the timer goroutine ends. Both are bugs in
-// the legacy version that only became load bearing here, because a single
-// environment mutex now serialises many channels.
+// Two things are NOT copied verbatim, both marked below - when the interrupt
+// timer is armed and how its goroutine ends. Both are legacy bugs that only
+// became load bearing here, where one environment mutex serialises many
+// channels.
 
 import (
 	"errors"
@@ -40,12 +37,10 @@ import (
 	"github.com/robertkrimen/otto"
 )
 
-// halt is the panic value the interrupt handler raises. otto has no other way
-// to stop a running script.
+// halt is the panic value the interrupt handler raises; otto offers no other
+// way to stop a running script.
 var halt = errors.New("stop")
 
-// ErrScriptTimeout is returned when a script was interrupted because it ran
-// longer than the configured js timeout.
 var ErrScriptTimeout = errors.New("script exceeded the js timeout")
 
 const maxCodeLogSize = 100
@@ -54,8 +49,8 @@ func trimCodeDefault(code string) string {
 	return trimCode(code, maxCodeLogSize)
 }
 
-// trimCode shortens a script for a log line, keeping both ends: the beginning
-// says what the script is, the end is where a syntax error usually sits.
+// trimCode keeps both ends: the start says what the script is, the end is where
+// a syntax error usually sits.
 func trimCode(code string, size int) string {
 	if len(code) <= size {
 		return code

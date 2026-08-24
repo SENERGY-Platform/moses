@@ -575,7 +575,6 @@ func TestLoadOverridesAnInt64Field(t *testing.T) {
 	}
 }
 
-// WAS: TestHandleEnvironmentVarsIgnoresAnIntFieldBecauseOnlyInt64IsHandled.
 // The old loader only handled reflect.Int64, so every plain `int` field was
 // silently unconfigurable. It is configurable now.
 func TestLoadOverridesAnIntField(t *testing.T) {
@@ -591,7 +590,6 @@ func TestLoadOverridesAnIntField(t *testing.T) {
 	}
 }
 
-// WAS: TestHandleEnvironmentVarsIgnoresAFloat64FieldBecauseTheKindIsNotHandled.
 func TestLoadOverridesAFloat64Field(t *testing.T) {
 	neutralizeProbeEnv(t)
 	t.Setenv("FLOAT64_FIELD", "1.5")
@@ -618,7 +616,6 @@ func TestLoadOverridesABoolField(t *testing.T) {
 	}
 }
 
-// WAS: TestHandleEnvironmentVarsSplitsASliceFieldOnCommasAndTrimsWhitespace.
 // BEHAVIOUR CHANGE: slices come from json now, not from a comma separated list.
 // Config has no slice field, so no deployment variable is affected.
 func TestLoadParsesASliceFieldFromJson(t *testing.T) {
@@ -649,7 +646,6 @@ func TestLoadRejectsACommaSeparatedListForASliceField(t *testing.T) {
 	}
 }
 
-// WAS: TestHandleEnvironmentVarsParsesAMapFieldFromCommaSeparatedKeyColonValuePairs.
 // BEHAVIOUR CHANGE: maps come from json now. The only map in Config is
 // KafkaTopicConfigs, which could not be set from the environment at all before
 // (it panicked), so no working deployment variable changes meaning.
@@ -667,8 +663,7 @@ func TestLoadParsesAMapFieldFromJson(t *testing.T) {
 	}
 }
 
-// WAS: TestHandleEnvironmentVarsTruncatesAMapValueAtItsSecondColon, which
-// asserted that "endpoint:localhost:9092" silently became {"endpoint":
+// Previously asserted that "endpoint:localhost:9092" silently became {"endpoint":
 // "localhost"}. A colon in the value survives now.
 func TestLoadKeepsColonsInsideAMapValue(t *testing.T) {
 	neutralizeProbeEnv(t)
@@ -684,7 +679,7 @@ func TestLoadKeepsColonsInsideAMapValue(t *testing.T) {
 	}
 }
 
-// WAS: TestHandleEnvironmentVarsPanicsWhenAMapEntryHasNoColon. The old loader
+// The old loader
 // indexed keyVal[1] out of range and crashed the process during start-up.
 func TestLoadReportsAnErrorInsteadOfPanickingForAMalformedMapValue(t *testing.T) {
 	neutralizeProbeEnv(t)
@@ -705,7 +700,7 @@ func TestLoadReportsAnErrorInsteadOfPanickingForAMalformedMapValue(t *testing.T)
 	}
 }
 
-// WAS: TestHandleEnvironmentVarsPanicsWhenTheMapValueTypeIsNotString. The old
+// The old
 // loader always built a map[string]string and handed it to reflect.Value.Set,
 // which panicked for any other map type.
 func TestLoadFillsAMapWithANonStringValueTypeFromJson(t *testing.T) {
@@ -748,7 +743,7 @@ func TestLoadLeavesFieldsUntouchedWhenNoVariableIsSet(t *testing.T) {
 	}
 }
 
-// WAS: TestHandleEnvironmentVarsCannotClearAValueWithAnEmptyVariable. The old
+// The old
 // loader skipped on `envValue != ""`, so an operator had no way to switch a
 // setting back off from the environment. The new loader uses os.LookupEnv and
 // distinguishes "absent" from "empty".
@@ -786,7 +781,6 @@ func TestLoadReportsAnErrorForAnEmptyNumericOrBooleanVariable(t *testing.T) {
 	}
 }
 
-// WAS: TestHandleEnvironmentVarsSilentlyZeroesAnInt64FieldForAnUnparsableValue.
 // The old loader discarded the strconv error, so a typo replaced the configured
 // value with 0 -- for AsyncPgThreadMax, KafkaConsumerMaxBytes or
 // TokenCacheExpiration a production-affecting difference.
@@ -804,7 +798,6 @@ func TestLoadReportsAnErrorForAnUnparsableInt64AndLeavesTheValueUntouched(t *tes
 	}
 }
 
-// WAS: TestHandleEnvironmentVarsSilentlyFalsifiesABoolFieldForAnUnparsableValue.
 // The old loader turned FATAL_KAFKA_ERROR=yes into false, i.e. it silently
 // switched the fail-fast safety net OFF. Both the probe and the real field are
 // checked, because this one was reachable from a deployment.
@@ -833,7 +826,6 @@ func TestLoadReportsAnErrorForAnUnparsableBool(t *testing.T) {
 // the real Config, for the traps above
 // ---------------------------------------------------------------------------
 
-// WAS: TestHandleEnvironmentVarsTreatsJsTimeoutAsRawNanoseconds.
 // BEHAVIOUR CHANGE, DEPLOYMENT VISIBLE: JS_TIMEOUT is parsed by
 // time.ParseDuration now, so it takes "2s" and rejects a raw nanosecond count.
 // The json key js_timeout keeps meaning nanoseconds (see
@@ -857,7 +849,6 @@ func TestJsTimeoutTakesADurationStringFromTheEnvironment(t *testing.T) {
 	}
 }
 
-// WAS: TestLoadConfigLocationPanicsWhenKafkaTopicConfigsIsSetInTheEnvironment.
 // There was no value that worked: the old loader built a map[string]string and
 // reflect.Set panicked on the map[string][]kafka.ConfigEntry field, so the
 // service crashed at start-up for ANY value of KAFKA_TOPIC_CONFIGS.
@@ -905,7 +896,7 @@ func TestKafkaTopicConfigsReportsAnErrorForAMalformedValueWithoutPanicking(t *te
 	}
 }
 
-// WAS: TestHandleEnvironmentVarsIgnoresTheIntAndFloatFieldsOfConfig. These four
+// These four
 // fields were silently unconfigurable from the environment.
 func TestTheIntAndFloatFieldsOfConfigAreConfigurableFromTheEnvironment(t *testing.T) {
 	neutralizeConfigEnv(t)
@@ -999,8 +990,6 @@ func TestSecretFieldsAreMaskedWhenFormattedOrMarshalled(t *testing.T) {
 	}
 }
 
-// WAS: TestSecretTaggedFieldsAreNotPrintedByTheLoader and
-// TestNonSecretFieldsArePrintedByTheLoaderWithTheirValue.
 // BEHAVIOUR CHANGE, OPERATOR VISIBLE: the old loader announced every override
 // on stdout ("use environment variable: PLAIN_FIELD = plain-value"). The new
 // one is silent, for secrets and non-secrets alike. Nothing can leak, but the
@@ -1029,7 +1018,7 @@ func TestTheLoaderDoesNotPrintOverridesToStdout(t *testing.T) {
 	}
 }
 
-// WAS: TestTheSecretTaggedFieldsOfConfigAreTheExpectedOnes, which listed the
+// Previously listed the
 // fields carrying `config:"secret"`. The tag is gone; the type is the marker
 // now. Changes against that list:
 //   - JwtPrivateKey is a Secret now. It is a private key and was previously
@@ -1052,8 +1041,7 @@ func TestTheSecretTypedFieldsOfConfigAreTheExpectedOnes(t *testing.T) {
 	}
 }
 
-// WAS: TestJwtPrivateKeyIsPrintedInTheClearBecauseItIsNotTaggedSecret, which
-// documented a real leak. The field is a Secret now, so the assertion is
+// Previously documented a real leak. The field is a Secret now, so the assertion is
 // inverted on purpose.
 func TestJwtPrivateKeyIsMaskedBecauseItIsASecret(t *testing.T) {
 	neutralizeConfigEnv(t)

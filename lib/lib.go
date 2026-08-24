@@ -57,8 +57,8 @@ func New(config config.Config, ctx context.Context) (err error) {
 		DeviceRepoUrl:            config.DeviceRepoUrl,
 		KafkaResponseTopic:       config.KafkaResponseTopic,
 
-		//create topics before consuming: if a consumer group joins before its topic exists,
-		//the group can become stable with 0 assigned partitions and never receive messages
+		//a consumer group joining before its topic exists can become stable with
+		//0 partitions and never receive messages
 		InitTopics: true,
 
 		DeviceExpiration:         int32(config.DeviceExpiration),
@@ -102,7 +102,6 @@ func New(config config.Config, ctx context.Context) (err error) {
 
 		KafkaTopicConfigs: config.KafkaTopicConfigs,
 
-		//the connector logs through the service logger instead of its own default
 		Logger: util.Logger,
 	})
 	if err != nil {
@@ -148,10 +147,8 @@ func New(config config.Config, ctx context.Context) (err error) {
 		return err
 	}
 
-	//the per world cutover: a world that exists as an environment is run by the
-	//new runtime and must not be started here as well. Both runtimes publish
-	//under the same platform device and service ids, so a double start would
-	//send every value twice, and two scripts would write the same state.
+	//per world cutover: both runtimes publish under the same device and service
+	//ids, so a world that exists as an environment must not start here too
 	staterepo.SkipWorldIds, err = migratedWorldIds(ctx, environments)
 	if err != nil {
 		util.Logger.Error("unable to determine the migrated worlds", attributes.ErrorKey, err)
@@ -169,9 +166,8 @@ func New(config config.Config, ctx context.Context) (err error) {
 		return err
 	}
 
-	//one handler for both runtimes, new model first: HandleCommand reports
-	//whether the device belongs to an environment, and only if it does not is
-	//the command offered to the legacy worlds
+	//new model first: only a device that belongs to no environment is offered
+	//to the legacy worlds
 	connector.SetAsyncCommandHandler(asyncCommandHandler(config, connector,
 		func(externalDeviceRef string, externalServiceRef string, cmdMsg interface{}, responder func(respMsg interface{})) {
 			if environmentRuntime.HandleCommand(externalDeviceRef, externalServiceRef, cmdMsg, responder) {
@@ -194,8 +190,7 @@ func New(config config.Config, ctx context.Context) (err error) {
 	api.Start(ctx, config, staterepo, environments, notifier)
 	go func() {
 		<-ctx.Done()
-		//the runtime first: its final state flush needs the environment store,
-		//which is closed at the end of this function
+		//runtime first, its final flush needs the store closed below
 		environmentRuntime.Stop()
 		staterepo.Stop()
 		persistence.Close()
@@ -204,9 +199,8 @@ func New(config config.Config, ctx context.Context) (err error) {
 	return nil
 }
 
-// migratedWorldIds is the set of legacy world ids that exist as an environment.
-// The migration keeps the id of the world it converted, which is what makes this
-// comparison possible at all.
+// migratedWorldIds relies on the migration keeping the id of the world it
+// converted.
 func migratedWorldIds(ctx context.Context, environments repo.Environments) (map[string]bool, error) {
 	all, err := environments.All(ctx)
 	if err != nil {
@@ -222,9 +216,7 @@ func migratedWorldIds(ctx context.Context, environments repo.Environments) (map[
 	return result, nil
 }
 
-// environmentNotifier is what the api tells about a stored environment. It
-// forwards to the runtime and, on every change, re-runs the one check the per
-// world cutover cannot make on its own (see warn).
+// environmentNotifier forwards api changes to the runtime and re-runs warn().
 type environmentNotifier struct {
 	runtime   *runtime.Runtime
 	staterepo *state.StateRepo
@@ -244,19 +236,12 @@ func (this *environmentNotifier) Remove(id string) {
 	this.warn()
 }
 
-// warn reports the double runs the per world cutover cannot prevent:
-//
-//   - an environment that references the devices of a world it was not converted
-//     from. That world keeps a different id, so it is not skipped.
-//   - an environment created while the service runs whose id IS a world id. The
-//     skip set is computed at startup, so that world keeps running until the
-//     service is restarted.
-//
-// Both are diagnostics and not guards, on purpose. Which of the two runtimes is
-// the intended owner of a device cannot be decided here, and refusing to serve
-// would take a service down over a modelling mistake in one document. Checked on
-// every change and not only at startup, because the second case only appears
-// after a change.
+// warn reports the two double runs the per world cutover cannot prevent: an
+// environment referencing the devices of a world it was not converted from, and
+// an environment created after startup whose id is a world id (the skip set is
+// computed once). Diagnostics, not guards - which runtime owns a device cannot
+// be decided here, and refusing to serve would take the service down over a
+// modelling mistake in one document.
 func (this *environmentNotifier) warn() {
 	legacy := this.staterepo.ExternalRefWorldIds()
 	if len(legacy) == 0 {
@@ -287,8 +272,7 @@ func StringToList(str string) []string {
 func getKafkaCompression(compression string) kafka.Compression {
 	switch strings.ToLower(compression) {
 	case "", "-", "none":
-		// the zero value of kafka.Compression means uncompressed
-		return 0
+		return 0 //the zero value means uncompressed
 	case "gzip":
 		return kafka.Gzip
 	case "snappy":

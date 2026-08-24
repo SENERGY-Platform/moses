@@ -14,12 +14,8 @@
  * limitations under the License.
  */
 
-// Package repo stores environment definitions and their runtime state.
-//
-// The two are deliberately separate collections. A definition changes when a
-// user edits it; runtime state changes on every tick of every channel. Keeping
-// them in one document is what makes the current implementation rewrite an
-// entire world on each state.set().
+// Package repo stores environment definitions and their runtime state in two
+// collections: a definition changes when a user edits it, state on every tick.
 package repo
 
 import (
@@ -30,17 +26,15 @@ import (
 	"github.com/SENERGY-Platform/moses/lib/domain"
 )
 
-// ErrNotFound is returned when no environment with the requested id exists.
 var ErrNotFound = errors.New("environment not found")
 
-// RuntimeState holds the live values of one environment: what the definition
-// calls initial_states, evolved by the running simulation.
+// RuntimeState holds the live values of one environment: initial_states as
+// evolved by the running simulation.
 type RuntimeState struct {
 	EnvironmentId string `json:"environment_id" bson:"environment_id"`
 
-	// Context, Zones and Assets are keyed by id. Keeping them flat rather than
-	// mirroring the zone tree means a single zone's values can be written
-	// without touching the rest.
+	// Keyed by id rather than mirroring the zone tree, so one zone can be
+	// written without touching the rest.
 	Context map[string]interface{}            `json:"context" bson:"context"`
 	Zones   map[string]map[string]interface{} `json:"zones" bson:"zones"`
 	Assets  map[string]map[string]interface{} `json:"assets" bson:"assets"`
@@ -50,7 +44,7 @@ type RuntimeState struct {
 	// approach instead of jumping to its target.
 	Approaching map[string]map[string]Approach `json:"approaching,omitempty" bson:"approaching,omitempty"`
 
-	// UpdatedAtUnix is set by the store on every write.
+	// Set by the store, not by callers.
 	UpdatedAtUnix int64 `json:"updated_at_unix" bson:"updated_at_unix"`
 }
 
@@ -107,35 +101,29 @@ type Approach struct {
 
 // Environments stores environment definitions.
 type Environments interface {
-	// Put stores env under its id, replacing any previous definition. It is
-	// idempotent: storing an unchanged document twice changes nothing.
+	// Put replaces any previous definition under the same id.
 	Put(ctx context.Context, env domain.Environment) error
 
-	// Get returns the definition, or ErrNotFound.
+	// Get returns ErrNotFound if no such environment exists.
 	Get(ctx context.Context, id string) (domain.Environment, error)
 
-	// ListByOwner returns every environment owned by owner, ordered by name.
+	// ListByOwner is ordered by name.
 	ListByOwner(ctx context.Context, owner string) ([]domain.Environment, error)
 
-	// All returns every environment, for loading the simulation on startup.
-	// A definition that cannot be decoded is skipped and logged rather than
-	// failing the whole load.
+	// All skips and logs an undecodable definition instead of failing the load.
 	All(ctx context.Context) ([]domain.Environment, error)
 
-	// Delete removes the definition and its runtime state. Deleting something
-	// that does not exist is not an error.
+	// Delete also removes the runtime state, and tolerates a missing id.
 	Delete(ctx context.Context, id string) error
 }
 
 // States stores the live values of running environments.
 type States interface {
-	// Load returns the stored state, or an empty state if none exists yet.
+	// Load returns an empty state if none is stored yet.
 	Load(ctx context.Context, environmentId string) (RuntimeState, error)
 
-	// Save writes the whole state of one environment. Callers are expected to
-	// throttle: this is the write that happens often.
+	// Save writes the whole state. Callers throttle; this is the frequent write.
 	Save(ctx context.Context, state RuntimeState) error
 
-	// Delete removes the state of one environment.
 	Delete(ctx context.Context, environmentId string) error
 }
