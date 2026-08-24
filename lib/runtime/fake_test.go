@@ -318,7 +318,7 @@ func startRuntime(t *testing.T, cfg config.Config, envs *fakeEnvironments, state
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	rt := newRuntime(cfg, envs, states, publisher)
+	rt := newRuntime(cfg, envs, states, nil, publisher)
 	if err := rt.Start(ctx); err != nil {
 		t.Fatalf("unable to start the runtime: %v", err)
 	}

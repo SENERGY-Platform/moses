@@ -159,7 +159,7 @@ func New(config config.Config, ctx context.Context) (err error) {
 	staterepo.Start()
 
 	util.Logger.Info("starting the environment runtime")
-	environmentRuntime := runtime.New(config, environments, environments.States(), connector, logger)
+	environmentRuntime := runtime.New(config, environments, environments.States(), environments.Datasets(), connector, logger)
 	err = environmentRuntime.Start(ctx)
 	if err != nil {
 		util.Logger.Error("unable to start the environment runtime", attributes.ErrorKey, err)

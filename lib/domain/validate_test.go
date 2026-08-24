@@ -198,7 +198,7 @@ func TestValidateRejectsAnEmptyScript(t *testing.T) {
 }
 
 func TestValidateRejectsSourceKindsThatAreNotExecutedYet(t *testing.T) {
-	for _, kind := range []SourceKind{SourceDataset, SourceFormula} {
+	for _, kind := range []SourceKind{SourceFormula} {
 		env := validEnvironment()
 		env.Zones[0].Assets[0].Channels[0].Source = Source{Kind: kind}
 		err := Validate(env)

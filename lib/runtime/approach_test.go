@@ -131,3 +131,31 @@ func TestAZoneWithoutATimeConstantIsStillSetAtOnce(t *testing.T) {
 		t.Errorf("without a time constant the value has to arrive at once, last value %v", lastValue(publisher))
 	}
 }
+
+// Guards the flush of the approach bookkeeping: without it a restart jumps to
+// the target instead of resuming the curve, and nothing else notices, because
+// the live values keep looking right until the restart happens.
+func TestARunningApproachIsFlushedWithTheState(t *testing.T) {
+	env := testEnvironment("env-persist", scriptChannel("ch-1", domain.Sensor, 1, serviceRefOf("env-persist"), readsZoneTemperature))
+	env.Zones[0].InitialStates = map[string]interface{}{"temperature": 18.0}
+	env.Zones[0].TimeConstants = map[string]int64{"temperature": 3600}
+	states := newFakeStates()
+	rt := startRuntime(t, testConfig(50*time.Millisecond), newFakeEnvironments(env), states, &fakePublisher{})
+
+	if err := rt.SetState("env-persist", repo.StateChange{
+		Zones: map[string]map[string]interface{}{testZoneId: {"temperature": 28.0}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	flushed := func() bool {
+		for _, saved := range states.savedFor("env-persist") {
+			if approach, ok := saved.state.Approaching[testZoneId]["temperature"]; ok {
+				return approach.Target == 28.0 && approach.TauSeconds == 3600
+			}
+		}
+		return false
+	}
+	if !waitFor(4*time.Second, flushed) {
+		t.Error("the running approach never reached the state store")
+	}
+}

@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SENERGY-Platform/moses/lib/dataset"
 	"github.com/SENERGY-Platform/moses/lib/domain"
 	"github.com/SENERGY-Platform/moses/lib/repo"
 	"github.com/SENERGY-Platform/moses/lib/util"
@@ -76,6 +77,9 @@ type generation struct {
 	// commands maps an incoming command to the channel that answers it.
 	commands map[commandKey]channelBinding
 
+	// series carries the parsed uploads while the generation is indexed.
+	series map[string][]dataset.Point
+
 	// deviceRefs is every platform device this environment owns. It answers
 	// "is this device mine" for HandleCommand, which has to be answerable even
 	// for an asset whose channels cannot be executed.
@@ -120,6 +124,9 @@ type channelBinding struct {
 	// sourceInterval is how often the script runs. Zero means it runs when the
 	// channel publishes, which is the only behaviour the legacy runtime had.
 	sourceInterval int64
+
+	// points is the parsed series of a dataset channel, loaded at start.
+	points []dataset.Point
 }
 
 // latest holds the value a source produced but has not published yet. It exists
@@ -152,13 +159,14 @@ func (this *latest) get() (interface{}, bool) {
 // than dropping it silently: validation prevents all of these from being stored
 // through the api, so anything found here came from a hand written document or
 // from a future version of the format.
-func newGeneration(def domain.Environment) *generation {
+func newGeneration(def domain.Environment, series map[string][]dataset.Point) *generation {
 	result := &generation{
 		def:        def,
 		zones:      map[string]*zoneInfo{},
 		assets:     map[string]*assetInfo{},
 		commands:   map[commandKey]channelBinding{},
 		deviceRefs: map[string]bool{},
+		series:     series,
 	}
 	result.addZones(def.Id, def.Zones, 1)
 	return result
@@ -205,7 +213,10 @@ func (this *generation) addAsset(envId string, zoneId string, asset domain.Asset
 	for _, channel := range asset.Channels {
 		script := channel.Source.Kind == domain.SourceScript && channel.Source.Script != nil
 		profile := channel.Source.Kind == domain.SourceProfile && channel.Source.Profile != nil
-		if !script && !profile {
+		//a dataset channel is executable only with its series loaded; a failed
+		//load was already reported by the loader
+		replay := channel.Source.Kind == domain.SourceDataset && len(this.series[channel.Id]) >= 2
+		if !script && !profile && !replay {
 			//validation rejects these on the way in, so this is a document that
 			//bypassed the api or one written for a later version of the format
 			util.Logger.Warn("channel source kind is not executed yet, the channel does nothing",
@@ -215,6 +226,9 @@ func (this *generation) addAsset(envId string, zoneId string, asset domain.Asset
 		binding := channelBinding{zoneId: zoneId, asset: ref, channel: channel}
 		if script {
 			binding.code = channel.Source.Script.Code
+		}
+		if replay {
+			binding.points = this.series[channel.Id]
 		}
 		//seconds times time.Second overflows int64 beyond this limit and produces
 		//a negative duration, which makes time.NewTicker panic and would take the
@@ -371,6 +385,22 @@ func (this *environment) snapshot() repo.RuntimeState {
 	}
 	for id, states := range this.state.Assets {
 		result.Assets[id] = copyStates(states)
+	}
+	if len(this.state.Anchors) > 0 {
+		result.Anchors = make(map[string]int64, len(this.state.Anchors))
+		for id, anchor := range this.state.Anchors {
+			result.Anchors[id] = anchor
+		}
+	}
+	if len(this.state.Approaching) > 0 {
+		result.Approaching = make(map[string]map[string]repo.Approach, len(this.state.Approaching))
+		for zoneId, running := range this.state.Approaching {
+			copied := make(map[string]repo.Approach, len(running))
+			for key, approach := range running {
+				copied[key] = approach
+			}
+			result.Approaching[zoneId] = copied
+		}
 	}
 	return result
 }

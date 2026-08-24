@@ -187,6 +187,9 @@ func (this *validator) checkChannel(path string, channel Channel) {
 	if channel.Source.Kind == SourceProfile && (channel.Direction != Sensor || channel.IntervalSeconds <= 0) {
 		this.fail(path, "a profile source computes when the channel publishes, so the channel must be a sensor with an interval")
 	}
+	if channel.Source.Kind == SourceDataset && (channel.Direction != Sensor || channel.IntervalSeconds <= 0) {
+		this.fail(path, "a dataset source replays when the channel publishes, so the channel must be a sensor with an interval")
+	}
 }
 
 func (this *validator) checkSource(path string, source Source) {
@@ -216,7 +219,9 @@ func (this *validator) checkSource(path string, source Source) {
 		}
 	case SourceProfile:
 		this.checkProfile(path, source)
-	case SourceDataset, SourceFormula:
+	case SourceDataset:
+		this.checkDataset(path, source)
+	case SourceFormula:
 		// the document format carries these from the start so that exports stay
 		// stable, but nothing executes them yet. accepting one here would store
 		// a channel that silently never produces a value.
@@ -251,6 +256,44 @@ func (this *validator) checkProfile(path string, source Source) {
 	}
 	if p.SpreadPercent < 0 {
 		this.fail(path+".profile.spread_percent", "must not be negative")
+	}
+}
+
+// checkDataset: only uploaded files play today. The platform and endpoint
+// origins stay refused like the formula kind - accepting one would store a
+// channel that silently never produces a value.
+func (this *validator) checkDataset(path string, source Source) {
+	if source.Dataset == nil {
+		this.fail(path+".dataset", "must be set when kind is %q", SourceDataset)
+		return
+	}
+	if source.IntervalSeconds != 0 {
+		this.fail(path+".interval_seconds", "a dataset replays when the channel publishes and has no own interval")
+	}
+	d := source.Dataset
+	switch d.Origin {
+	case OriginFile:
+		if strings.TrimSpace(d.Ref) == "" {
+			this.fail(path+".dataset.ref", "must name the uploaded dataset")
+		}
+	case OriginPlatform, OriginEndpoint:
+		this.fail(path+".dataset.origin", "origin %q is part of the format but not executed yet", d.Origin)
+	default:
+		this.fail(path+".dataset.origin", "unknown origin %q", d.Origin)
+	}
+	switch d.Resample {
+	case ResampleHold, ResampleLinear, ResampleDistribute:
+	case "":
+		this.fail(path+".dataset.resample", "must be %q, %q or %q", ResampleHold, ResampleLinear, ResampleDistribute)
+	default:
+		this.fail(path+".dataset.resample", "unknown resample mode %q", d.Resample)
+	}
+	switch d.Anchor {
+	case AnchorLoop, AnchorOriginal:
+	case "":
+		this.fail(path+".dataset.anchor", "must be %q or %q", AnchorLoop, AnchorOriginal)
+	default:
+		this.fail(path+".dataset.anchor", "unknown anchor mode %q", d.Anchor)
 	}
 }
 

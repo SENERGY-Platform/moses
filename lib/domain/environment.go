@@ -233,11 +233,15 @@ type DatasetSource struct {
 	Ref string `json:"ref" bson:"ref"`
 	// ServiceRef selects the service when Origin is OriginPlatform.
 	ServiceRef string `json:"service_ref,omitempty" bson:"service_ref,omitempty"`
+	// Column selects the value column of an uploaded dataset by name; empty
+	// means the first one.
+	Column string `json:"column,omitempty" bson:"column,omitempty"`
 
 	Resample ResampleMode `json:"resample" bson:"resample"`
 	Anchor   AnchorMode   `json:"anchor" bson:"anchor"`
 	// Scale multiplies every value, for adapting a foreign profile in size.
-	Scale float64 `json:"scale" bson:"scale"`
+	// Zero means unscaled, so a document that omits it plays the data as is.
+	Scale float64 `json:"scale,omitempty" bson:"scale,omitempty"`
 	// A meter reading keeps counting across a loop boundary instead of jumping
 	// back to the first value.
 	Cumulative bool `json:"cumulative" bson:"cumulative"`

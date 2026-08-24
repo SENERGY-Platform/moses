@@ -406,6 +406,7 @@ func TestConfigFieldsMapToTheExpectedEnvironmentVariableNames(t *testing.T) {
 		"PublishToPostgres":         "PUBLISH_TO_POSTGRES",
 		"ServerPort":                "SERVER_PORT",
 		"StateCollectionName":       "STATE_COLLECTION_NAME",
+		"DatasetCollectionName":     "DATASET_COLLECTION_NAME",
 		"StateFlushInterval":        "STATE_FLUSH_INTERVAL",
 		"SyncCompression":           "SYNC_COMPRESSION",
 		"TemplateCollectionName":    "TEMPLATE_COLLECTION_NAME",

@@ -334,7 +334,7 @@ func TestStopFlushesWhatIsStillDirty(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	//an interval that cannot fire during the test, so only the final flush can
 	//explain a write
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), states, publisher)
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), states, nil, publisher)
 	if err := rt.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -637,7 +637,7 @@ func startWithStateLogger(t *testing.T, logger deviceStateLogger, envs *fakeEnvi
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	rt := newRuntime(testConfig(time.Hour), envs, newFakeStates(), publisher)
+	rt := newRuntime(testConfig(time.Hour), envs, newFakeStates(), nil, publisher)
 	rt.stateLogger = logger
 	if err := rt.Start(ctx); err != nil {
 		t.Fatalf("unable to start the runtime: %v", err)

@@ -29,12 +29,14 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/config"
+	"github.com/SENERGY-Platform/moses/lib/dataset"
 	"github.com/SENERGY-Platform/moses/lib/domain"
 	"github.com/SENERGY-Platform/moses/lib/repo"
 	"github.com/SENERGY-Platform/moses/lib/util"
@@ -58,6 +60,7 @@ type Runtime struct {
 	config        config.Config
 	environments  repo.Environments
 	states        repo.States
+	datasets      repo.Datasets
 	publisher     eventPublisher
 	stateLogger   deviceStateLogger
 	jsTimeout     time.Duration
@@ -90,8 +93,8 @@ type runningChannel struct {
 	binding channelBinding
 }
 
-func New(config config.Config, environments repo.Environments, states repo.States, connector *platform_connector_lib.Connector, stateLogger deviceStateLogger) *Runtime {
-	result := newRuntime(config, environments, states, &connectorPublisher{
+func New(config config.Config, environments repo.Environments, states repo.States, datasets repo.Datasets, connector *platform_connector_lib.Connector, stateLogger deviceStateLogger) *Runtime {
+	result := newRuntime(config, environments, states, datasets, &connectorPublisher{
 		connector:   connector,
 		segmentName: config.ProtocolSegmentName,
 	})
@@ -101,7 +104,7 @@ func New(config config.Config, environments repo.Environments, states repo.State
 
 // newRuntime is what the tests use: everything except the connector is already
 // an interface.
-func newRuntime(config config.Config, environments repo.Environments, states repo.States, publisher eventPublisher) *Runtime {
+func newRuntime(config config.Config, environments repo.Environments, states repo.States, datasets repo.Datasets, publisher eventPublisher) *Runtime {
 	jsTimeout := config.JsTimeout
 	if jsTimeout <= 0 {
 		util.Logger.Warn("no js timeout configured, using the default", "default", defaultJsTimeout)
@@ -116,6 +119,7 @@ func newRuntime(config config.Config, environments repo.Environments, states rep
 		config:        config,
 		environments:  environments,
 		states:        states,
+		datasets:      datasets,
 		publisher:     publisher,
 		jsTimeout:     jsTimeout,
 		flushInterval: flushInterval,
@@ -288,7 +292,7 @@ func (this *Runtime) startEnvironment(ctx context.Context, def domain.Environmen
 		util.Logger.Warn("environment without an id is not started", "name", def.Name)
 		return false
 	}
-	gen := newGeneration(def)
+	gen := newGeneration(def, this.loadSeries(ctx, def))
 
 	this.mux.RLock()
 	env, known := this.envs[def.Id]
@@ -635,11 +639,107 @@ func (this *Runtime) runSplitChannel(ctx context.Context, env *environment, gen 
 // from a command: a cumulative profile advances its meter only on ticks, or
 // every read command would inflate the reading.
 func (this *Runtime) dispatch(env *environment, gen *generation, binding channelBinding, input interface{}, send func(value interface{}), tick bool) {
-	if binding.channel.Source.Kind == domain.SourceProfile {
+	switch binding.channel.Source.Kind {
+	case domain.SourceProfile:
 		this.executeProfile(env, gen, binding, send, tick)
+	case domain.SourceDataset:
+		this.executeDataset(env, binding, send)
+	default:
+		this.execute(env, gen, binding, input, send)
+	}
+}
+
+// loadSeries fetches and parses the uploaded datasets the definition's
+// channels reference. A channel whose dataset cannot be loaded is reported and
+// skipped by newGeneration; the environment still starts, because one deleted
+// upload should not take a whole site down.
+func (this *Runtime) loadSeries(ctx context.Context, def domain.Environment) map[string][]dataset.Point {
+	result := map[string][]dataset.Point{}
+	for _, zone := range def.Zones {
+		this.loadZoneSeries(ctx, def.Id, zone, result)
+	}
+	return result
+}
+
+func (this *Runtime) loadZoneSeries(ctx context.Context, envId string, zone domain.Zone, result map[string][]dataset.Point) {
+	for _, nested := range zone.Zones {
+		this.loadZoneSeries(ctx, envId, nested, result)
+	}
+	for _, asset := range zone.Assets {
+		for _, channel := range asset.Channels {
+			source := channel.Source
+			if source.Kind != domain.SourceDataset || source.Dataset == nil || source.Dataset.Origin != domain.OriginFile {
+				continue
+			}
+			points, err := this.fetchSeries(ctx, source.Dataset)
+			if err != nil {
+				util.Logger.Warn("unable to load the dataset of this channel, it does not play",
+					attributes.ErrorKey, err, "environment", envId, "channel", channel.Id, "dataset", source.Dataset.Ref)
+				continue
+			}
+			result[channel.Id] = points
+		}
+	}
+}
+
+func (this *Runtime) fetchSeries(ctx context.Context, source *domain.DatasetSource) ([]dataset.Point, error) {
+	if this.datasets == nil {
+		return nil, errors.New("no dataset store configured")
+	}
+	meta, err := this.datasets.Get(ctx, source.Ref)
+	if err != nil {
+		return nil, err
+	}
+	location, err := time.LoadLocation(meta.Timezone)
+	if err != nil {
+		return nil, fmt.Errorf("the dataset carries the unknown timezone %q: %w", meta.Timezone, err)
+	}
+	raw, err := this.datasets.Content(ctx, source.Ref)
+	if err != nil {
+		return nil, err
+	}
+	series, err := dataset.ParseCSV(raw, location)
+	if err != nil {
+		//the upload validated this file, so a parse failure here means the
+		//parser changed incompatibly - worth a loud word
+		return nil, fmt.Errorf("the stored file no longer parses: %w", err)
+	}
+	if source.Column == "" {
+		return series[0].Points, nil
+	}
+	for _, s := range series {
+		if s.Name == source.Column {
+			return s.Points, nil
+		}
+	}
+	return nil, fmt.Errorf("the dataset has no column %q", source.Column)
+}
+
+// executeDataset publishes the replay value for now. The anchor of a looping
+// replay is set on first use and persisted with the state, so a restart
+// resumes mid-loop.
+func (this *Runtime) executeDataset(env *environment, binding channelBinding, send func(value interface{})) {
+	source := *binding.channel.Source.Dataset
+	env.mux.Lock()
+	defer env.mux.Unlock()
+	anchor := int64(0)
+	if source.Anchor != domain.AnchorOriginal {
+		var known bool
+		anchor, known = env.state.Anchors[binding.channel.Id]
+		if !known {
+			anchor = time.Now().Unix()
+			if env.state.Anchors == nil {
+				env.state.Anchors = map[string]int64{}
+			}
+			env.state.Anchors[binding.channel.Id] = anchor
+			env.dirty = true
+		}
+	}
+	value, playable := replayValue(source, binding.points, anchor, time.Now(), binding.channel.IntervalSeconds)
+	if !playable {
 		return
 	}
-	this.execute(env, gen, binding, input, send)
+	send(value)
 }
 
 // executeProfile computes the profile under the environment mutex, like a

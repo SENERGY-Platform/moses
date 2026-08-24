@@ -106,6 +106,7 @@ func testConfig(t *testing.T) config.Config {
 		TemplateCollectionName:    "templates",
 		EnvironmentCollectionName: "environments",
 		StateCollectionName:       "environment_states",
+		DatasetCollectionName:     "datasets",
 	}
 }
 

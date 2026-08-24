@@ -62,13 +62,40 @@ func TestValidateRefusesBrokenProfiles(t *testing.T) {
 	expectProfileProblem(t, func(c *Channel) { c.Direction = Actuator; c.IntervalSeconds = 0 }, "must be a sensor with an interval")
 }
 
-// The other two declared kinds stay refused - accepting one would store a
-// channel that silently produces nothing.
-func TestValidateStillRefusesDatasetAndFormula(t *testing.T) {
+// The origins and kinds that nothing executes stay refused - accepting one
+// would store a channel that silently produces nothing.
+func TestValidateStillRefusesWhatNothingExecutes(t *testing.T) {
 	err := Validate(profileEnvironment(func(c *Channel) {
-		c.Source = Source{Kind: SourceDataset, Dataset: &DatasetSource{}}
+		c.Source = Source{Kind: SourceDataset, Dataset: &DatasetSource{
+			Origin: OriginPlatform, Ref: "x", Resample: ResampleHold, Anchor: AnchorLoop,
+		}}
 	}))
 	if err == nil || !strings.Contains(err.Error(), "not executed yet") {
-		t.Errorf("dataset has to stay refused, got %v", err)
+		t.Errorf("the platform origin has to stay refused, got %v", err)
 	}
+}
+
+func datasetChannel(mutate func(*Channel)) func(*Channel) {
+	return func(c *Channel) {
+		c.Source = Source{Kind: SourceDataset, Dataset: &DatasetSource{
+			Origin: OriginFile, Ref: "d1", Resample: ResampleHold, Anchor: AnchorLoop,
+		}}
+		if mutate != nil {
+			mutate(c)
+		}
+	}
+}
+
+func TestValidateAcceptsAFileDataset(t *testing.T) {
+	if err := Validate(profileEnvironment(datasetChannel(nil))); err != nil {
+		t.Errorf("a file dataset has to be storable now: %v", err)
+	}
+}
+
+func TestValidateRefusesBrokenDatasets(t *testing.T) {
+	expectProfileProblem(t, datasetChannel(func(c *Channel) { c.Source.Dataset.Ref = " " }), "must name the uploaded dataset")
+	expectProfileProblem(t, datasetChannel(func(c *Channel) { c.Source.Dataset.Resample = "" }), "resample")
+	expectProfileProblem(t, datasetChannel(func(c *Channel) { c.Source.Dataset.Anchor = "immer" }), "unknown anchor")
+	expectProfileProblem(t, datasetChannel(func(c *Channel) { c.Source.IntervalSeconds = 5 }), "no own interval")
+	expectProfileProblem(t, datasetChannel(func(c *Channel) { c.IntervalSeconds = 0 }), "must be a sensor with an interval")
 }

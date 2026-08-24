@@ -39,6 +39,10 @@ type RuntimeState struct {
 	Zones   map[string]map[string]interface{} `json:"zones" bson:"zones"`
 	Assets  map[string]map[string]interface{} `json:"assets" bson:"assets"`
 
+	// Anchors holds the replay start per dataset channel, so a restart resumes
+	// a looping replay mid-loop instead of starting the data over.
+	Anchors map[string]int64 `json:"anchors,omitempty" bson:"anchors,omitempty"`
+
 	// Approaching holds the zone values that are moving towards a set point,
 	// keyed by zone id and state key. It is stored, so a restart continues an
 	// approach instead of jumping to its target.
