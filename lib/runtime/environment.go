@@ -22,8 +22,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/dataset"
 	"github.com/SENERGY-Platform/moses/lib/domain"
+	"github.com/SENERGY-Platform/moses/lib/formula"
 	"github.com/SENERGY-Platform/moses/lib/repo"
 	"github.com/SENERGY-Platform/moses/lib/util"
 )
@@ -45,6 +47,12 @@ type environment struct {
 	state   repo.RuntimeState
 	dirty   bool
 	removed bool
+
+	// lastValues is the most recent numeric value each channel produced,
+	// guarded by mux. This is what a formula's channel reference reads: a
+	// profile or dataset channel writes no state, so its output only exists
+	// here.
+	lastValues map[string]float64
 
 	// saves counts the Save calls that have left the mutex but not yet returned.
 	// Remove waits for it before deleting the stored state, so that a flush in
@@ -127,6 +135,9 @@ type channelBinding struct {
 
 	// points is the parsed series of a dataset channel, loaded at start.
 	points []dataset.Point
+
+	// program is the compiled expression of a formula channel.
+	program *formula.Program
 }
 
 // latest holds the value a source produced but has not published yet. It exists
@@ -216,7 +227,17 @@ func (this *generation) addAsset(envId string, zoneId string, asset domain.Asset
 		//a dataset channel is executable only with its series loaded; a failed
 		//load was already reported by the loader
 		replay := channel.Source.Kind == domain.SourceDataset && len(this.series[channel.Id]) >= 2
-		if !script && !profile && !replay {
+		var program *formula.Program
+		if channel.Source.Kind == domain.SourceFormula && channel.Source.Formula != nil {
+			var err error
+			program, err = formula.Compile(channel.Source.Formula.Expression, channel.Source.Formula.Inputs)
+			if err != nil {
+				//validation refuses this on the way in, so it bypassed the api
+				util.Logger.Warn("the formula does not compile, the channel does nothing",
+					attributes.ErrorKey, err, "environment", envId, "channel", channel.Id)
+			}
+		}
+		if !script && !profile && !replay && program == nil {
 			//validation rejects these on the way in, so this is a document that
 			//bypassed the api or one written for a later version of the format
 			util.Logger.Warn("channel source kind is not executed yet, the channel does nothing",
@@ -230,6 +251,7 @@ func (this *generation) addAsset(envId string, zoneId string, asset domain.Asset
 		if replay {
 			binding.points = this.series[channel.Id]
 		}
+		binding.program = program
 		//seconds times time.Second overflows int64 beyond this limit and produces
 		//a negative duration, which makes time.NewTicker panic and would take the
 		//process down. Validation only rejects a negative interval.

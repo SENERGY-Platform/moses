@@ -99,3 +99,42 @@ func TestValidateRefusesBrokenDatasets(t *testing.T) {
 	expectProfileProblem(t, datasetChannel(func(c *Channel) { c.Source.IntervalSeconds = 5 }), "no own interval")
 	expectProfileProblem(t, datasetChannel(func(c *Channel) { c.IntervalSeconds = 0 }), "must be a sensor with an interval")
 }
+
+func formulaEnvironmentChannel(mutate func(*Channel)) func(*Channel) {
+	return func(c *Channel) {
+		c.Source = Source{Kind: SourceFormula, Formula: &FormulaSource{
+			Expression: "a + 1", Inputs: map[string]string{"a": "asset.n"},
+		}}
+		if mutate != nil {
+			mutate(c)
+		}
+	}
+}
+
+func TestValidateAcceptsAFormula(t *testing.T) {
+	if err := Validate(profileEnvironment(formulaEnvironmentChannel(nil))); err != nil {
+		t.Errorf("a valid formula has to be storable now: %v", err)
+	}
+}
+
+func TestValidateRefusesBrokenFormulas(t *testing.T) {
+	expectProfileProblem(t, formulaEnvironmentChannel(func(c *Channel) { c.Source.Formula.Expression = "a +* 1" }), "unable to compile")
+	expectProfileProblem(t, formulaEnvironmentChannel(func(c *Channel) { c.Source.Formula.Inputs = nil }), "unknown name a")
+	expectProfileProblem(t, formulaEnvironmentChannel(func(c *Channel) { c.Source.Formula.Inputs["a"] = "nirgendwo" }), "must start with")
+	expectProfileProblem(t, formulaEnvironmentChannel(func(c *Channel) { c.IntervalSeconds = 0 }), "must be a sensor with an interval")
+}
+
+// The second validation pass: a channel reference has to name a channel of
+// this document, and it may point forward to one defined later.
+func TestValidateChecksChannelReferences(t *testing.T) {
+	expectProfileProblem(t, formulaEnvironmentChannel(func(c *Channel) {
+		c.Source.Formula.Inputs["a"] = "channel.gibt-es-nicht"
+	}), `the referenced channel "gibt-es-nicht" does not exist`)
+
+	//self reference: the channel's own last value is a legitimate input
+	if err := Validate(profileEnvironment(formulaEnvironmentChannel(func(c *Channel) {
+		c.Source.Formula.Inputs["a"] = "channel.ch-1"
+	}))); err != nil {
+		t.Errorf("a reference to an existing channel has to pass: %v", err)
+	}
+}

@@ -18,6 +18,7 @@ package domain
 
 import (
 	"fmt"
+	"github.com/SENERGY-Platform/moses/lib/formula"
 	"math"
 	"sort"
 	"strings"
@@ -65,6 +66,17 @@ type validator struct {
 	// lookup indexes by id, and a duplicate would make an update ambiguous.
 	ids   map[string]string
 	nodes int
+
+	// channelIds and channelRefs implement the second pass: a formula may
+	// reference a channel defined later in the document, so the reference can
+	// only be checked once the whole tree is indexed.
+	channelIds  map[string]bool
+	channelRefs []channelRef
+}
+
+type channelRef struct {
+	path string
+	id   string
 }
 
 func (this *validator) fail(path string, format string, args ...interface{}) {
@@ -86,7 +98,7 @@ func (this *validator) claimId(path string, id string) {
 // Validate checks an environment for everything that would make it unusable or
 // ambiguous. It returns a *ValidationError listing every problem, or nil.
 func Validate(env Environment) error {
-	v := &validator{ids: map[string]string{}}
+	v := &validator{ids: map[string]string{}, channelIds: map[string]bool{}}
 
 	if strings.TrimSpace(env.Name) == "" {
 		v.fail("name", "must not be empty")
@@ -106,6 +118,11 @@ func Validate(env Environment) error {
 
 	if v.nodes > MaxNodes {
 		v.fail("", "environment has %d nodes, the limit is %d", v.nodes, MaxNodes)
+	}
+	for _, ref := range v.channelRefs {
+		if !v.channelIds[ref.id] {
+			v.fail(ref.path, "the referenced channel %q does not exist in this environment", ref.id)
+		}
 	}
 
 	if len(v.problems) == 0 {
@@ -174,6 +191,9 @@ func (this *validator) checkChannel(path string, channel Channel) {
 		this.fail(path+".direction", "must be %q or %q, got %q", Sensor, Actuator, channel.Direction)
 	}
 	this.claimId(path+".id", channel.Id)
+	if channel.Id != "" {
+		this.channelIds[channel.Id] = true
+	}
 	if channel.Source.IntervalSeconds < 0 {
 		this.fail(path+".source.interval_seconds", "must not be negative")
 	}
@@ -189,6 +209,9 @@ func (this *validator) checkChannel(path string, channel Channel) {
 	}
 	if channel.Source.Kind == SourceDataset && (channel.Direction != Sensor || channel.IntervalSeconds <= 0) {
 		this.fail(path, "a dataset source replays when the channel publishes, so the channel must be a sensor with an interval")
+	}
+	if channel.Source.Kind == SourceFormula && (channel.Direction != Sensor || channel.IntervalSeconds <= 0) {
+		this.fail(path, "a formula computes when the channel publishes, so the channel must be a sensor with an interval")
 	}
 }
 
@@ -222,10 +245,7 @@ func (this *validator) checkSource(path string, source Source) {
 	case SourceDataset:
 		this.checkDataset(path, source)
 	case SourceFormula:
-		// the document format carries these from the start so that exports stay
-		// stable, but nothing executes them yet. accepting one here would store
-		// a channel that silently never produces a value.
-		this.fail(path+".kind", "source kind %q is part of the format but not executed yet", source.Kind)
+		this.checkFormula(path, source)
 	case "":
 		this.fail(path+".kind", "must be set")
 	default:
@@ -294,6 +314,29 @@ func (this *validator) checkDataset(path string, source Source) {
 		this.fail(path+".dataset.anchor", "must be %q or %q", AnchorLoop, AnchorOriginal)
 	default:
 		this.fail(path+".dataset.anchor", "unknown anchor mode %q", d.Anchor)
+	}
+}
+
+// checkFormula compiles the expression and trial-runs it with every input at
+// zero, so a broken formula is refused at store time with a message instead of
+// failing on every tick. Channel references are collected for the second pass,
+// because a formula may name a channel defined later in the document.
+func (this *validator) checkFormula(path string, source Source) {
+	if source.Formula == nil {
+		this.fail(path+".formula", "must be set when kind is %q", SourceFormula)
+		return
+	}
+	if source.IntervalSeconds != 0 {
+		this.fail(path+".interval_seconds", "a formula computes when the channel publishes and has no own interval")
+	}
+	if _, err := formula.Compile(source.Formula.Expression, source.Formula.Inputs); err != nil {
+		this.fail(path+".formula", "%s", err.Error())
+		return
+	}
+	for _, ref := range source.Formula.Inputs {
+		if id, ok := strings.CutPrefix(ref, formula.RefChannel); ok {
+			this.channelRefs = append(this.channelRefs, channelRef{path: path + ".formula.inputs", id: id})
+		}
 	}
 }
 

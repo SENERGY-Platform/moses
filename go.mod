@@ -23,6 +23,7 @@ require (
 	github.com/SENERGY-Platform/permissions-v2 v0.0.45
 	github.com/SENERGY-Platform/service-commons v0.0.0-20260507090252-155b04bb4c46
 	github.com/docker/go-connections v0.6.0
+	github.com/expr-lang/expr v1.17.8
 	github.com/gin-gonic/gin v1.12.0
 	github.com/testcontainers/testcontainers-go v0.40.0
 	github.com/testcontainers/testcontainers-go/modules/kafka v0.40.0

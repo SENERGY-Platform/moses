@@ -197,16 +197,15 @@ func TestValidateRejectsAnEmptyScript(t *testing.T) {
 	assertHasPath(t, Validate(env), "zones[0].assets[0].channels[0].source.script.code")
 }
 
-func TestValidateRejectsSourceKindsThatAreNotExecutedYet(t *testing.T) {
-	for _, kind := range []SourceKind{SourceFormula} {
+// Every declared kind executes now; what stays refused is a kind whose variant
+// is missing, and the two dataset origins nothing serves.
+func TestValidateRejectsAKindWithoutItsVariant(t *testing.T) {
+	for _, kind := range []SourceKind{SourceProfile, SourceDataset, SourceFormula} {
 		env := validEnvironment()
 		env.Zones[0].Assets[0].Channels[0].Source = Source{Kind: kind}
 		err := Validate(env)
-		if err == nil {
-			t.Fatalf("expected kind %q to be rejected while it is not executed", kind)
-		}
-		if !strings.Contains(err.Error(), "not executed yet") {
-			t.Fatalf("expected the message to say why, got %v", err)
+		if err == nil || !strings.Contains(err.Error(), "must be set when kind is") {
+			t.Fatalf("expected kind %q to demand its variant, got %v", kind, err)
 		}
 	}
 }

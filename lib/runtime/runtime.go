@@ -31,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,6 +39,7 @@ import (
 	"github.com/SENERGY-Platform/moses/lib/config"
 	"github.com/SENERGY-Platform/moses/lib/dataset"
 	"github.com/SENERGY-Platform/moses/lib/domain"
+	"github.com/SENERGY-Platform/moses/lib/formula"
 	"github.com/SENERGY-Platform/moses/lib/repo"
 	"github.com/SENERGY-Platform/moses/lib/util"
 	platform_connector_lib "github.com/SENERGY-Platform/platform-connector-lib"
@@ -639,14 +641,73 @@ func (this *Runtime) runSplitChannel(ctx context.Context, env *environment, gen 
 // from a command: a cumulative profile advances its meter only on ticks, or
 // every read command would inflate the reading.
 func (this *Runtime) dispatch(env *environment, gen *generation, binding channelBinding, input interface{}, send func(value interface{}), tick bool) {
+	//every send below happens while the environment mutex is held (a script
+	//calls send inside its run, the other kinds send under their own lock), so
+	//remembering the value here needs no lock of its own. The cache is what a
+	//formula's channel reference reads.
+	remembered := func(value interface{}) {
+		if number, ok := asFloat(value); ok {
+			if env.lastValues == nil {
+				env.lastValues = map[string]float64{}
+			}
+			env.lastValues[binding.channel.Id] = number
+		}
+		send(value)
+	}
 	switch binding.channel.Source.Kind {
 	case domain.SourceProfile:
-		this.executeProfile(env, gen, binding, send, tick)
+		this.executeProfile(env, gen, binding, remembered, tick)
 	case domain.SourceDataset:
-		this.executeDataset(env, binding, send)
+		this.executeDataset(env, binding, remembered)
+	case domain.SourceFormula:
+		this.executeFormula(env, binding, remembered)
 	default:
-		this.execute(env, gen, binding, input, send)
+		this.execute(env, gen, binding, input, remembered)
 	}
+}
+
+// executeFormula resolves the inputs and publishes the result. A missing state
+// key counts as 0, like moses.state.get seeds a missing key - a formula over a
+// value nothing has produced yet starts from zero rather than failing.
+func (this *Runtime) executeFormula(env *environment, binding channelBinding, send func(value interface{})) {
+	inputs := binding.channel.Source.Formula.Inputs
+	env.mux.Lock()
+	defer env.mux.Unlock()
+	values := make(map[string]interface{}, len(inputs))
+	for name, ref := range inputs {
+		values[name] = this.resolveInput(env, binding.zoneId, binding.asset.id, ref)
+	}
+	value, err := binding.program.Evaluate(values)
+	if err != nil {
+		util.Logger.Warn("the formula failed to evaluate", attributes.ErrorKey, err,
+			"environment", env.id, "channel", binding.channel.Id)
+		return
+	}
+	send(value)
+}
+
+func (this *Runtime) resolveInput(env *environment, zoneId string, assetId string, ref string) interface{} {
+	if key, ok := strings.CutPrefix(ref, formula.RefContext); ok {
+		return numericOrZero(env.contextStates()[key])
+	}
+	if key, ok := strings.CutPrefix(ref, formula.RefZone); ok {
+		env.advanceZone(zoneId, time.Now())
+		return numericOrZero(env.zoneStates(zoneId)[key])
+	}
+	if key, ok := strings.CutPrefix(ref, formula.RefAsset); ok {
+		return numericOrZero(env.assetStates(assetId)[key])
+	}
+	if id, ok := strings.CutPrefix(ref, formula.RefChannel); ok {
+		return env.lastValues[id]
+	}
+	return 0.0
+}
+
+func numericOrZero(value interface{}) float64 {
+	if number, ok := asFloat(value); ok {
+		return number
+	}
+	return 0.0
 }
 
 // loadSeries fetches and parses the uploaded datasets the definition's
