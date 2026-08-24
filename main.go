@@ -29,6 +29,11 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	//the container image ships no tzdata, and the dataset upload interprets
+	//offsetless timestamps in a named zone - embed the zone database instead
+	//of depending on the image
+	_ "time/tzdata"
 )
 
 func main() {
