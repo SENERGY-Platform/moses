@@ -45,6 +45,11 @@ type RuntimeState struct {
 	Zones   map[string]map[string]interface{} `json:"zones" bson:"zones"`
 	Assets  map[string]map[string]interface{} `json:"assets" bson:"assets"`
 
+	// Approaching holds the zone values that are moving towards a set point,
+	// keyed by zone id and state key. It is stored, so a restart continues an
+	// approach instead of jumping to its target.
+	Approaching map[string]map[string]Approach `json:"approaching,omitempty" bson:"approaching,omitempty"`
+
 	// UpdatedAtUnix is set by the store on every write.
 	UpdatedAtUnix int64 `json:"updated_at_unix" bson:"updated_at_unix"`
 }
@@ -87,6 +92,17 @@ func (this *UnknownIdsError) Error() string {
 		parts = append(parts, "unknown assets: "+strings.Join(this.Assets, ", "))
 	}
 	return strings.Join(parts, "; ")
+}
+
+// Approach is one value on its way to a set point, following
+// target + (from-target) * exp(-elapsed/tau). Both ends and the start time are
+// stored rather than only the current value, so the curve is exact for any step
+// and does not depend on how often it is read.
+type Approach struct {
+	From       float64 `json:"from" bson:"from"`
+	Target     float64 `json:"target" bson:"target"`
+	StartUnix  int64   `json:"start_unix" bson:"start_unix"`
+	TauSeconds int64   `json:"tau_seconds" bson:"tau_seconds"`
 }
 
 // Environments stores environment definitions.

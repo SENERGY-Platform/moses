@@ -84,6 +84,7 @@ type generation struct {
 
 type zoneInfo struct {
 	initialStates map[string]interface{}
+	timeConstants map[string]int64
 }
 
 type assetInfo struct {
@@ -179,7 +180,7 @@ func (this *generation) addZones(envId string, zones []domain.Zone, depth int) {
 				"environment", envId, "zone", zone.Id)
 			continue
 		}
-		this.zones[zone.Id] = &zoneInfo{initialStates: zone.InitialStates}
+		this.zones[zone.Id] = &zoneInfo{initialStates: zone.InitialStates, timeConstants: zone.TimeConstants}
 		for _, asset := range zone.Assets {
 			this.addAsset(envId, zone.Id, asset)
 		}

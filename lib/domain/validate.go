@@ -129,6 +129,11 @@ func (this *validator) checkZone(path string, zone Zone, depth int) {
 	}
 	this.claimId(path+".id", zone.Id)
 	this.checkStates(path+".initial_states", zone.InitialStates)
+	for key, seconds := range zone.TimeConstants {
+		if seconds < 0 {
+			this.fail(path+".time_constants."+key, "must not be negative")
+		}
+	}
 
 	for i := range zone.Zones {
 		this.checkZone(fmt.Sprintf("%s.zones[%d]", path, i), zone.Zones[i], depth+1)

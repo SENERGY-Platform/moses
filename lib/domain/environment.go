@@ -95,6 +95,12 @@ type Zone struct {
 	// kind of space does not require a new enum value.
 	Tags []string `json:"tags" bson:"tags"`
 
+	// TimeConstants makes a state value follow a set point instead of jumping to
+	// it, in seconds per state key. This is the thermal inertia of a space: a
+	// hall does not have a new temperature the moment one is set. A key with no
+	// time constant is set at once, which is what every stored document does.
+	TimeConstants map[string]int64 `json:"time_constants,omitempty" bson:"time_constants,omitempty"`
+
 	// InitialStates seeds the runtime state at start. Live values are not here.
 	InitialStates map[string]interface{} `json:"initial_states" bson:"initial_states"`
 

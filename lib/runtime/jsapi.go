@@ -18,6 +18,7 @@ package runtime
 
 import (
 	"github.com/SENERGY-Platform/moses/lib/util"
+	"time"
 )
 
 // The javascript surface is the legacy one, mapped onto the new model. That is
@@ -75,7 +76,12 @@ func (this *Runtime) jsEnvironmentApi(env *environment, gen *generation) map[str
 
 func (this *Runtime) jsZoneApi(env *environment, gen *generation, zoneId string) map[string]interface{} {
 	return map[string]interface{}{
-		"state": jsStateApi(env, func() map[string]interface{} { return env.zoneStates(zoneId) }),
+		//a zone value with a time constant is resolved here rather than on a
+		//ticker: the mutex is held, so this is the one place it can be exact
+		"state": jsStateApi(env, func() map[string]interface{} {
+			env.advanceZone(zoneId, time.Now())
+			return env.zoneStates(zoneId)
+		}),
 		"getDevice": func(assetId string) map[string]interface{} {
 			asset, known := gen.assets[assetId]
 			//the asset has to sit in this zone, exactly like the legacy

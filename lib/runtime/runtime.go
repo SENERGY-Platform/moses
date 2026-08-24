@@ -525,12 +525,24 @@ func (this *Runtime) SetState(id string, change repo.StateChange) error {
 	if env.removed {
 		return repo.ErrNotRunning
 	}
+	now := time.Now()
 	mergeInto(env.state.Context, change.Context)
 	for zoneId, values := range change.Zones {
 		if env.state.Zones[zoneId] == nil {
 			env.state.Zones[zoneId] = map[string]interface{}{}
 		}
-		mergeInto(env.state.Zones[zoneId], values)
+		//a value the zone gives a time constant follows its set point instead of
+		//jumping to it; everything else is set at once
+		constants := gen.zones[zoneId].timeConstants
+		for key, value := range values {
+			tau := constants[key]
+			target, numeric := asFloat(value)
+			if tau <= 0 || !numeric {
+				env.state.Zones[zoneId][key] = copyValue(value)
+				continue
+			}
+			env.startApproach(zoneId, key, target, tau, now)
+		}
 	}
 	for assetId, values := range change.Assets {
 		if env.state.Assets[assetId] == nil {
