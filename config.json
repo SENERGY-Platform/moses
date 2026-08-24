@@ -6,6 +6,7 @@
     "template_collection_name":"templates",
     "environment_collection_name":"environments",
     "state_collection_name":"environment_states",
+    "dataset_collection_name": "datasets",
     "mongo_url":"mongodb://db",
     "mongo_table": "moses",
     "js_timeout":2000000000,

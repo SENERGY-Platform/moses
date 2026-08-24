@@ -39,6 +39,9 @@ var endpoints = []func(config config.Config, states *state.StateRepo, router gin
 // repo, hence a separate registration.
 var environmentEndpoints = []func(config config.Config, environments repo.Environments, notifier RuntimeNotifier, router gin.IRouter){}
 
+// datasetEndpoints serve uploaded timeseries files; they need only their store.
+var datasetEndpoints = []func(config config.Config, datasets repo.Datasets, router gin.IRouter){}
+
 // RuntimeNotifier is how a change to a stored environment reaches the running
 // simulation. An interface so the api can be served without a runtime at all.
 //
@@ -83,10 +86,10 @@ func setState(notifier RuntimeNotifier, id string, change repo.StateChange) erro
 	return notifier.SetState(id, change)
 }
 
-func Start(ctx context.Context, config config.Config, staterepo *state.StateRepo, environments repo.Environments, notifier RuntimeNotifier) {
+func Start(ctx context.Context, config config.Config, staterepo *state.StateRepo, environments repo.Environments, datasets repo.Datasets, notifier RuntimeNotifier) {
 	server := &http.Server{
 		Addr:              ":" + config.ServerPort,
-		Handler:           NewRouter(config, staterepo, environments, notifier),
+		Handler:           NewRouter(config, staterepo, environments, datasets, notifier),
 		WriteTimeout:      10 * time.Second,
 		ReadTimeout:       2 * time.Second,
 		ReadHeaderTimeout: 2 * time.Second,
@@ -123,7 +126,7 @@ func Start(ctx context.Context, config config.Config, staterepo *state.StateRepo
 // @in header
 // @name Authorization
 // @description A keycloak issued JWT. Verified at the gateway, not here.
-func NewRouter(config config.Config, staterepo *state.StateRepo, environments repo.Environments, notifier RuntimeNotifier) *gin.Engine {
+func NewRouter(config config.Config, staterepo *state.StateRepo, environments repo.Environments, datasets repo.Datasets, notifier RuntimeNotifier) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(
@@ -151,6 +154,13 @@ func NewRouter(config config.Config, staterepo *state.StateRepo, environments re
 			// the environment api then edits stored documents without the
 			// running simulation picking the change up
 			util.Logger.Warn("no environment runtime configured, changes to an environment will not reach a running simulation")
+		}
+		if datasets == nil {
+			util.Logger.Warn("no dataset store configured, skipping the dataset api")
+		} else {
+			for _, e := range datasetEndpoints {
+				e(config, datasets, router)
+			}
 		}
 		for _, e := range environmentEndpoints {
 			util.Logger.Debug("add endpoints", "group", runtime.FuncForPC(reflect.ValueOf(e).Pointer()).Name())

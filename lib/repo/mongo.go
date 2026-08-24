@@ -32,6 +32,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson/bsoncodec"
 	"go.mongodb.org/mongo-driver/bson/mgocompat"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/gridfs"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
@@ -76,6 +77,8 @@ type Mongo struct {
 	database                  string
 	environmentCollectionName string
 	stateCollectionName       string
+	datasetCollectionName     string
+	datasetBucket             *gridfs.Bucket
 }
 
 // MongoStates is the States half of the store. It shares the connection of the
@@ -98,9 +101,10 @@ func NewMongo(config config.Config) (result *Mongo, err error) {
 		database:                  config.MongoTable,
 		environmentCollectionName: config.EnvironmentCollectionName,
 		stateCollectionName:       config.StateCollectionName,
+		datasetCollectionName:     config.DatasetCollectionName,
 	}
-	if result.environmentCollectionName == "" || result.stateCollectionName == "" {
-		return nil, errors.New("environment_collection_name and state_collection_name must be configured")
+	if result.environmentCollectionName == "" || result.stateCollectionName == "" || result.datasetCollectionName == "" {
+		return nil, errors.New("environment_collection_name, state_collection_name and dataset_collection_name must be configured")
 	}
 	//the legacy config allowed urls without a scheme, ApplyURI() rejects them
 	mongoUrl := config.MongoUrl.Value()
@@ -123,6 +127,12 @@ func NewMongo(config config.Config) (result *Mongo, err error) {
 		return nil, err
 	}
 	result.client = client
+	result.datasetBucket, err = gridfs.NewBucket(client.Database(result.database),
+		options.GridFSBucket().SetName(result.datasetCollectionName+"_content"))
+	if err != nil {
+		disconnect(client)
+		return nil, err
+	}
 	err = result.ensureIndexes(ctx)
 	if err != nil {
 		util.Logger.Error("unable to ensure indexes", attributes.ErrorKey, err)
@@ -147,6 +157,13 @@ func (this *Mongo) ensureIndexes(ctx context.Context) error {
 	_, err = this.stateCollection().Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "environment_id", Value: 1}},
 		Options: options.Index().SetName("state_environment_id_index").SetUnique(true),
+	})
+	if err != nil {
+		return err
+	}
+	_, err = this.datasetCollection().Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "id", Value: 1}},
+		Options: options.Index().SetName("dataset_id_index").SetUnique(true),
 	})
 	return err
 }
@@ -183,6 +200,10 @@ func withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
 
 func withLoadTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(ctx, mongoLoadTimeout)
+}
+
+func (this *Mongo) datasetCollection() *mongo.Collection {
+	return this.client.Database(this.database).Collection(this.datasetCollectionName)
 }
 
 func (this *Mongo) environmentCollection() *mongo.Collection {

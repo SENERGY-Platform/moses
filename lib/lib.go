@@ -187,7 +187,7 @@ func New(config config.Config, ctx context.Context) (err error) {
 
 	util.Logger.Info("starting the api", "port", config.ServerPort)
 
-	api.Start(ctx, config, staterepo, environments, notifier)
+	api.Start(ctx, config, staterepo, environments, environments.Datasets(), notifier)
 	go func() {
 		<-ctx.Done()
 		//runtime first, its final flush needs the store closed below

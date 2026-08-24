@@ -109,6 +109,7 @@ func testStore(t *testing.T) *Mongo {
 		MongoTable:                fmt.Sprintf("moses_repo_test_%d", databaseCounter.Add(1)),
 		EnvironmentCollectionName: "environments",
 		StateCollectionName:       "environment_states",
+		DatasetCollectionName:     "datasets",
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -53,6 +53,9 @@ type Config struct {
 	// migration.
 	EnvironmentCollectionName string `json:"environment_collection_name" env_var:"ENVIRONMENT_COLLECTION_NAME"`
 	StateCollectionName       string `json:"state_collection_name" env_var:"STATE_COLLECTION_NAME"`
+	// DatasetCollectionName holds the metadata of uploaded datasets; the raw
+	// files live in a gridfs bucket named <collection>_content.
+	DatasetCollectionName string `json:"dataset_collection_name" env_var:"DATASET_COLLECTION_NAME"`
 
 	// StateFlushInterval is how often the runtime writes the changed runtime
 	// state of an environment to the database. The runtime keeps the live values
