@@ -138,6 +138,15 @@ func doAsAdmin(t *testing.T, router *gin.Engine, method string, path string, use
 	return recorder
 }
 
+// testRouterWithCatalog wires a device catalog in, which is what turns an
+// asset with a device type but no device into a provisioned one on store.
+func testRouterWithCatalog(store repo.Environments, catalog DeviceCatalog) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	EnvironmentEndpoints(config.Config{}, store, catalog, nil, router)
+	return router
+}
+
 func testRouter(store repo.Environments) *gin.Engine {
 	//nil notifier: the handlers have to work without a runtime behind them, which
 	//is also what a store only deployment looks like
@@ -147,7 +156,7 @@ func testRouter(store repo.Environments) *gin.Engine {
 func testRouterWithNotifier(store repo.Environments, notifier RuntimeNotifier) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	EnvironmentEndpoints(config.Config{}, store, notifier, router)
+	EnvironmentEndpoints(config.Config{}, store, nil, notifier, router)
 	return router
 }
 

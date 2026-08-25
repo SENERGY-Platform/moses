@@ -39,8 +39,8 @@ func init() {
 //
 // Each route is its own function returning method, path and handler, because
 // swaggo reads annotations above a function declaration only.
-func EnvironmentEndpoints(config config.Config, environments repo.Environments, notifier RuntimeNotifier, router gin.IRouter) {
-	for _, route := range []func(repo.Environments, RuntimeNotifier) (string, string, gin.HandlerFunc){
+func EnvironmentEndpoints(config config.Config, environments repo.Environments, catalog DeviceCatalog, notifier RuntimeNotifier, router gin.IRouter) {
+	for _, route := range []func(repo.Environments, DeviceCatalog, RuntimeNotifier) (string, string, gin.HandlerFunc){
 		listEnvironmentsH,
 		getEnvironmentH,
 		putEnvironmentH,
@@ -49,7 +49,7 @@ func EnvironmentEndpoints(config config.Config, environments repo.Environments, 
 		patchEnvironmentStateH,
 		getSwaggerDocH,
 	} {
-		method, path, handler := route(environments, notifier)
+		method, path, handler := route(environments, catalog, notifier)
 		router.Handle(method, path, handler)
 	}
 }
@@ -64,7 +64,7 @@ func EnvironmentEndpoints(config config.Config, environments repo.Environments, 
 // @Failure 401 {string} string "the token carries no subject"
 // @Failure 500 {string} string "error message"
 // @Router /environments [get]
-func listEnvironmentsH(environments repo.Environments, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
+func listEnvironmentsH(environments repo.Environments, catalog DeviceCatalog, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
 	return http.MethodGet, "/environments", func(gc *gin.Context) {
 		token, ok := requireUser(gc)
 		if !ok {
@@ -94,7 +94,7 @@ func listEnvironmentsH(environments repo.Environments, notifier RuntimeNotifier)
 // @Failure 404 {string} string "no such environment, or no access to it"
 // @Failure 500 {string} string "error message"
 // @Router /environments/{id} [get]
-func getEnvironmentH(environments repo.Environments, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
+func getEnvironmentH(environments repo.Environments, catalog DeviceCatalog, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
 	return http.MethodGet, "/environments/:id", func(gc *gin.Context) {
 		token, ok := requireUser(gc)
 		if !ok {
@@ -134,7 +134,7 @@ func getEnvironmentH(environments repo.Environments, notifier RuntimeNotifier) (
 // @Failure 404 {string} string "the environment belongs to somebody else"
 // @Failure 500 {string} string "error message"
 // @Router /environments/{id} [put]
-func putEnvironmentH(environments repo.Environments, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
+func putEnvironmentH(environments repo.Environments, catalog DeviceCatalog, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
 	return http.MethodPut, "/environments/:id", func(gc *gin.Context) {
 		token, ok := requireUser(gc)
 		if !ok {
@@ -174,6 +174,12 @@ func putEnvironmentH(environments repo.Environments, notifier RuntimeNotifier) (
 			return
 		}
 
+		//after validation, before the write: a refused document creates nothing
+		if err = provisionDevices(gc.Request.Context(), catalog, token, &env); err != nil {
+			gc.String(http.StatusInternalServerError, "%s", err.Error())
+			return
+		}
+
 		err = environments.Put(gc.Request.Context(), env)
 		if err != nil {
 			util.Logger.Error("unable to store environment", attributes.ErrorKey, err)
@@ -199,7 +205,7 @@ func putEnvironmentH(environments repo.Environments, notifier RuntimeNotifier) (
 // @Failure 401 {string} string "the token carries no subject"
 // @Failure 500 {string} string "error message"
 // @Router /environments [post]
-func postEnvironmentH(environments repo.Environments, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
+func postEnvironmentH(environments repo.Environments, catalog DeviceCatalog, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
 	return http.MethodPost, "/environments", func(gc *gin.Context) {
 		token, ok := requireUser(gc)
 		if !ok {
@@ -220,6 +226,13 @@ func postEnvironmentH(environments repo.Environments, notifier RuntimeNotifier) 
 			writeValidationError(gc, err)
 			return
 		}
+
+		//after validation, before the write: a refused document creates nothing
+		if err = provisionDevices(gc.Request.Context(), catalog, token, &env); err != nil {
+			gc.String(http.StatusInternalServerError, "%s", err.Error())
+			return
+		}
+
 		err = environments.Put(gc.Request.Context(), env)
 		if err != nil {
 			util.Logger.Error("unable to store environment", attributes.ErrorKey, err)
@@ -240,7 +253,7 @@ func postEnvironmentH(environments repo.Environments, notifier RuntimeNotifier) 
 // @Failure 404 {string} string "the environment belongs to somebody else"
 // @Failure 500 {string} string "error message"
 // @Router /environments/{id} [delete]
-func deleteEnvironmentH(environments repo.Environments, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
+func deleteEnvironmentH(environments repo.Environments, catalog DeviceCatalog, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
 	return http.MethodDelete, "/environments/:id", func(gc *gin.Context) {
 		token, ok := requireUser(gc)
 		if !ok {
@@ -291,7 +304,7 @@ func deleteEnvironmentH(environments repo.Environments, notifier RuntimeNotifier
 // @Failure 404 {string} string "no such environment, no access to it, or it is not running here"
 // @Failure 500 {string} string "error message"
 // @Router /environments/{id}/state [patch]
-func patchEnvironmentStateH(environments repo.Environments, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
+func patchEnvironmentStateH(environments repo.Environments, catalog DeviceCatalog, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
 	return http.MethodPatch, "/environments/:id/state", func(gc *gin.Context) {
 		token, ok := requireUser(gc)
 		if !ok {
@@ -348,7 +361,7 @@ func patchEnvironmentStateH(environments repo.Environments, notifier RuntimeNoti
 // @Success 200 {string} string "the specification"
 // @Failure 500 {string} string "error message"
 // @Router /doc [get]
-func getSwaggerDocH(_ repo.Environments, _ RuntimeNotifier) (string, string, gin.HandlerFunc) {
+func getSwaggerDocH(_ repo.Environments, _ DeviceCatalog, _ RuntimeNotifier) (string, string, gin.HandlerFunc) {
 	return http.MethodGet, "/doc", func(gc *gin.Context) {
 		// generated at image build time by go generate, not committed
 		if _, err := os.Stat(swaggerDocPath); err != nil {

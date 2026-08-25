@@ -38,7 +38,7 @@ var endpoints = []func(config config.Config, states *state.StateRepo, router gin
 
 // environmentEndpoints need the environment store rather than the legacy state
 // repo, hence a separate registration.
-var environmentEndpoints = []func(config config.Config, environments repo.Environments, notifier RuntimeNotifier, router gin.IRouter){}
+var environmentEndpoints = []func(config config.Config, environments repo.Environments, catalog DeviceCatalog, notifier RuntimeNotifier, router gin.IRouter){}
 
 // datasetEndpoints serve uploaded timeseries files; they need only their store.
 var datasetEndpoints = []func(config config.Config, datasets repo.Datasets, router gin.IRouter){}
@@ -184,7 +184,7 @@ func NewRouter(config config.Config, staterepo *state.StateRepo, environments re
 		}
 		for _, e := range environmentEndpoints {
 			util.Logger.Debug("add endpoints", "group", runtime.FuncForPC(reflect.ValueOf(e).Pointer()).Name())
-			e(config, environments, notifier, router)
+			e(config, environments, catalog, notifier, router)
 		}
 	}
 	return router
