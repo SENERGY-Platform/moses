@@ -108,6 +108,9 @@ func Validate(env Environment) error {
 	}
 	v.claimId("id", env.Id)
 	v.checkStates("context", env.Context)
+	for key, source := range env.ContextSources {
+		v.checkContextSource("context_sources."+key, key, source)
+	}
 
 	if len(env.Zones) == 0 {
 		v.fail("zones", "an environment needs at least one zone")
@@ -283,12 +286,19 @@ func (this *validator) checkProfile(path string, source Source) {
 // origins stay refused like the formula kind - accepting one would store a
 // channel that silently never produces a value.
 func (this *validator) checkDataset(path string, source Source) {
+	if source.IntervalSeconds != 0 {
+		this.fail(path+".interval_seconds", "a dataset replays when the channel publishes and has no own interval")
+	}
+	this.checkDatasetFields(path, source)
+}
+
+// checkDatasetFields is the interval-free part: a channel dataset replays on
+// the publish tick, a context dataset on its own interval, the fields are the
+// same either way.
+func (this *validator) checkDatasetFields(path string, source Source) {
 	if source.Dataset == nil {
 		this.fail(path+".dataset", "must be set when kind is %q", SourceDataset)
 		return
-	}
-	if source.IntervalSeconds != 0 {
-		this.fail(path+".interval_seconds", "a dataset replays when the channel publishes and has no own interval")
 	}
 	d := source.Dataset
 	switch d.Origin {
@@ -330,6 +340,44 @@ func (this *validator) checkDataset(path string, source Source) {
 		this.fail(path+".dataset.anchor", "must be %q or %q", AnchorLoop, AnchorOriginal)
 	default:
 		this.fail(path+".dataset.anchor", "unknown anchor mode %q", d.Anchor)
+	}
+}
+
+// checkContextSource: a context source ticks on its own interval and writes
+// one key; only the declarative kinds run there - a script has no channel
+// scope to live in, and a formula reading the context it writes would be a
+// cycle nobody can reason about.
+func (this *validator) checkContextSource(path string, key string, source Source) {
+	if strings.TrimSpace(key) == "" {
+		this.fail(path, "the context key must not be empty")
+	}
+	switch source.Kind {
+	case SourceProfile:
+		if source.Profile == nil {
+			this.fail(path+".profile", "must be set when kind is %q", SourceProfile)
+			return
+		}
+		p := source.Profile
+		if len(p.HourFactors) != 0 && len(p.HourFactors) != 24 {
+			this.fail(path+".profile.hour_factors", "must have 24 entries or be empty, got %d", len(p.HourFactors))
+		}
+		if len(p.WeekdayFactors) != 0 && len(p.WeekdayFactors) != 7 {
+			this.fail(path+".profile.weekday_factors", "must have 7 entries (starting at monday) or be empty, got %d", len(p.WeekdayFactors))
+		}
+		if p.SpreadPercent < 0 {
+			this.fail(path+".profile.spread_percent", "must not be negative")
+		}
+	case SourceDataset:
+		this.checkDatasetFields(path, source)
+	case SourceScript, SourceFormula:
+		this.fail(path+".kind", "source kind %q is not supported for context sources", source.Kind)
+	case "":
+		this.fail(path+".kind", "must be set")
+	default:
+		this.fail(path+".kind", "unknown source kind %q", source.Kind)
+	}
+	if source.IntervalSeconds <= 0 {
+		this.fail(path+".interval_seconds", "a context source has no publish tick to piggyback on, it needs its own interval")
 	}
 }
 

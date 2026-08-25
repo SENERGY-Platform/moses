@@ -347,6 +347,10 @@ func (this *Runtime) startEnvironment(ctx context.Context, def domain.Environmen
 		env.runners.Add(1)
 		go this.runChannel(envCtx, env, gen, sensor)
 	}
+	for key, source := range gen.def.ContextSources {
+		env.runners.Add(1)
+		go this.runContextSource(envCtx, env, gen, key, source)
+	}
 	return true
 }
 
@@ -737,6 +741,7 @@ func (this *Runtime) loadSeries(ctx context.Context, def domain.Environment) map
 	for _, zone := range def.Zones {
 		this.loadZoneSeries(ctx, def.Id, def.Owner, zone, result)
 	}
+	this.loadContextSeries(ctx, def, result)
 	return result
 }
 
@@ -829,19 +834,7 @@ func (this *Runtime) executeDataset(env *environment, binding channelBinding, se
 	source := *binding.channel.Source.Dataset
 	env.mux.Lock()
 	defer env.mux.Unlock()
-	anchor := int64(0)
-	if source.Anchor != domain.AnchorOriginal {
-		var known bool
-		anchor, known = env.state.Anchors[binding.channel.Id]
-		if !known {
-			anchor = time.Now().Unix()
-			if env.state.Anchors == nil {
-				env.state.Anchors = map[string]int64{}
-			}
-			env.state.Anchors[binding.channel.Id] = anchor
-			env.dirty = true
-		}
-	}
+	anchor := this.anchorFor(env, binding.channel.Id, &source)
 	value, playable := replayValue(source, binding.points, anchor, time.Now(), binding.channel.IntervalSeconds)
 	if !playable {
 		return

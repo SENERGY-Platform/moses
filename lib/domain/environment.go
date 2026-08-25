@@ -80,6 +80,12 @@ type Environment struct {
 	// clock produce the same values.
 	Seed int64 `json:"seed" bson:"seed"`
 
+	// ContextSources drive context keys over time: outdoor temperature follows
+	// a day cycle, irradiance follows the sun. Without a source a context key
+	// keeps its initial value until somebody sets it by hand, which makes the
+	// context look inert. Keyed by the context key the source writes.
+	ContextSources map[string]Source `json:"context_sources,omitempty" bson:"context_sources,omitempty"`
+
 	// Context is the shared surroundings every zone below can read: outdoor
 	// temperature, irradiation, calendar. Initial values only.
 	Context map[string]interface{} `json:"context" bson:"context"`

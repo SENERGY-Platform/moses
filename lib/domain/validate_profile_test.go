@@ -165,3 +165,41 @@ func TestValidateRefusesBrokenPlatformDatasets(t *testing.T) {
 	expectProfileProblem(t, platformDatasetChannel(func(c *Channel) { c.Source.Dataset.Window = "sieben Tage" }), "unreadable window")
 	expectProfileProblem(t, datasetChannel(func(c *Channel) { c.Source.Dataset.Window = "7d" }), "only applies to a platform timeseries")
 }
+
+func contextSourceEnvironment(key string, source Source) Environment {
+	env := profileEnvironment(nil)
+	env.ContextSources = map[string]Source{key: source}
+	return env
+}
+
+func TestValidateAcceptsContextSources(t *testing.T) {
+	profile := Source{Kind: SourceProfile, IntervalSeconds: 300, Profile: &ProfileSource{Base: 12}}
+	if err := Validate(contextSourceEnvironment("outdoor_temperature", profile)); err != nil {
+		t.Errorf("a profile context source has to be storable: %v", err)
+	}
+	//a dataset context source carries its own interval - unlike a channel
+	//dataset, which replays on the publish tick
+	replay := Source{Kind: SourceDataset, IntervalSeconds: 300,
+		Dataset: &DatasetSource{Origin: OriginFile, Ref: "d1", Resample: ResampleHold, Anchor: AnchorLoop}}
+	if err := Validate(contextSourceEnvironment("outdoor_temperature", replay)); err != nil {
+		t.Errorf("a dataset context source has to be storable: %v", err)
+	}
+}
+
+func TestValidateRefusesBrokenContextSources(t *testing.T) {
+	expect := func(env Environment, fragment string) {
+		t.Helper()
+		err := Validate(env)
+		if err == nil || !strings.Contains(err.Error(), fragment) {
+			t.Errorf("expected %q, got %v", fragment, err)
+		}
+	}
+	expect(contextSourceEnvironment("k", Source{Kind: SourceScript, IntervalSeconds: 60, Script: &ScriptSource{Code: "1"}}),
+		"not supported for context sources")
+	expect(contextSourceEnvironment("k", Source{Kind: SourceFormula, IntervalSeconds: 60, Formula: &FormulaSource{Expression: "1"}}),
+		"not supported for context sources")
+	expect(contextSourceEnvironment("k", Source{Kind: SourceProfile, Profile: &ProfileSource{Base: 1}}),
+		"needs its own interval")
+	expect(contextSourceEnvironment(" ", Source{Kind: SourceProfile, IntervalSeconds: 60, Profile: &ProfileSource{Base: 1}}),
+		"context key must not be empty")
+}
