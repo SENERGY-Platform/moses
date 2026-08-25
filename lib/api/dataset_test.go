@@ -73,6 +73,17 @@ func (this *fakeDatasets) ListByOwner(ctx context.Context, owner string) ([]repo
 	return result, nil
 }
 
+func (this *fakeDatasets) All(ctx context.Context) ([]repo.DatasetMeta, error) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	result := []repo.DatasetMeta{}
+	for _, meta := range this.stored {
+		result = append(result, meta)
+	}
+	sort.Slice(result, func(a, b int) bool { return result[a].Name < result[b].Name })
+	return result, nil
+}
+
 func (this *fakeDatasets) Content(ctx context.Context, id string) ([]byte, error) {
 	this.mux.Lock()
 	defer this.mux.Unlock()
@@ -184,5 +195,36 @@ func TestDeleteIsIdempotent(t *testing.T) {
 	}
 	if resp := do(t, router, "DELETE", "/datasets/"+meta.Id, "user-a", nil); resp.Code != http.StatusNoContent {
 		t.Errorf("deleting nothing is not an error, got %d", resp.Code)
+	}
+}
+
+// An administrator sees every dataset, for the same reason as the environments:
+// requireDataset lets one open a foreign dataset, so hiding it in the list would
+// only make it unfindable.
+func TestAnAdminListsAndOpensEveryDataset(t *testing.T) {
+	store := newFakeDatasets()
+	router := datasetRouter(store)
+	resp := upload(t, router, "/datasets?name=fremd", "user-a", germanCSV)
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("setup failed: %d %s", resp.Code, resp.Body.String())
+	}
+	meta := repo.DatasetMeta{}
+	if err := json.Unmarshal(resp.Body.Bytes(), &meta); err != nil {
+		t.Fatal(err)
+	}
+
+	//a plain user does not see it
+	if body := do(t, router, "GET", "/datasets", "user-b", nil).Body.String(); strings.Contains(body, meta.Id) {
+		t.Errorf("a plain user must not see a foreign dataset: %s", body)
+	}
+	//the admin does, and may open it
+	if body := doAsAdmin(t, router, "GET", "/datasets", "admin-1").Body.String(); !strings.Contains(body, meta.Id) {
+		t.Errorf("an admin has to see every dataset, got %s", body)
+	}
+	if code := doAsAdmin(t, router, "GET", "/datasets/"+meta.Id, "admin-1").Code; code != http.StatusOK {
+		t.Errorf("an admin has to be able to open a foreign dataset, got %d", code)
+	}
+	if code := doAsAdmin(t, router, "DELETE", "/datasets/"+meta.Id, "admin-1").Code; code != http.StatusNoContent {
+		t.Errorf("an admin has to be able to delete a foreign dataset, got %d", code)
 	}
 }

@@ -115,6 +115,29 @@ func tokenFor(userId string) string {
 	return "Bearer " + encode([]byte(`{"alg":"none"}`)) + "." + encode(payload) + ".signature"
 }
 
+// adminTokenFor is tokenFor plus the admin realm role, which is what the
+// platform's gateway passes through for an administrator.
+func adminTokenFor(userId string) string {
+	payload, err := json.Marshal(map[string]interface{}{
+		"sub":          userId,
+		"realm_access": map[string]interface{}{"roles": []string{"user", "admin"}},
+	})
+	if err != nil {
+		panic(err)
+	}
+	encode := func(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
+	return "Bearer " + encode([]byte(`{"alg":"none"}`)) + "." + encode(payload) + ".signature"
+}
+
+func doAsAdmin(t *testing.T, router *gin.Engine, method string, path string, userId string) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(method, path, bytes.NewReader(nil))
+	request.Header.Set("Authorization", adminTokenFor(userId))
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	return recorder
+}
+
 func testRouter(store repo.Environments) *gin.Engine {
 	//nil notifier: the handlers have to work without a runtime behind them, which
 	//is also what a store only deployment looks like
@@ -981,4 +1004,76 @@ func TestPatchStateOfAnEnvironmentThatIsNotRunningIs404(t *testing.T) {
 	if resp := do(t, router, "PATCH", "/environments/env-1/state", "user-a", change); resp.Code != http.StatusNotFound {
 		t.Errorf("expected 404, got %d", resp.Code)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// An administrator sees every environment
+// ---------------------------------------------------------------------------
+
+// The list used to filter by owner unconditionally, while mayAccess already let
+// an admin open any environment: what the detail route served was invisible in
+// the list, and an environment of another user was in practice unfindable.
+func TestAnAdminListsEveryEnvironment(t *testing.T) {
+	store := newFakeEnvironments()
+	router := testRouter(store)
+	if resp := do(t, router, "PUT", "/environments/env-a", "user-a", minimalEnvironment()); resp.Code != http.StatusOK {
+		t.Fatalf("setup failed: %d %s", resp.Code, resp.Body.String())
+	}
+	if resp := do(t, router, "PUT", "/environments/env-b", "user-b", minimalEnvironment()); resp.Code != http.StatusOK {
+		t.Fatalf("setup failed: %d %s", resp.Code, resp.Body.String())
+	}
+
+	//a plain user still sees only their own
+	resp := do(t, router, "GET", "/environments", "user-a", nil)
+	if strings.Contains(resp.Body.String(), "env-b") {
+		t.Errorf("a plain user must not see another user's environment: %s", resp.Body.String())
+	}
+
+	//the admin sees both, including one they do not own
+	resp = doAsAdmin(t, router, "GET", "/environments", "user-c")
+	if !strings.Contains(resp.Body.String(), "env-a") || !strings.Contains(resp.Body.String(), "env-b") {
+		t.Errorf("an admin has to see every environment, got %s", resp.Body.String())
+	}
+}
+
+func TestAnAdminOpensAndKeepsTheOwnerOfAForeignEnvironment(t *testing.T) {
+	store := newFakeEnvironments()
+	router := testRouter(store)
+	if resp := do(t, router, "PUT", "/environments/env-a", "user-a", minimalEnvironment()); resp.Code != http.StatusOK {
+		t.Fatalf("setup failed: %d", resp.Code)
+	}
+
+	if resp := doAsAdmin(t, router, "GET", "/environments/env-a", "admin-1"); resp.Code != http.StatusOK {
+		t.Fatalf("an admin has to be able to open a foreign environment, got %d", resp.Code)
+	}
+
+	//editing it must not transfer ownership to the admin
+	stored, err := store.Get(t.Context(), "env-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored.Name = "renamed by the admin"
+	request := httptest.NewRequest("PUT", "/environments/env-a", bytes.NewReader(mustJson(t, stored)))
+	request.Header.Set("Authorization", adminTokenFor("admin-1"))
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	after, err := store.Get(t.Context(), "env-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Owner != "user-a" {
+		t.Errorf("an admin edit must not take ownership, owner is now %q", after.Owner)
+	}
+}
+
+func mustJson(t *testing.T, value interface{}) []byte {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }

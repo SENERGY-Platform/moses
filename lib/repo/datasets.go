@@ -53,6 +53,9 @@ type Datasets interface {
 	// ListByOwner is ordered by name.
 	ListByOwner(ctx context.Context, owner string) ([]DatasetMeta, error)
 
+	// All returns every dataset, ordered by name. It serves the admin view.
+	All(ctx context.Context) ([]DatasetMeta, error)
+
 	// Content returns the raw uploaded file.
 	Content(ctx context.Context, id string) ([]byte, error)
 

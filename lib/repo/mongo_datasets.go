@@ -72,6 +72,16 @@ func (this *mongoDatasets) ListByOwner(ctx context.Context, owner string) ([]Dat
 	return result, err
 }
 
+func (this *mongoDatasets) All(ctx context.Context) ([]DatasetMeta, error) {
+	cursor, err := this.collection.Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
+	if err != nil {
+		return nil, err
+	}
+	result := []DatasetMeta{}
+	err = cursor.All(ctx, &result)
+	return result, err
+}
+
 func (this *mongoDatasets) Content(ctx context.Context, id string) ([]byte, error) {
 	buffer := &bytes.Buffer{}
 	_, err := this.bucket.DownloadToStream(id, buffer)

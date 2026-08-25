@@ -28,6 +28,7 @@ import (
 	"github.com/SENERGY-Platform/moses/lib/dataset"
 	"github.com/SENERGY-Platform/moses/lib/repo"
 	"github.com/SENERGY-Platform/moses/lib/util"
+	sc_jwt "github.com/SENERGY-Platform/service-commons/pkg/jwt"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -145,7 +146,8 @@ func listDatasetsH(datasets repo.Datasets) (string, string, gin.HandlerFunc) {
 		if !ok {
 			return
 		}
-		list, err := datasets.ListByOwner(gc.Request.Context(), token.GetUserId())
+		//an admin sees every dataset, for the same reason as the environments
+		list, err := listDatasetsFor(gc, datasets, token)
 		if err != nil {
 			util.Logger.Error("unable to list datasets", attributes.ErrorKey, err)
 			gc.String(http.StatusInternalServerError, "unable to list datasets")
@@ -171,7 +173,7 @@ func getDatasetH(datasets repo.Datasets) (string, string, gin.HandlerFunc) {
 		if !ok {
 			return
 		}
-		meta, err := requireDataset(gc, datasets, token.GetUserId())
+		meta, err := requireDataset(gc, datasets, token)
 		if err != nil {
 			return
 		}
@@ -204,7 +206,7 @@ func deleteDatasetH(datasets repo.Datasets) (string, string, gin.HandlerFunc) {
 			util.Logger.Error("unable to read dataset", attributes.ErrorKey, err)
 			gc.String(http.StatusInternalServerError, "unable to read dataset")
 			return
-		case meta.Owner != token.GetUserId():
+		case meta.Owner != token.GetUserId() && !token.IsAdmin():
 			gc.String(http.StatusNotFound, "not found")
 			return
 		}
@@ -220,7 +222,14 @@ func deleteDatasetH(datasets repo.Datasets) (string, string, gin.HandlerFunc) {
 // requireDataset answers 404 for a missing dataset and, deliberately with the
 // same status, for somebody else's: existence is not information a caller
 // without access should get.
-func requireDataset(gc *gin.Context, datasets repo.Datasets, userId string) (repo.DatasetMeta, error) {
+func listDatasetsFor(gc *gin.Context, datasets repo.Datasets, token sc_jwt.Token) ([]repo.DatasetMeta, error) {
+	if token.IsAdmin() {
+		return datasets.All(gc.Request.Context())
+	}
+	return datasets.ListByOwner(gc.Request.Context(), token.GetUserId())
+}
+
+func requireDataset(gc *gin.Context, datasets repo.Datasets, token sc_jwt.Token) (repo.DatasetMeta, error) {
 	meta, err := datasets.Get(gc.Request.Context(), gc.Param("id"))
 	switch {
 	case errors.Is(err, repo.ErrNotFound):
@@ -230,7 +239,7 @@ func requireDataset(gc *gin.Context, datasets repo.Datasets, userId string) (rep
 		util.Logger.Error("unable to read dataset", attributes.ErrorKey, err)
 		gc.String(http.StatusInternalServerError, "unable to read dataset")
 		return meta, err
-	case meta.Owner != userId:
+	case meta.Owner != token.GetUserId() && !token.IsAdmin():
 		gc.String(http.StatusNotFound, "not found")
 		return meta, repo.ErrNotFound
 	}

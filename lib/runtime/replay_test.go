@@ -123,6 +123,10 @@ func (this *fakeRuntimeDatasets) Get(ctx context.Context, id string) (repo.Datas
 func (this *fakeRuntimeDatasets) ListByOwner(ctx context.Context, owner string) ([]repo.DatasetMeta, error) {
 	return nil, nil
 }
+func (this *fakeRuntimeDatasets) All(ctx context.Context) ([]repo.DatasetMeta, error) {
+	return []repo.DatasetMeta{this.meta}, nil
+}
+
 func (this *fakeRuntimeDatasets) Content(ctx context.Context, id string) ([]byte, error) {
 	if id != this.meta.Id {
 		return nil, repo.ErrNotFound

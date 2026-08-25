@@ -70,7 +70,10 @@ func listEnvironmentsH(environments repo.Environments, notifier RuntimeNotifier)
 		if !ok {
 			return
 		}
-		result, err := environments.ListByOwner(gc.Request.Context(), token.GetUserId())
+		//an admin sees every environment, matching mayAccess, which already lets
+		//one open any of them: a list that hid what the detail route serves
+		//would only make them unfindable
+		result, err := listFor(gc, environments, token)
 		if err != nil {
 			util.Logger.Error("unable to list environments", attributes.ErrorKey, err)
 			gc.String(http.StatusInternalServerError, "unable to list environments")
@@ -386,6 +389,13 @@ func requireUser(gc *gin.Context) (sc_jwt.Token, bool) {
 		return token, false
 	}
 	return token, true
+}
+
+func listFor(gc *gin.Context, environments repo.Environments, token sc_jwt.Token) ([]domain.Environment, error) {
+	if token.IsAdmin() {
+		return environments.All(gc.Request.Context())
+	}
+	return environments.ListByOwner(gc.Request.Context(), token.GetUserId())
 }
 
 // mayAccess is the single place that decides access; owner based for now,
