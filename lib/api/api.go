@@ -27,6 +27,7 @@ import (
 	gin_mw "github.com/SENERGY-Platform/gin-middleware"
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/config"
+	"github.com/SENERGY-Platform/moses/lib/devices"
 	"github.com/SENERGY-Platform/moses/lib/repo"
 	"github.com/SENERGY-Platform/moses/lib/state"
 	"github.com/SENERGY-Platform/moses/lib/util"
@@ -41,6 +42,18 @@ var environmentEndpoints = []func(config config.Config, environments repo.Enviro
 
 // datasetEndpoints serve uploaded timeseries files; they need only their store.
 var datasetEndpoints = []func(config config.Config, datasets repo.Datasets, router gin.IRouter){}
+
+// catalogEndpoints serve the device types and devices an asset is built from.
+var catalogEndpoints = []func(config config.Config, catalog DeviceCatalog, router gin.IRouter){}
+
+// DeviceCatalog is what the api needs from the platform's device registry: the
+// types an asset can be built from, and the device it publishes through. An
+// interface so the handlers can be tested without a device-repository.
+type DeviceCatalog interface {
+	DeviceTypes(token string) ([]devices.DeviceType, error)
+	CreateDevice(ctx context.Context, token string, deviceTypeId string, name string) (devices.Device, error)
+	DeleteDevice(ctx context.Context, token string, id string) error
+}
 
 // RuntimeNotifier is how a change to a stored environment reaches the running
 // simulation. An interface so the api can be served without a runtime at all.
@@ -86,10 +99,10 @@ func setState(notifier RuntimeNotifier, id string, change repo.StateChange) erro
 	return notifier.SetState(id, change)
 }
 
-func Start(ctx context.Context, config config.Config, staterepo *state.StateRepo, environments repo.Environments, datasets repo.Datasets, notifier RuntimeNotifier) {
+func Start(ctx context.Context, config config.Config, staterepo *state.StateRepo, environments repo.Environments, datasets repo.Datasets, catalog DeviceCatalog, notifier RuntimeNotifier) {
 	server := &http.Server{
 		Addr:              ":" + config.ServerPort,
-		Handler:           NewRouter(config, staterepo, environments, datasets, notifier),
+		Handler:           NewRouter(config, staterepo, environments, datasets, catalog, notifier),
 		WriteTimeout:      10 * time.Second,
 		ReadTimeout:       2 * time.Second,
 		ReadHeaderTimeout: 2 * time.Second,
@@ -126,7 +139,7 @@ func Start(ctx context.Context, config config.Config, staterepo *state.StateRepo
 // @in header
 // @name Authorization
 // @description A keycloak issued JWT. Verified at the gateway, not here.
-func NewRouter(config config.Config, staterepo *state.StateRepo, environments repo.Environments, datasets repo.Datasets, notifier RuntimeNotifier) *gin.Engine {
+func NewRouter(config config.Config, staterepo *state.StateRepo, environments repo.Environments, datasets repo.Datasets, catalog DeviceCatalog, notifier RuntimeNotifier) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(
@@ -154,6 +167,13 @@ func NewRouter(config config.Config, staterepo *state.StateRepo, environments re
 			// the environment api then edits stored documents without the
 			// running simulation picking the change up
 			util.Logger.Warn("no environment runtime configured, changes to an environment will not reach a running simulation")
+		}
+		if catalog == nil {
+			util.Logger.Warn("no device catalog configured, an editor cannot offer device types")
+		} else {
+			for _, e := range catalogEndpoints {
+				e(config, catalog, router)
+			}
 		}
 		if datasets == nil {
 			util.Logger.Warn("no dataset store configured, skipping the dataset api")

@@ -21,6 +21,7 @@ import (
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/api"
 	"github.com/SENERGY-Platform/moses/lib/config"
+	"github.com/SENERGY-Platform/moses/lib/devices"
 	"github.com/SENERGY-Platform/moses/lib/repo"
 	"github.com/SENERGY-Platform/moses/lib/runtime"
 	"github.com/SENERGY-Platform/moses/lib/state"
@@ -187,7 +188,8 @@ func New(config config.Config, ctx context.Context) (err error) {
 
 	util.Logger.Info("starting the api", "port", config.ServerPort)
 
-	api.Start(ctx, config, staterepo, environments, environments.Datasets(), notifier)
+	catalog := devices.NewCatalog(config.DeviceRepoUrl, config.DeviceManagerUrl, config.Protocol)
+	api.Start(ctx, config, staterepo, environments, environments.Datasets(), catalog, notifier)
 	go func() {
 		<-ctx.Done()
 		//runtime first, its final flush needs the store closed below
