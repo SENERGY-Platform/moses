@@ -49,6 +49,9 @@ A script source runs with `moses` bound in the VM:
 - Device types come from the device-repository; an asset built from one gets
   its platform device created on store and deleted again when the asset goes —
   rules in `docs/device-lifecycle-of-assets.md`.
+- Every environment is mirrored as a graph in the device-repository, so other
+  applications consume a simulated site like a real one — mapping and ownership
+  rules in `docs/environment-graphs.md`.
 - Channels publish through `platform-connector-lib` (Kafka).
 - Users see their own environments; the platform `admin` role sees all.
   Ownership never transfers.

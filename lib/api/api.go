@@ -38,7 +38,7 @@ var endpoints = []func(config config.Config, states *state.StateRepo, router gin
 
 // environmentEndpoints need the environment store rather than the legacy state
 // repo, hence a separate registration.
-var environmentEndpoints = []func(config config.Config, environments repo.Environments, catalog DeviceCatalog, notifier RuntimeNotifier, router gin.IRouter){}
+var environmentEndpoints = []func(config config.Config, environments repo.Environments, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier, router gin.IRouter){}
 
 // datasetEndpoints serve uploaded timeseries files; they need only their store.
 var datasetEndpoints = []func(config config.Config, datasets repo.Datasets, router gin.IRouter){}
@@ -99,10 +99,10 @@ func setState(notifier RuntimeNotifier, id string, change repo.StateChange) erro
 	return notifier.SetState(id, change)
 }
 
-func Start(ctx context.Context, config config.Config, staterepo *state.StateRepo, environments repo.Environments, datasets repo.Datasets, catalog DeviceCatalog, notifier RuntimeNotifier) {
+func Start(ctx context.Context, config config.Config, staterepo *state.StateRepo, environments repo.Environments, datasets repo.Datasets, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier) {
 	server := &http.Server{
 		Addr:              ":" + config.ServerPort,
-		Handler:           NewRouter(config, staterepo, environments, datasets, catalog, notifier),
+		Handler:           NewRouter(config, staterepo, environments, datasets, catalog, mirror, notifier),
 		WriteTimeout:      10 * time.Second,
 		ReadTimeout:       2 * time.Second,
 		ReadHeaderTimeout: 2 * time.Second,
@@ -139,7 +139,7 @@ func Start(ctx context.Context, config config.Config, staterepo *state.StateRepo
 // @in header
 // @name Authorization
 // @description A keycloak issued JWT. Verified at the gateway, not here.
-func NewRouter(config config.Config, staterepo *state.StateRepo, environments repo.Environments, datasets repo.Datasets, catalog DeviceCatalog, notifier RuntimeNotifier) *gin.Engine {
+func NewRouter(config config.Config, staterepo *state.StateRepo, environments repo.Environments, datasets repo.Datasets, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(
@@ -168,6 +168,11 @@ func NewRouter(config config.Config, staterepo *state.StateRepo, environments re
 			// running simulation picking the change up
 			util.Logger.Warn("no environment runtime configured, changes to an environment will not reach a running simulation")
 		}
+		if mirror == nil {
+			// the environments are then not mirrored as graphs, and the
+			// applications that read those graphs do not see them
+			util.Logger.Warn("no graph mirror configured, environments will not appear as graphs")
+		}
 		if catalog == nil {
 			util.Logger.Warn("no device catalog configured, an editor cannot offer device types")
 		} else {
@@ -184,7 +189,7 @@ func NewRouter(config config.Config, staterepo *state.StateRepo, environments re
 		}
 		for _, e := range environmentEndpoints {
 			util.Logger.Debug("add endpoints", "group", runtime.FuncForPC(reflect.ValueOf(e).Pointer()).Name())
-			e(config, environments, catalog, notifier, router)
+			e(config, environments, catalog, mirror, notifier, router)
 		}
 	}
 	return router

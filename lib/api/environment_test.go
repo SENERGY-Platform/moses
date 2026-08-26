@@ -141,10 +141,9 @@ func doAsAdmin(t *testing.T, router *gin.Engine, method string, path string, use
 // testRouterWithCatalog wires a device catalog in, which is what turns an
 // asset with a device type but no device into a provisioned one on store.
 func testRouterWithCatalog(store repo.Environments, catalog DeviceCatalog) *gin.Engine {
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	EnvironmentEndpoints(config.Config{}, store, catalog, nil, router)
-	return router
+	//nil mirror: the handlers have to work without a device-repository behind
+	//them, which is what every test that is not about the graph mirror wants
+	return testRouterWith(store, catalog, nil, nil)
 }
 
 func testRouter(store repo.Environments) *gin.Engine {
@@ -154,9 +153,15 @@ func testRouter(store repo.Environments) *gin.Engine {
 }
 
 func testRouterWithNotifier(store repo.Environments, notifier RuntimeNotifier) *gin.Engine {
+	return testRouterWith(store, nil, nil, notifier)
+}
+
+// testRouterWith is the one place the environment endpoints are wired for a
+// test, so a new collaborator does not have to be threaded through every helper.
+func testRouterWith(store repo.Environments, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	EnvironmentEndpoints(config.Config{}, store, nil, notifier, router)
+	EnvironmentEndpoints(config.Config{}, store, catalog, mirror, notifier, router)
 	return router
 }
 

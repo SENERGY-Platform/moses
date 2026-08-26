@@ -18,6 +18,7 @@ package lib
 
 import (
 	"context"
+	deviceRepo "github.com/SENERGY-Platform/device-repository/lib/client"
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/api"
 	"github.com/SENERGY-Platform/moses/lib/config"
@@ -189,7 +190,11 @@ func New(config config.Config, ctx context.Context) (err error) {
 	util.Logger.Info("starting the api", "port", config.ServerPort)
 
 	catalog := devices.NewCatalog(config.DeviceRepoUrl, config.DeviceManagerUrl, config.Protocol)
-	api.Start(ctx, config, staterepo, environments, environments.Datasets(), catalog, notifier)
+	//the graph api of the device-repository, which is what mirrors an environment
+	//for the applications that read graphs. nil for the gateway token: moses
+	//always forwards the caller's own token
+	graphMirror := deviceRepo.NewClient(config.DeviceRepoUrl, nil)
+	api.Start(ctx, config, staterepo, environments, environments.Datasets(), catalog, graphMirror, notifier)
 	go func() {
 		<-ctx.Done()
 		//runtime first, its final flush needs the store closed below

@@ -76,6 +76,16 @@ type Environment struct {
 	// cannot transfer ownership.
 	Owner string `json:"-" bson:"owner"`
 
+	// ExternalGraphRef is the id of the graph this environment is mirrored as in
+	// the device-repository, so other applications can consume a simulated site
+	// like a real one.
+	//
+	// The server decides this and enforces it, a value sent by a client does not
+	// count: the whole document is sent on every update, so an echoed or invented
+	// ref would let one environment overwrite the graph of another - which is
+	// exactly what a copy of an export would do. See reconcileGraphRef in lib/api.
+	ExternalGraphRef string `json:"external_graph_ref" bson:"external_graph_ref"`
+
 	// Every stochastic source derives from Seed, so the same environment and
 	// clock produce the same values.
 	Seed int64 `json:"seed" bson:"seed"`

@@ -39,8 +39,8 @@ func init() {
 //
 // Each route is its own function returning method, path and handler, because
 // swaggo reads annotations above a function declaration only.
-func EnvironmentEndpoints(config config.Config, environments repo.Environments, catalog DeviceCatalog, notifier RuntimeNotifier, router gin.IRouter) {
-	for _, route := range []func(repo.Environments, DeviceCatalog, RuntimeNotifier) (string, string, gin.HandlerFunc){
+func EnvironmentEndpoints(config config.Config, environments repo.Environments, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier, router gin.IRouter) {
+	for _, route := range []func(repo.Environments, DeviceCatalog, GraphMirror, RuntimeNotifier) (string, string, gin.HandlerFunc){
 		listEnvironmentsH,
 		getEnvironmentH,
 		putEnvironmentH,
@@ -49,7 +49,7 @@ func EnvironmentEndpoints(config config.Config, environments repo.Environments, 
 		patchEnvironmentStateH,
 		getSwaggerDocH,
 	} {
-		method, path, handler := route(environments, catalog, notifier)
+		method, path, handler := route(environments, catalog, mirror, notifier)
 		router.Handle(method, path, handler)
 	}
 }
@@ -64,7 +64,7 @@ func EnvironmentEndpoints(config config.Config, environments repo.Environments, 
 // @Failure 401 {string} string "the token carries no subject"
 // @Failure 500 {string} string "error message"
 // @Router /environments [get]
-func listEnvironmentsH(environments repo.Environments, catalog DeviceCatalog, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
+func listEnvironmentsH(environments repo.Environments, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
 	return http.MethodGet, "/environments", func(gc *gin.Context) {
 		token, ok := requireUser(gc)
 		if !ok {
@@ -94,7 +94,7 @@ func listEnvironmentsH(environments repo.Environments, catalog DeviceCatalog, no
 // @Failure 404 {string} string "no such environment, or no access to it"
 // @Failure 500 {string} string "error message"
 // @Router /environments/{id} [get]
-func getEnvironmentH(environments repo.Environments, catalog DeviceCatalog, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
+func getEnvironmentH(environments repo.Environments, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
 	return http.MethodGet, "/environments/:id", func(gc *gin.Context) {
 		token, ok := requireUser(gc)
 		if !ok {
@@ -121,7 +121,7 @@ func getEnvironmentH(environments repo.Environments, catalog DeviceCatalog, noti
 }
 
 // @Summary Create or replace one environment
-// @Description Idempotent. The id in the path wins over the one in the body, so a document can be copied to a new id without editing it. Ownership comes from the token on create and never transfers on update. An asset without an external_ref gets a platform device created for it, and a device created that way is deleted again when the asset that carried it is gone from the document; a device attached to an asset by the caller is never deleted. external_managed says which is which and is decided by the server, so sending it has no effect.
+// @Description Idempotent. The id in the path wins over the one in the body, so a document can be copied to a new id without editing it. Ownership comes from the token on create and never transfers on update. An asset without an external_ref gets a platform device created for it, and a device created that way is deleted again when the asset that carried it is gone from the document; a device attached to an asset by the caller is never deleted. external_managed says which is which and is decided by the server, so sending it has no effect. The environment is also mirrored as a graph in the device-repository, rebuilt from the document on every save, so a change made to that graph by hand does not survive; external_graph_ref names the graph and is decided by the server, so sending it has no effect either.
 // @Tags Environment
 // @Accept json
 // @Produce json
@@ -134,7 +134,7 @@ func getEnvironmentH(environments repo.Environments, catalog DeviceCatalog, noti
 // @Failure 404 {string} string "the environment belongs to somebody else"
 // @Failure 500 {string} string "error message"
 // @Router /environments/{id} [put]
-func putEnvironmentH(environments repo.Environments, catalog DeviceCatalog, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
+func putEnvironmentH(environments repo.Environments, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
 	return http.MethodPut, "/environments/:id", func(gc *gin.Context) {
 		token, ok := requireUser(gc)
 		if !ok {
@@ -183,12 +183,20 @@ func putEnvironmentH(environments repo.Environments, catalog DeviceCatalog, noti
 		//which devices moses may delete is decided from the stored document, not
 		//from the flags the client sent back
 		reconcileManagedFlags(previous, &env)
+		//and so is which graph it owns: a copy under a new id must not write into
+		//the graph of the document it was copied from
+		reconcileGraphRef(previous, &env)
 
 		//after validation, before the write: a refused document creates nothing
 		if err = provisionDevices(gc.Request.Context(), catalog, token, &env); err != nil {
 			gc.String(http.StatusInternalServerError, "%s", err.Error())
 			return
 		}
+
+		//after provisioning, so the graph carries the devices this save created,
+		//and before the write, so the ref it assigns is stored with the document.
+		//Best effort: see mirrorGraph
+		mirrorGraph(mirror, token, &env)
 
 		err = environments.Put(gc.Request.Context(), env)
 		if err != nil {
@@ -208,7 +216,7 @@ func putEnvironmentH(environments repo.Environments, catalog DeviceCatalog, noti
 }
 
 // @Summary Create an environment with a server assigned id
-// @Description Any id in the body is ignored. Nested entities may omit their ids and get one assigned. An asset without an external_ref gets a platform device created for it, which is then deleted again when the asset or the environment is gone; a device attached to an asset by the caller is never deleted. external_managed is decided by the server and is always false on create.
+// @Description Any id in the body is ignored. Nested entities may omit their ids and get one assigned. An asset without an external_ref gets a platform device created for it, which is then deleted again when the asset or the environment is gone; a device attached to an asset by the caller is never deleted. external_managed is decided by the server and is always false on create. The environment is also mirrored as a graph in the device-repository; external_graph_ref names that graph and is assigned by the server, so sending it has no effect.
 // @Tags Environment
 // @Accept json
 // @Produce json
@@ -219,7 +227,7 @@ func putEnvironmentH(environments repo.Environments, catalog DeviceCatalog, noti
 // @Failure 401 {string} string "the token carries no subject"
 // @Failure 500 {string} string "error message"
 // @Router /environments [post]
-func postEnvironmentH(environments repo.Environments, catalog DeviceCatalog, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
+func postEnvironmentH(environments repo.Environments, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
 	return http.MethodPost, "/environments", func(gc *gin.Context) {
 		token, ok := requireUser(gc)
 		if !ok {
@@ -242,14 +250,18 @@ func postEnvironmentH(environments repo.Environments, catalog DeviceCatalog, not
 		}
 
 		//nothing here was provisioned by moses yet, so an external_managed the
-		//client sent along claims a right over a device it does not have
+		//client sent along claims a right over a device it does not have, and an
+		//external_graph_ref a right over somebody's graph
 		reconcileManagedFlags(nil, &env)
+		reconcileGraphRef(nil, &env)
 
 		//after validation, before the write: a refused document creates nothing
 		if err = provisionDevices(gc.Request.Context(), catalog, token, &env); err != nil {
 			gc.String(http.StatusInternalServerError, "%s", err.Error())
 			return
 		}
+
+		mirrorGraph(mirror, token, &env)
 
 		err = environments.Put(gc.Request.Context(), env)
 		if err != nil {
@@ -263,7 +275,7 @@ func postEnvironmentH(environments repo.Environments, catalog DeviceCatalog, not
 }
 
 // @Summary Delete one environment and its runtime state
-// @Description The platform devices moses created for the assets of this environment are deleted with it. Devices attached to an asset by the caller stay, together with their timeseries. A device that cannot be deleted does not fail the request.
+// @Description The platform devices moses created for the assets of this environment are deleted with it. Devices attached to an asset by the caller stay, together with their timeseries. The graph this environment is mirrored as is deleted with it. Neither a device nor a graph that cannot be deleted fails the request.
 // @Tags Environment
 // @Security Bearer
 // @Param id path string true "environment id"
@@ -272,7 +284,7 @@ func postEnvironmentH(environments repo.Environments, catalog DeviceCatalog, not
 // @Failure 404 {string} string "the environment belongs to somebody else"
 // @Failure 500 {string} string "error message"
 // @Router /environments/{id} [delete]
-func deleteEnvironmentH(environments repo.Environments, catalog DeviceCatalog, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
+func deleteEnvironmentH(environments repo.Environments, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
 	return http.MethodDelete, "/environments/:id", func(gc *gin.Context) {
 		token, ok := requireUser(gc)
 		if !ok {
@@ -304,6 +316,9 @@ func deleteEnvironmentH(environments repo.Environments, catalog DeviceCatalog, n
 		//keep the devices it publishes through. Devices the user picked stay in
 		//either case, they are inventory of the platform and not ours to remove
 		deleteDevices(gc.Request.Context(), catalog, token, env.Id, managedDevicesOf(&env))
+		//also after the delete, and best effort for the same reason: a graph
+		//without an environment is cheaper than a delete that fails
+		deleteGraph(mirror, token, &env)
 		gc.Status(http.StatusNoContent)
 	}
 }
@@ -327,7 +342,7 @@ func deleteEnvironmentH(environments repo.Environments, catalog DeviceCatalog, n
 // @Failure 404 {string} string "no such environment, no access to it, or it is not running here"
 // @Failure 500 {string} string "error message"
 // @Router /environments/{id}/state [patch]
-func patchEnvironmentStateH(environments repo.Environments, catalog DeviceCatalog, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
+func patchEnvironmentStateH(environments repo.Environments, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
 	return http.MethodPatch, "/environments/:id/state", func(gc *gin.Context) {
 		token, ok := requireUser(gc)
 		if !ok {
@@ -384,7 +399,7 @@ func patchEnvironmentStateH(environments repo.Environments, catalog DeviceCatalo
 // @Success 200 {string} string "the specification"
 // @Failure 500 {string} string "error message"
 // @Router /doc [get]
-func getSwaggerDocH(_ repo.Environments, _ DeviceCatalog, _ RuntimeNotifier) (string, string, gin.HandlerFunc) {
+func getSwaggerDocH(_ repo.Environments, _ DeviceCatalog, _ GraphMirror, _ RuntimeNotifier) (string, string, gin.HandlerFunc) {
 	return http.MethodGet, "/doc", func(gc *gin.Context) {
 		// generated at image build time by go generate, not committed
 		if _, err := os.Stat(swaggerDocPath); err != nil {
