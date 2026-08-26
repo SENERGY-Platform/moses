@@ -36,6 +36,16 @@ type fakeCatalog struct {
 	deleted    []string
 	tokensSeen []string
 	err        error
+
+	// idsByName gives the device of a named asset a predictable id. Without it
+	// every created device has the same id, and a test with more than one asset
+	// could not tell which device was deleted. Keyed by name rather than by call
+	// order because provisioning walks sub-zones first.
+	idsByName map[string]string
+
+	// deleteErr fails only the deletion, so a test can provision successfully and
+	// still watch what a failing cleanup does.
+	deleteErr error
 }
 
 func (this *fakeCatalog) DeviceTypes(token string) ([]devices.DeviceType, error) {
@@ -48,13 +58,20 @@ func (this *fakeCatalog) CreateDevice(ctx context.Context, token string, deviceT
 		return devices.Device{}, this.err
 	}
 	this.tokensSeen = append(this.tokensSeen, token)
-	device := devices.Device{Id: "urn:device:new", Name: name, DeviceTypeId: deviceTypeId}
+	id := "urn:device:new"
+	if given, ok := this.idsByName[name]; ok {
+		id = given
+	}
+	device := devices.Device{Id: id, Name: name, DeviceTypeId: deviceTypeId}
 	this.created = append(this.created, device)
 	return device, nil
 }
 
 func (this *fakeCatalog) DeleteDevice(ctx context.Context, token string, id string) error {
 	this.deleted = append(this.deleted, id)
+	if this.deleteErr != nil {
+		return this.deleteErr
+	}
 	return this.err
 }
 

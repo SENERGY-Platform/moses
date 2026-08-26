@@ -128,6 +128,17 @@ type Asset struct {
 	ExternalRef    string `json:"external_ref" bson:"external_ref"`
 	ExternalTypeId string `json:"external_type_id" bson:"external_type_id"`
 
+	// ExternalManaged tells a device moses created for this asset apart from one
+	// the user picked in an editor and attached to it. Only a managed device is
+	// deleted again when the asset or the whole environment disappears - a picked
+	// device is inventory of the platform and outlives the simulation that used
+	// it, along with its timeseries.
+	//
+	// The server decides this, never the client: the whole document is sent on
+	// every update, so a stale or invented flag would otherwise decide whether a
+	// real device is deleted. See reconcileManagedFlags in lib/api.
+	ExternalManaged bool `json:"external_managed" bson:"external_managed"`
+
 	InitialStates map[string]interface{} `json:"initial_states" bson:"initial_states"`
 
 	Channels []Channel `json:"channels" bson:"channels"`

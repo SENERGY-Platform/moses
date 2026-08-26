@@ -257,6 +257,48 @@ func TestDeleteDeviceAddressesTheDevice(t *testing.T) {
 	}
 }
 
+// The cleanup after an environment update is a best effort that may be repeated,
+// and a device may have been removed in the platform's own ui in between. Both
+// end here, and both got what they wanted.
+func TestDeletingADeviceThatIsAlreadyGoneIsNotAnError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "no such device", http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	if err := catalogWith(&fakeRegistry{}, server.URL).DeleteDevice(context.Background(), "Bearer t", "urn:device:gone"); err != nil {
+		t.Errorf("a device that is not there is the state the caller wanted, got %v", err)
+	}
+}
+
+// Everything else stays an error: a device moses may not delete answers 403, and
+// swallowing that would report a cleanup that never happened.
+func TestADeviceThatCannotBeDeletedIsAnError(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusConflict, http.StatusInternalServerError} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "nope", status)
+		}))
+		err := catalogWith(&fakeRegistry{}, server.URL).DeleteDevice(context.Background(), "Bearer t", "urn:device:x")
+		server.Close()
+		if err == nil {
+			t.Errorf("expected %d to be an error", status)
+		}
+	}
+}
+
+// A 404 on a create means the url is wrong, not that anything is already done -
+// tolerating it there would store an asset publishing into nowhere.
+func TestA404OnACreateIsStillAFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "no route", http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	if _, err := catalogWith(&fakeRegistry{}, server.URL).CreateDevice(context.Background(), "Bearer t", "dt-1", "x"); err == nil {
+		t.Error("a create that answered 404 must not pass as a created device")
+	}
+}
+
 // A refusal from the manager has to carry its answer: "unable to create the
 // device" alone leaves the user without a reason.
 func TestAManagerRefusalCarriesItsAnswer(t *testing.T) {

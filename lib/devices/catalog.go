@@ -27,6 +27,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -242,10 +243,21 @@ func (this *Catalog) CreateDevice(ctx context.Context, token string, deviceTypeI
 	return Device{Id: created.Id, LocalId: created.LocalId, Name: created.Name, DeviceTypeId: created.DeviceTypeId}, nil
 }
 
+// ErrNotFound is what a 404 from the device-manager becomes, so a caller can
+// tell "there is no such device" apart from "the call did not work".
+var ErrNotFound = errors.New("the device-manager knows no such device")
+
 // DeleteDevice removes a platform device again, so removing a simulated asset
 // does not leave one behind.
+//
+// A device that is already gone is not an error: the cleanup after an environment
+// update is a best effort that may be retried, a device may have been removed in
+// the platform's own ui, and either way the caller wanted it gone.
 func (this *Catalog) DeleteDevice(ctx context.Context, token string, id string) error {
 	response, err := this.send(ctx, token, http.MethodDelete, this.managerUrl+"/devices/"+url.PathEscape(id), nil)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -275,6 +287,11 @@ func (this *Catalog) send(ctx context.Context, token string, method string, url 
 	if response.StatusCode < 200 || response.StatusCode > 299 {
 		message, _ := io.ReadAll(io.LimitReader(response.Body, 512))
 		response.Body.Close()
+		if response.StatusCode == http.StatusNotFound {
+			//kept distinguishable rather than tolerated here: on a create a 404
+			//means the url is wrong, and that has to fail loudly
+			return nil, fmt.Errorf("%w: %s", ErrNotFound, message)
+		}
 		return nil, fmt.Errorf("the device-manager answered %d: %s", response.StatusCode, message)
 	}
 	return response, nil

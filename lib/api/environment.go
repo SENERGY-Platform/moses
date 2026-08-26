@@ -121,7 +121,7 @@ func getEnvironmentH(environments repo.Environments, catalog DeviceCatalog, noti
 }
 
 // @Summary Create or replace one environment
-// @Description Idempotent. The id in the path wins over the one in the body, so a document can be copied to a new id without editing it. Ownership comes from the token on create and never transfers on update.
+// @Description Idempotent. The id in the path wins over the one in the body, so a document can be copied to a new id without editing it. Ownership comes from the token on create and never transfers on update. An asset without an external_ref gets a platform device created for it, and a device created that way is deleted again when the asset that carried it is gone from the document; a device attached to an asset by the caller is never deleted. external_managed says which is which and is decided by the server, so sending it has no effect.
 // @Tags Environment
 // @Accept json
 // @Produce json
@@ -149,6 +149,11 @@ func putEnvironmentH(environments repo.Environments, catalog DeviceCatalog, noti
 		// path wins over body, so a document can be copied to a new id
 		env.Id = gc.Param("id")
 
+		// previous stays nil for a document that is new under this id, including a
+		// copy put under a fresh one: nothing of it was provisioned by moses, so
+		// none of its devices may be deleted with it later
+		var previous *domain.Environment
+
 		existing, err := environments.Get(gc.Request.Context(), env.Id)
 		switch {
 		case err == nil:
@@ -158,6 +163,7 @@ func putEnvironmentH(environments repo.Environments, catalog DeviceCatalog, noti
 			}
 			// ownership never transfers through an import
 			env.Owner = existing.Owner
+			previous = &existing
 		case errors.Is(err, repo.ErrNotFound):
 			env.Owner = token.GetUserId()
 		default:
@@ -174,6 +180,10 @@ func putEnvironmentH(environments repo.Environments, catalog DeviceCatalog, noti
 			return
 		}
 
+		//which devices moses may delete is decided from the stored document, not
+		//from the flags the client sent back
+		reconcileManagedFlags(previous, &env)
+
 		//after validation, before the write: a refused document creates nothing
 		if err = provisionDevices(gc.Request.Context(), catalog, token, &env); err != nil {
 			gc.String(http.StatusInternalServerError, "%s", err.Error())
@@ -189,12 +199,16 @@ func putEnvironmentH(environments repo.Environments, catalog DeviceCatalog, noti
 		// after the write: the runtime reads the definition back, so notifying
 		// earlier would restart it on the old one
 		notifyReload(notifier, env.Id)
+		// also after the write, and for the same reason in reverse: a failed write
+		// must leave every device standing, or the stored document would point at
+		// devices that no longer exist
+		deleteDevices(gc.Request.Context(), catalog, token, env.Id, orphanedDevices(previous, &env))
 		gc.JSON(http.StatusOK, env)
 	}
 }
 
 // @Summary Create an environment with a server assigned id
-// @Description Any id in the body is ignored. Nested entities may omit their ids and get one assigned.
+// @Description Any id in the body is ignored. Nested entities may omit their ids and get one assigned. An asset without an external_ref gets a platform device created for it, which is then deleted again when the asset or the environment is gone; a device attached to an asset by the caller is never deleted. external_managed is decided by the server and is always false on create.
 // @Tags Environment
 // @Accept json
 // @Produce json
@@ -227,6 +241,10 @@ func postEnvironmentH(environments repo.Environments, catalog DeviceCatalog, not
 			return
 		}
 
+		//nothing here was provisioned by moses yet, so an external_managed the
+		//client sent along claims a right over a device it does not have
+		reconcileManagedFlags(nil, &env)
+
 		//after validation, before the write: a refused document creates nothing
 		if err = provisionDevices(gc.Request.Context(), catalog, token, &env); err != nil {
 			gc.String(http.StatusInternalServerError, "%s", err.Error())
@@ -245,6 +263,7 @@ func postEnvironmentH(environments repo.Environments, catalog DeviceCatalog, not
 }
 
 // @Summary Delete one environment and its runtime state
+// @Description The platform devices moses created for the assets of this environment are deleted with it. Devices attached to an asset by the caller stay, together with their timeseries. A device that cannot be deleted does not fail the request.
 // @Tags Environment
 // @Security Bearer
 // @Param id path string true "environment id"
@@ -281,6 +300,10 @@ func deleteEnvironmentH(environments repo.Environments, catalog DeviceCatalog, n
 			return
 		}
 		notifyRemove(notifier, env.Id)
+		//after the delete: a failed delete leaves the environment, and it has to
+		//keep the devices it publishes through. Devices the user picked stay in
+		//either case, they are inventory of the platform and not ours to remove
+		deleteDevices(gc.Request.Context(), catalog, token, env.Id, managedDevicesOf(&env))
 		gc.Status(http.StatusNoContent)
 	}
 }
