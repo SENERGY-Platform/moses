@@ -48,6 +48,13 @@ func replayValue(source domain.DatasetSource, points []dataset.Point, anchorUnix
 		if elapsed < 0 {
 			return 0, false
 		}
+		if span <= 0 {
+			//a series whose points all sit on one second has nothing to loop
+			//over; dividing by its span would panic the tick. It replays as
+			//the constant it is.
+			virtual = first
+			break
+		}
 		loops = elapsed / span
 		virtual = first + elapsed%span
 	}
