@@ -268,13 +268,18 @@ func trySensorFromDevice(t *testing.T, config config.Config, protocol model.Prot
 		resp := model.Envelope{}
 		err := json.Unmarshal(msg, &resp)
 		if err != nil {
-			t.Fatal(err)
+			//logged and not failed: this handler runs on the consumer's own
+			//goroutine, which can outlive the test function, and a t.Fatal from
+			//there panics the whole package instead of failing this test
+			log.Println("ERROR: kafka consumer:", err)
 			return err
 		}
 		events = append(events, resp)
 		return nil
 	}, func(err error) {
-		t.Fatal(err)
+		//same reason: the error callback fires on rebalances and timeouts, under
+		//load also after the test completed
+		log.Println("ERROR: kafka consumer:", err)
 	})
 	if err != nil {
 		t.Fatal(err)
