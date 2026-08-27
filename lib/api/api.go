@@ -71,6 +71,11 @@ type RuntimeNotifier interface {
 	// *repo.UnknownIdsError for zone or asset ids the definition does not have.
 	SetState(id string, change repo.StateChange) error
 
+	// Snapshot reads the live state of one running environment, in the shape
+	// SetState accepts. It reports repo.ErrNotRunning for an environment the
+	// runtime does not hold.
+	Snapshot(id string) (moses_runtime.StateSnapshot, error)
+
 	// StartBackfill reconstructs one environment over a past window and returns
 	// the job as it stands. It reports a *runtime.BackfillRangeError for a
 	// window it will not serve, runtime.ErrBackfillRunning when one is already
@@ -108,6 +113,15 @@ func setState(notifier RuntimeNotifier, id string, change repo.StateChange) erro
 		return ErrNoRuntime
 	}
 	return notifier.SetState(id, change)
+}
+
+// A store only instance has no live state to read, which is the same answer as
+// an environment that is not running here.
+func snapshotState(notifier RuntimeNotifier, id string) (moses_runtime.StateSnapshot, error) {
+	if notifier == nil {
+		return moses_runtime.StateSnapshot{}, ErrNoRuntime
+	}
+	return notifier.Snapshot(id)
 }
 
 func Start(ctx context.Context, config config.Config, staterepo *state.StateRepo, environments repo.Environments, datasets repo.Datasets, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier) {

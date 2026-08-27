@@ -192,6 +192,7 @@ func testRouterWith(store repo.Environments, catalog DeviceCatalog, mirror Graph
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	EnvironmentEndpoints(config.Config{}, store, catalog, mirror, notifier, router)
+	EnvironmentStateEndpoints(config.Config{}, store, catalog, mirror, notifier, router)
 	BackfillEndpoints(config.Config{}, store, catalog, mirror, notifier, router)
 	return router
 }
@@ -213,6 +214,13 @@ type recordingNotifier struct {
 	status     moses_runtime.BackfillStatus
 	statusErr  error
 	statusCall int
+
+	// snapshot and snapshotErr are what the reading direction of the state
+	// answers with, and snapshotCalls counts the reads, so a test can pin that a
+	// caller without access never reaches the runtime at all.
+	snapshot      moses_runtime.StateSnapshot
+	snapshotErr   error
+	snapshotCalls []string
 }
 
 func (this *recordingNotifier) Reload(id string) { this.reloaded = append(this.reloaded, id) }
@@ -224,6 +232,14 @@ func (this *recordingNotifier) SetState(id string, change repo.StateChange) erro
 	}
 	this.changes = append(this.changes, change)
 	return nil
+}
+
+func (this *recordingNotifier) Snapshot(id string) (moses_runtime.StateSnapshot, error) {
+	this.snapshotCalls = append(this.snapshotCalls, id)
+	if this.snapshotErr != nil {
+		return moses_runtime.StateSnapshot{}, this.snapshotErr
+	}
+	return this.snapshot, nil
 }
 
 func (this *recordingNotifier) StartBackfill(id string, from time.Time, to time.Time) (moses_runtime.BackfillStatus, error) {

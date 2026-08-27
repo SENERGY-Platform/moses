@@ -254,6 +254,10 @@ func (this *environmentNotifier) SetState(id string, change repo.StateChange) er
 	return this.runtime.SetState(id, change)
 }
 
+func (this *environmentNotifier) Snapshot(id string) (runtime.StateSnapshot, error) {
+	return this.runtime.Snapshot(id)
+}
+
 func (this *environmentNotifier) Remove(id string) {
 	this.runtime.Remove(id)
 	this.warn()

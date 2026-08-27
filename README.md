@@ -53,6 +53,10 @@ A script source runs with `moses` bound in the VM:
   applications consume a simulated site like a real one — mapping and ownership
   rules in `docs/environment-graphs.md`.
 - Channels publish through `platform-connector-lib` (Kafka).
+- The live state of a running environment is read with
+  `GET /environments/{id}/state` and turned with `PATCH` on the same path — the
+  same shape both ways, so a boundary condition can be read, changed and sent
+  back. An environment that is not simulated here answers `running: false`.
 - An environment can be reconstructed over a past window and published with
   historical timestamps, so a model has training data at once — conditions and
   limits in `docs/backfill.md`.
