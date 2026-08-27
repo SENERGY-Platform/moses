@@ -211,12 +211,19 @@ const (
 	SourceDataset SourceKind = "dataset"
 	// SourceFormula derives a value from other channels and the context.
 	SourceFormula SourceKind = "formula"
+	// SourceAggregate is the sum, over every asset whose SubmeteredBy points at
+	// the asset of this channel, of that asset's channel carrying the same
+	// CharacteristicId. It is configurationless: the whole configuration is the
+	// meter tree, so a channel added below is summed without editing anything
+	// here - which is the difference to a formula naming its inputs one by one.
+	SourceAggregate SourceKind = "aggregate"
 )
 
-// Source is what drives a channel; exactly one variant matches Kind. All four
-// kinds are in the format from the start so it does not change when the
-// declarative sources land. Only SourceScript executes today - validation
-// rejects the others rather than accepting a document that produces nothing.
+// Source is what drives a channel; exactly one variant matches Kind, with
+// SourceAggregate the one kind that has no variant at all. All variants are in
+// the format from the start so it does not change when the declarative sources
+// land. Validation refuses a kind whose variant is missing rather than
+// accepting a document that produces nothing.
 type Source struct {
 	Kind SourceKind `json:"kind" bson:"kind"`
 

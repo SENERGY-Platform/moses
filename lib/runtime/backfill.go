@@ -397,6 +397,8 @@ func (this *Runtime) skipReason(channel backfillChannel, points []dataset.Point)
 		return "a script source is stateful: its value depends on the state its earlier runs left behind, which no longer exists for a past moment"
 	case domain.SourceFormula:
 		return "a formula is derived from other channels and the context, and follows from them rather than being a series of its own"
+	case domain.SourceAggregate:
+		return "an aggregate is derived from the channels of the sub-metered assets, and follows from them rather than being a series of its own"
 	case domain.SourceProfile:
 		if source.Profile == nil {
 			return "the profile source carries no profile"

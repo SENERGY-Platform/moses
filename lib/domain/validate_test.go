@@ -199,6 +199,11 @@ func TestValidateRejectsAnEmptyScript(t *testing.T) {
 
 // Every declared kind executes now; what stays refused is a kind whose variant
 // is missing, and the two dataset origins nothing serves.
+//
+// SourceAggregate is deliberately not in the list: it is the one kind with no
+// variant of its own, because its inputs are the meter tree rather than a
+// configuration block. The opposite rule holds for it and is pinned in
+// validate_aggregate_test.go - a variant next to kind aggregate is refused.
 func TestValidateRejectsAKindWithoutItsVariant(t *testing.T) {
 	for _, kind := range []SourceKind{SourceProfile, SourceDataset, SourceFormula} {
 		env := validEnvironment()

@@ -30,6 +30,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -351,6 +352,10 @@ func (this *Runtime) startEnvironment(ctx context.Context, def domain.Environmen
 	}
 
 	env.seed(gen)
+	//after seed, because it reads the persisted meter readings seed has just
+	//made sure are there, and before the new generation is published, because
+	//from that moment on its runners write the cache it is fixing up
+	env.carryLastValues(gen)
 
 	this.mux.Lock()
 	env.gen = gen
@@ -705,6 +710,8 @@ func (this *Runtime) dispatch(env *environment, gen *generation, binding channel
 		this.executeDataset(env, binding, remembered)
 	case domain.SourceFormula:
 		this.executeFormula(env, binding, remembered)
+	case domain.SourceAggregate:
+		this.executeAggregate(env, gen, binding, remembered)
 	default:
 		this.execute(env, gen, binding, input, remembered)
 	}
@@ -728,6 +735,58 @@ func (this *Runtime) executeFormula(env *environment, binding channelBinding, se
 		return
 	}
 	send(value)
+}
+
+// executeAggregate publishes the sum of the channels the sub-metered assets
+// carry, resolved once at index time (gen.aggregateInputs) and read here from
+// the values those channels last published. gen is immutable and captured by
+// the runner, so the list needs no lock; env.lastValues does, and it is the
+// same mutex every other source sends under - no second lock, no new order.
+//
+// Three deliberate decisions live in these few lines:
+//
+//   - A channel that has not produced a value yet counts as 0, the same way a
+//     formula's channel reference does. The alternative - waiting until every
+//     input has been seen once - would let one dead sub-meter silence the total
+//     of a whole site forever.
+//   - An aggregate over no inputs at all publishes 0 rather than nothing: a
+//     distribution meter without sub-meters reads zero, and zero is a reading.
+//   - lastValues is in memory only, so after a restart the sum is short until
+//     every sub-metered channel has ticked once - except for the cumulative
+//     ones, whose reading is persisted state and is restored into the cache at
+//     start (environment.carryLastValues). What is left is the offset of the
+//     non-cumulative children for at most one of their intervals. Persisting
+//     everything would make the restart correct and the values stale instead.
+//   - An input whose last value is not a finite number is left out of the sum
+//     rather than carried into it. checkStates refuses NaN and infinity for
+//     stored states, but nothing stops a script from sending 1/0 on a channel:
+//     one such child would otherwise turn the total of every level above it
+//     into NaN, which is a larger loss than one summand missing from one total.
+func (this *Runtime) executeAggregate(env *environment, gen *generation, binding channelBinding, send func(value interface{})) {
+	inputs := gen.aggregateInputs[binding.channel.Id]
+	env.mux.Lock()
+	defer env.mux.Unlock()
+	//summed in the indexed order, which is document order: float addition is
+	//not associative, so a map iteration here would make the same document
+	//produce slightly different totals from one start to the next
+	sum := 0.0
+	skipped := 0
+	for _, id := range inputs {
+		value := env.lastValues[id]
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			skipped++
+			continue
+		}
+		sum += value
+	}
+	if skipped > 0 {
+		//one line per tick of this aggregate, not one per input: the channel
+		//that produced the value logs its own problem, and the point here is
+		//that this total is incomplete
+		util.Logger.Warn("an aggregate left out inputs whose last value is not a finite number, the total is short by them",
+			"environment", env.id, "channel", binding.channel.Id, "skipped", skipped, "inputs", len(inputs))
+	}
+	send(sum)
 }
 
 func (this *Runtime) resolveInput(env *environment, zoneId string, assetId string, ref string) interface{} {

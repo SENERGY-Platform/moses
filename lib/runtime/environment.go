@@ -19,6 +19,7 @@ package runtime
 import (
 	"context"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -88,10 +89,37 @@ type generation struct {
 	// series carries the parsed uploads while the generation is indexed.
 	series map[string][]dataset.Point
 
+	// aggregateInputs maps an aggregate channel's id to the ids of the channels
+	// it sums: the channels carrying the same characteristic on every asset
+	// whose submetered_by names the aggregate's asset. The list is in document
+	// order, so the sum is the same sequence of float additions on every start
+	// of the same document.
+	//
+	// The indirection through ids is what keeps the aggregate from recursing
+	// over the tree: executeAggregate reads the last value each of these
+	// channels published, one level deep, whatever the level below is itself
+	// made of.
+	aggregateInputs map[string][]string
+
+	// candidates is scaffolding of the indexing pass, not part of the indexed
+	// generation: the aggregate pass needs the whole document, because the
+	// asset a submetered_by names may appear after the asset naming it, and it
+	// must see exactly the assets addAsset accepted rather than re-deriving
+	// that from the document. Set to nil when the pass is done.
+	candidates []submeterCandidate
+
 	// deviceRefs is every platform device this environment owns. It answers
 	// "is this device mine" for HandleCommand, which has to be answerable even
 	// for an asset whose channels cannot be executed.
 	deviceRefs map[string]bool
+}
+
+// submeterCandidate is one accepted asset as the aggregate pass needs it:
+// which asset meters it too, and its channels in document order.
+type submeterCandidate struct {
+	assetId      string
+	submeteredBy string
+	channels     []domain.Channel
 }
 
 type zoneInfo struct {
@@ -172,15 +200,129 @@ func (this *latest) get() (interface{}, bool) {
 // from a future version of the format.
 func newGeneration(def domain.Environment, series map[string][]dataset.Point) *generation {
 	result := &generation{
-		def:        def,
-		zones:      map[string]*zoneInfo{},
-		assets:     map[string]*assetInfo{},
-		commands:   map[commandKey]channelBinding{},
-		deviceRefs: map[string]bool{},
-		series:     series,
+		def:             def,
+		zones:           map[string]*zoneInfo{},
+		assets:          map[string]*assetInfo{},
+		commands:        map[commandKey]channelBinding{},
+		deviceRefs:      map[string]bool{},
+		aggregateInputs: map[string][]string{},
+		series:          series,
 	}
 	result.addZones(def.Id, def.Zones, 1)
+	//second pass: the meter tree only exists once the whole document has been
+	//walked, and the set of ticking channels only once every runner-to-be is
+	//known
+	result.indexAggregates(def.Id)
 	return result
+}
+
+// indexAggregates resolves every aggregate channel to the channels it sums. It
+// runs after the zones are indexed, over exactly the assets that were accepted
+// there, and reports what will contribute nothing rather than leaving a sum
+// quietly short.
+func (this *generation) indexAggregates(envId string) {
+	defer func() { this.candidates = nil }()
+
+	//children in document order: the order of the sum, and with it the order
+	//of the float additions, must not depend on map iteration
+	children := map[string][]int{}
+	for i, candidate := range this.candidates {
+		//a self reference is refused by validation; a hand written document
+		//carrying one would make an aggregate sum its own last value, so it is
+		//dropped here rather than fed back
+		if candidate.submeteredBy == "" || candidate.submeteredBy == candidate.assetId {
+			continue
+		}
+		children[candidate.submeteredBy] = append(children[candidate.submeteredBy], i)
+	}
+
+	ticking := map[string]bool{}
+	for _, binding := range this.sensors {
+		ticking[binding.channel.Id] = true
+	}
+	//a channel a command can reach produces a value too, whenever one arrives.
+	//It is also why environment.carryLastValues keeps its remembered value
+	//across a reload, so reporting it as contributing nothing would be wrong.
+	commanded := map[string]bool{}
+	for _, binding := range this.commands {
+		commanded[binding.channel.Id] = true
+	}
+
+	for _, candidate := range this.candidates {
+		for _, channel := range candidate.channels {
+			if channel.Source.Kind != domain.SourceAggregate || channel.Id == "" {
+				continue
+			}
+			if _, duplicate := this.aggregateInputs[channel.Id]; duplicate {
+				//channel ids are unique per validation; if two channels share
+				//one anyway they also share their entry in lastValues, so the
+				//first one keeps its inputs like the first asset keeps its id
+				util.Logger.Warn("duplicate aggregate channel id, the second one keeps the inputs of the first",
+					"environment", envId, "asset", candidate.assetId, "channel", channel.Id)
+				continue
+			}
+			//trimmed on both sides, here and on every sub-metered channel
+			//below: validation only refuses a characteristic that is empty
+			//after trimming, so "kwh" and "kwh " are both storable and are the
+			//same characteristic to everybody reading the document. Comparing
+			//them raw made the aggregate match nothing over a trailing space.
+			characteristic := strings.TrimSpace(channel.CharacteristicId)
+			if characteristic == "" {
+				//validation demands one: without it there is nothing to match
+				//the sub-metered channels by, and matching "the ones that also
+				//have none" would be a rule nobody wrote down
+				util.Logger.Warn("aggregate channel without a characteristic, it sums nothing",
+					"environment", envId, "asset", candidate.assetId, "channel", channel.Id)
+				this.aggregateInputs[channel.Id] = nil
+				continue
+			}
+			inputs := []string{}
+			for _, index := range children[candidate.assetId] {
+				child := this.candidates[index]
+				for _, sub := range child.channels {
+					if sub.Id == "" || sub.Id == channel.Id || strings.TrimSpace(sub.CharacteristicId) != characteristic {
+						continue
+					}
+					//the aggregate channels of an intermediate level are summed
+					//like any other channel: a nested tree adds up the totals
+					//of the level below, which is what makes the tree work at
+					//more than one depth
+					inputs = append(inputs, sub.Id)
+					switch {
+					case ticking[sub.Id]:
+					case commanded[sub.Id]:
+						//not silent, and not zero either: it keeps the value it
+						//last produced (carryLastValues) until the next command
+						//moves it, so the total above it stands still with it
+						util.Logger.Warn("a channel this aggregate sums has no tick of its own, it contributes the value it last produced until a command drives it",
+							"environment", envId, "aggregate_channel", channel.Id,
+							"channel", sub.Id, "asset", child.assetId)
+					default:
+						//nothing in this generation can produce a value for it,
+						//and carryLastValues dropped whatever it had, so it
+						//contributes exactly 0 for as long as this generation
+						//runs - a sum that is silently short is worse than a
+						//loud one
+						util.Logger.Warn("a channel this aggregate sums has neither a tick nor a command it could arrive on, it will contribute nothing until it ticks",
+							"environment", envId, "aggregate_channel", channel.Id,
+							"channel", sub.Id, "asset", child.assetId)
+					}
+				}
+			}
+			if len(inputs) == 0 && len(children[candidate.assetId]) > 0 {
+				//the tree is there and the sum is still zero: either the
+				//characteristics do not match, or the sub-metered channels
+				//carry none at all - which is what a document migrated from the
+				//legacy format looks like (lib/repo/convert.go leaves
+				//characteristic_id empty), and it publishes a plausible 0
+				//forever without this line
+				util.Logger.Warn("this aggregate has sub-metered assets but none of their channels carries its characteristic, it sums nothing",
+					"environment", envId, "asset", candidate.assetId, "channel", channel.Id,
+					"characteristic", characteristic, "submetered_assets", len(children[candidate.assetId]))
+			}
+			this.aggregateInputs[channel.Id] = inputs
+		}
+	}
 }
 
 func (this *generation) addZones(envId string, zones []domain.Zone, depth int) {
@@ -220,6 +362,11 @@ func (this *generation) addAsset(envId string, zoneId string, asset domain.Asset
 	if asset.ExternalRef != "" {
 		this.deviceRefs[asset.ExternalRef] = true
 	}
+	//recorded for the aggregate pass, which cannot run before the last asset of
+	//the document has been seen
+	this.candidates = append(this.candidates, submeterCandidate{
+		assetId: asset.Id, submeteredBy: asset.SubmeteredBy, channels: asset.Channels,
+	})
 	ref := assetRef{id: asset.Id, externalRef: asset.ExternalRef}
 	for _, channel := range asset.Channels {
 		script := channel.Source.Kind == domain.SourceScript && channel.Source.Script != nil
@@ -227,6 +374,11 @@ func (this *generation) addAsset(envId string, zoneId string, asset domain.Asset
 		//a dataset channel is executable only with its series loaded; a failed
 		//load was already reported by the loader
 		replay := channel.Source.Kind == domain.SourceDataset && len(this.series[channel.Id]) >= 2
+		//an aggregate needs nothing loaded or compiled: its inputs are resolved
+		//by indexAggregates below, and an aggregate over no children is a
+		//meaningful channel too - a distribution meter without sub-meters
+		//reads zero, which is a reading and not silence
+		aggregate := channel.Source.Kind == domain.SourceAggregate
 		var program *formula.Program
 		if channel.Source.Kind == domain.SourceFormula && channel.Source.Formula != nil {
 			var err error
@@ -237,7 +389,7 @@ func (this *generation) addAsset(envId string, zoneId string, asset domain.Asset
 					attributes.ErrorKey, err, "environment", envId, "channel", channel.Id)
 			}
 		}
-		if !script && !profile && !replay && program == nil {
+		if !script && !profile && !replay && !aggregate && program == nil {
 			//validation rejects these on the way in, so this is a document that
 			//bypassed the api or one written for a later version of the format
 			util.Logger.Warn("channel source kind is not executed yet, the channel does nothing",
@@ -354,6 +506,72 @@ func seedInto(target map[string]interface{}, initial map[string]interface{}) (ch
 		changed = true
 	}
 	return changed
+}
+
+// carryLastValues brings the value cache into a new generation. The environment
+// object survives a Reload and lastValues with it, while the generation does
+// not - so this is the one place where the cache and the definition are lined
+// up again. Both halves exist because a wrong entry here is invisible: it is
+// what every aggregate above that channel adds into its total.
+//
+// Prune. An entry is kept only for a channel that can still produce a value in
+// the new generation: every channel with a runner (gen.sensors) and every
+// channel a command can reach (gen.commands), which are the two paths through
+// dispatch that write the cache. Anything else froze on the value it last
+// published. That was how an edit leaked a stale reading across a reload -
+// turn a metered channel into something without a runner and its last value
+// kept being summed into every total above it forever, while indexAggregates
+// logged that the channel contributes nothing.
+//
+// Seed. A cumulative profile channel's meter reading is persisted state, and
+// the last value the channel published is that same reading. Without restoring
+// it, an aggregate over cumulative children starts the process at 0 and jumps
+// to the real total once every child has ticked once - a zero phase followed by
+// a step, in a series whose whole point is that it only ever rises.
+//
+// It takes the mutex itself and must be called before the runners of the new
+// generation start.
+func (this *environment) carryLastValues(gen *generation) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+
+	if len(this.lastValues) > 0 {
+		writable := make(map[string]bool, len(gen.sensors)+len(gen.commands))
+		for _, binding := range gen.sensors {
+			writable[binding.channel.Id] = true
+		}
+		for _, binding := range gen.commands {
+			writable[binding.channel.Id] = true
+		}
+		for id := range this.lastValues {
+			if !writable[id] {
+				delete(this.lastValues, id)
+			}
+		}
+	}
+
+	for _, binding := range gen.sensors {
+		profile := binding.channel.Source.Profile
+		if binding.channel.Source.Kind != domain.SourceProfile || profile == nil || !profile.Cumulative {
+			continue
+		}
+		if _, known := this.lastValues[binding.channel.Id]; known {
+			//an existing live value wins, like seedInto above. On a reload it is
+			//the same number anyway: executeProfile writes the counter into the
+			//state and publishes that same counter.
+			continue
+		}
+		counter, ok := asFloat(this.state.Assets[binding.asset.id][binding.channel.Id])
+		if !ok || math.IsNaN(counter) || math.IsInf(counter, 0) {
+			//no reading yet, or one that is not a finite number: the channel
+			//starts from zero, as it did before the seeding existed
+			continue
+		}
+		if this.lastValues == nil {
+			this.lastValues = map[string]float64{}
+		}
+		this.lastValues[binding.channel.Id] = counter
+	}
 }
 
 // contextStates, zoneStates and assetStates return the map a script writes

@@ -255,6 +255,68 @@ func (this *validator) checkAsset(path string, asset Asset, site int) {
 	for i := range asset.Channels {
 		this.checkChannel(fmt.Sprintf("%s.channels[%d]", path, i), asset.Channels[i])
 	}
+	this.checkAggregateOverlap(path, asset)
+}
+
+// checkAggregateOverlap refuses a second reading of the same quantity on an
+// asset that already totals that quantity over its sub-meters.
+//
+// The shape it rejects is the one an author reaches for first: a distribution
+// meter asset carrying both its real kWh channel and an aggregate over the
+// meters below it. Nothing about that document is ill formed, and it is wrong
+// in two ways at once. Two channels of the same characteristic on one asset are
+// indistinguishable to whoever reads the asset's readings, and an aggregate one
+// level further up sums the channels of this asset by characteristic - so it
+// adds the meter and the total of the same sub-tree together and counts that
+// sub-tree twice.
+//
+// The way to model a distribution meter's own share is an asset of its own,
+// sub-metered by this one; it needs no device (docs/submetering.md). Then the
+// share is a leaf like any other and each level is summed exactly once.
+//
+// Reported at the colliding channel rather than at the aggregate: the aggregate
+// is the channel that is meant to stay.
+func (this *validator) checkAggregateOverlap(path string, asset Asset) {
+	//the first aggregate per characteristic owns it; every further sensor
+	//channel carrying the same one is the collision. Trimmed, like the runtime
+	//matches (lib/runtime/environment.go, indexAggregates): "kwh " and "kwh"
+	//are the same characteristic and would collide just as badly.
+	owner := map[string]int{}
+	for i := range asset.Channels {
+		if asset.Channels[i].Source.Kind != SourceAggregate {
+			continue
+		}
+		characteristic := strings.TrimSpace(asset.Channels[i].CharacteristicId)
+		//an aggregate without one is already reported by checkChannel, and it
+		//sums nothing, so it collides with nothing either
+		if characteristic == "" {
+			continue
+		}
+		if _, taken := owner[characteristic]; !taken {
+			owner[characteristic] = i
+		}
+	}
+	if len(owner) == 0 {
+		return
+	}
+	for i := range asset.Channels {
+		//an actuator publishes no reading of its own, so it is not a second
+		//value of the same quantity, and the aggregate above does not sum it
+		//either
+		if asset.Channels[i].Direction != Sensor {
+			continue
+		}
+		characteristic := strings.TrimSpace(asset.Channels[i].CharacteristicId)
+		if characteristic == "" {
+			continue
+		}
+		if first, taken := owner[characteristic]; !taken || first == i {
+			continue
+		}
+		this.fail(fmt.Sprintf("%s.channels[%d]", path, i),
+			"this asset already carries an aggregate over characteristic %q, and two channels of the same quantity on one asset are indistinguishable to whoever reads them: an aggregate above this asset sums both, so the whole sub-tree below it is counted twice. Model the meter's own share as a sub-metered asset of its own below this one, which needs no device of its own",
+			characteristic)
+	}
 }
 
 // checkSubmeterCycles finds cycles in the sub-metering tree. parents maps an
@@ -263,11 +325,17 @@ func (this *validator) checkAsset(path string, asset Asset, site int) {
 // or out-of-site target was reported above, and reporting it again as a cycle
 // of its own would be confusing.
 //
-// A cycle here would never be walked by anything today: the graph mirror in
-// lib/graphs is best effort and the repository rejects a graph containing a
-// loop outright. Refusing it at validation time is still worth doing all the
-// same - a stored cycle is a modelling mistake nothing else would ever
-// surface.
+// Nothing walks a cycle here: the graph mirror in lib/graphs is best effort and
+// the repository rejects a graph containing a loop outright, and the aggregate
+// source reads the value each channel last published (lib/runtime,
+// executeAggregate) rather than recursing over the relation, so a cycle cannot
+// produce an endless walk.
+//
+// What it does produce is worse than an error: two totals that each include the
+// other's previous value, so every tick adds what the assets below measure to a
+// number that already contains it. The sum grows without bound and looks like a
+// plausible meter reading the whole way, which is worth a refusal here even
+// though no walk of the relation could ever hang.
 //
 // Standard three-color depth first search, iterated so every asset gets a
 // chance to start a walk: white (unseen), gray (on the current walk's path),
@@ -355,6 +423,17 @@ func (this *validator) checkChannel(path string, channel Channel) {
 	if channel.Source.Kind == SourceFormula && (channel.Direction != Sensor || channel.IntervalSeconds <= 0) {
 		this.fail(path, "a formula computes when the channel publishes, so the channel must be a sensor with an interval")
 	}
+	if channel.Source.Kind == SourceAggregate {
+		if channel.Direction != Sensor || channel.IntervalSeconds <= 0 {
+			this.fail(path, "an aggregate sums when the channel publishes, so the channel must be a sensor with an interval")
+		}
+		//the characteristic is what picks the channels to sum out of the
+		//sub-metered assets, so without one the aggregate has no defined set of
+		//inputs at all - it would silently sum nothing
+		if strings.TrimSpace(channel.CharacteristicId) == "" {
+			this.fail(path+".characteristic_id", "an aggregate sums the channels of the sub-metered assets that carry the same characteristic, so it must name one")
+		}
+	}
 }
 
 func (this *validator) checkSource(path string, source Source) {
@@ -388,10 +467,25 @@ func (this *validator) checkSource(path string, source Source) {
 		this.checkDataset(path, source)
 	case SourceFormula:
 		this.checkFormula(path, source)
+	case SourceAggregate:
+		this.checkAggregate(path, source, set)
 	case "":
 		this.fail(path+".kind", "must be set")
 	default:
 		this.fail(path+".kind", "unknown source kind %q", source.Kind)
+	}
+}
+
+// checkAggregate: an aggregate has no variant of its own, so the check is what
+// must NOT be there. The "only one variant" rule above does not cover this: a
+// document with kind aggregate and exactly one foreign variant set passes it,
+// and would be stored with a configuration nothing ever reads.
+func (this *validator) checkAggregate(path string, source Source, set []string) {
+	if len(set) > 0 {
+		this.fail(path, "an aggregate has no configuration of its own, its inputs are the assets sub-metering this one, so remove the %v it carries", set)
+	}
+	if source.IntervalSeconds != 0 {
+		this.fail(path+".interval_seconds", "an aggregate sums when the channel publishes and has no own interval")
 	}
 }
 
@@ -508,7 +602,11 @@ func (this *validator) checkContextSource(path string, key string, source Source
 		}
 	case SourceDataset:
 		this.checkDatasetFields(path, source)
-	case SourceScript, SourceFormula:
+	case SourceScript, SourceFormula, SourceAggregate:
+		//named rather than left to the unknown-kind default: these kinds exist,
+		//they are simply not available here, and "unknown" would send their
+		//author looking for a typo. An aggregate needs an asset to sum below,
+		//and a context key has none.
 		this.fail(path+".kind", "source kind %q is not supported for context sources", source.Kind)
 	case "":
 		this.fail(path+".kind", "must be set")

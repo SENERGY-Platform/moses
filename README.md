@@ -24,6 +24,7 @@ Each channel has a **source** that produces its value:
 | `profile` | a day/week pattern: base × hour factor × weekday factor, with spread and optional cumulation |
 | `dataset` | replay of an uploaded CSV timeseries (stored in GridFS, German CSV dialect detected, timezone parameter) |
 | `formula` | an [expr-lang/expr](https://github.com/expr-lang/expr) expression over other channels and the context |
+| `aggregate` | the sum of the same-`characteristic_id` channels of every asset whose `submetered_by` points here — no configuration, the meter tree is the configuration |
 
 The **context** is the site-wide state every zone and formula can read
 (`context.outdoor_temperature`). Static entries keep their value; *context

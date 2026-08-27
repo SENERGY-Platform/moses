@@ -151,6 +151,7 @@ replay history to kafka consumers.
 | `dataset` | yes | a pure function of the clock and an anchor |
 | `script` | no | stateful: its value depends on the state its earlier runs left behind, and that state does not exist for a past moment |
 | `formula` | no | derived: it follows from other channels and the context rather than being a series of its own |
+| `aggregate` | no | derived: it follows from the channels of the sub-metered assets rather than being a series of its own |
 
 Also skipped, each with its own reason in the status: a channel that does not
 publish on a schedule, an asset without a platform device, a channel without a
@@ -160,7 +161,10 @@ service whose time path is missing or unusable.
 A formula channel is the one worth a second look. Reconstructing it would mean
 reconstructing its inputs at every instant, which is exactly what the backfill
 of those inputs already writes — so the honest place to derive it is downstream,
-from the backfilled inputs, not here.
+from the backfilled inputs, not here. An `aggregate` channel is the same
+argument in structural form: its inputs are the channels of the sub-metered
+assets (`docs/submetering.md`), the backfill writes those, and a total over them
+is a sum a consumer can take at any moment it likes.
 
 ## The clock a profile is read by
 

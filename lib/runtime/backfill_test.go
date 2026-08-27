@@ -395,8 +395,13 @@ func TestABackfillSaysWhyItSkippedAChannel(t *testing.T) {
 	noService := profileChannel("ch-no-service", "", 3600, profile)
 	noTimePath := profileChannel("ch-no-time-path", ref("plain"), 3600, profile)
 	good := profileChannel("ch-good", ref("good"), 3600, profile)
+	aggregate := domain.Channel{
+		Id: "ch-aggregate", Name: "aggregate", Direction: domain.Sensor, ExternalRef: ref("aggregate"),
+		CharacteristicId: "urn:infai:ses:characteristic:kwh", IntervalSeconds: 3600,
+		Source: domain.Source{Kind: domain.SourceAggregate},
+	}
 
-	env := testEnvironment("env-bf-skip", scripted, formula, actuator, noService, noTimePath, good)
+	env := testEnvironment("env-bf-skip", scripted, formula, actuator, noService, noTimePath, good, aggregate)
 	publisher := &fakePublisher{shapeErr: map[string]error{ref("plain"): devices.ErrNoTimePath}}
 	rt := startRuntime(t, testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), publisher)
 
@@ -411,8 +416,8 @@ func TestABackfillSaysWhyItSkippedAChannel(t *testing.T) {
 		reasons[channel.ChannelId] = channel.SkipReason
 		backfillable[channel.ChannelId] = channel.Backfillable
 	}
-	if status.ChannelsTotal != 6 || status.ChannelsDone != 6 {
-		t.Errorf("expected all six channels to be reported, got %d of %d", status.ChannelsDone, status.ChannelsTotal)
+	if status.ChannelsTotal != 7 || status.ChannelsDone != 7 {
+		t.Errorf("expected all seven channels to be reported, got %d of %d", status.ChannelsDone, status.ChannelsTotal)
 	}
 	for id, expected := range map[string]string{
 		"ch-script":       "stateful",
@@ -420,6 +425,7 @@ func TestABackfillSaysWhyItSkippedAChannel(t *testing.T) {
 		"ch-actuator":     "does not publish on a schedule",
 		"ch-no-service":   "no platform service",
 		"ch-no-time-path": devices.ErrNoTimePath.Error(),
+		"ch-aggregate":    "derived from the channels of the sub-metered assets",
 	} {
 		if backfillable[id] {
 			t.Errorf("%v was treated as backfillable", id)
@@ -435,7 +441,7 @@ func TestABackfillSaysWhyItSkippedAChannel(t *testing.T) {
 	if len(publisher.backfilled(ref("good"))) != 25 {
 		t.Errorf("expected the one usable channel to publish 25 readings, got %d", len(publisher.backfilled(ref("good"))))
 	}
-	for _, skipped := range []string{ref("script"), ref("formula"), ref("actuator"), ref("plain")} {
+	for _, skipped := range []string{ref("script"), ref("formula"), ref("actuator"), ref("plain"), ref("aggregate")} {
 		if published := len(publisher.backfilled(skipped)); published != 0 {
 			t.Errorf("a skipped channel published %d readings to %v", published, skipped)
 		}
