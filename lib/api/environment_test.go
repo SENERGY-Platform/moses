@@ -28,10 +28,12 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SENERGY-Platform/moses/lib/config"
 	"github.com/SENERGY-Platform/moses/lib/domain"
 	"github.com/SENERGY-Platform/moses/lib/repo"
+	moses_runtime "github.com/SENERGY-Platform/moses/lib/runtime"
 	"github.com/SENERGY-Platform/moses/lib/test/helper"
 	"github.com/gin-gonic/gin"
 )
@@ -162,6 +164,7 @@ func testRouterWith(store repo.Environments, catalog DeviceCatalog, mirror Graph
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	EnvironmentEndpoints(config.Config{}, store, catalog, mirror, notifier, router)
+	BackfillEndpoints(config.Config{}, store, catalog, mirror, notifier, router)
 	return router
 }
 
@@ -173,6 +176,15 @@ type recordingNotifier struct {
 	removed  []string
 	changes  []repo.StateChange
 	setErr   error
+
+	// backfills records the windows StartBackfill was asked for, and
+	// startErr/statusErr are what the two backfill calls answer with, so a test
+	// can pin every status code the handlers map.
+	backfills  []moses_runtime.BackfillStatus
+	startErr   error
+	status     moses_runtime.BackfillStatus
+	statusErr  error
+	statusCall int
 }
 
 func (this *recordingNotifier) Reload(id string) { this.reloaded = append(this.reloaded, id) }
@@ -184,6 +196,25 @@ func (this *recordingNotifier) SetState(id string, change repo.StateChange) erro
 	}
 	this.changes = append(this.changes, change)
 	return nil
+}
+
+func (this *recordingNotifier) StartBackfill(id string, from time.Time, to time.Time) (moses_runtime.BackfillStatus, error) {
+	if this.startErr != nil {
+		return moses_runtime.BackfillStatus{}, this.startErr
+	}
+	status := moses_runtime.BackfillStatus{
+		EnvironmentId: id, State: moses_runtime.BackfillRunning, From: from, To: to,
+	}
+	this.backfills = append(this.backfills, status)
+	return status, nil
+}
+
+func (this *recordingNotifier) BackfillStatusOf(id string) (moses_runtime.BackfillStatus, error) {
+	this.statusCall++
+	if this.statusErr != nil {
+		return moses_runtime.BackfillStatus{}, this.statusErr
+	}
+	return this.status, nil
 }
 
 func TestTheRuntimeIsToldAboutExactlyTheChangedEnvironment(t *testing.T) {

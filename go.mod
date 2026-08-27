@@ -15,6 +15,7 @@ require (
 )
 
 require (
+	github.com/SENERGY-Platform/converter v0.0.12
 	github.com/SENERGY-Platform/device-repository v0.3.2
 	github.com/SENERGY-Platform/gin-middleware v0.14.1
 	github.com/SENERGY-Platform/go-service-base/config-hdl v1.2.0
@@ -37,7 +38,6 @@ require (
 	github.com/KyleBanks/depth v1.2.1 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/RyanCarrier/dijkstra v1.4.0 // indirect
-	github.com/SENERGY-Platform/converter v0.0.12 // indirect
 	github.com/SENERGY-Platform/developer-notifications v0.0.6 // indirect
 	github.com/SENERGY-Platform/go-env-loader v0.5.3 // indirect
 	github.com/SENERGY-Platform/mgw-cloud-proxy/cert-manager/lib v0.0.4 // indirect

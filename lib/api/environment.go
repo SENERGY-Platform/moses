@@ -455,6 +455,30 @@ func mayAccess(token sc_jwt.Token, env domain.Environment) bool {
 	return env.Owner == token.GetUserId() || token.IsAdmin()
 }
 
+// accessibleEnvironment reads one environment and answers the access question in
+// one step, writing the response itself when the answer is no. ok is false when
+// the handler must return without doing anything else.
+//
+// Missing and forbidden are both 404, as everywhere else here: existence is not
+// information for a caller without access.
+func accessibleEnvironment(gc *gin.Context, environments repo.Environments, token sc_jwt.Token, id string) (domain.Environment, bool) {
+	env, err := environments.Get(gc.Request.Context(), id)
+	switch {
+	case errors.Is(err, repo.ErrNotFound):
+		gc.String(http.StatusNotFound, "not found")
+		return env, false
+	case err != nil:
+		util.Logger.Error("unable to read environment", attributes.ErrorKey, err)
+		gc.String(http.StatusInternalServerError, "unable to read environment")
+		return env, false
+	}
+	if !mayAccess(token, env) {
+		gc.String(http.StatusNotFound, "not found")
+		return env, false
+	}
+	return env, true
+}
+
 // writeValidationError returns every problem with its path, so a caller can
 // mark the offending fields.
 func writeValidationError(gc *gin.Context, err error) {

@@ -29,6 +29,7 @@ import (
 	"github.com/SENERGY-Platform/moses/lib/config"
 	"github.com/SENERGY-Platform/moses/lib/devices"
 	"github.com/SENERGY-Platform/moses/lib/repo"
+	moses_runtime "github.com/SENERGY-Platform/moses/lib/runtime"
 	"github.com/SENERGY-Platform/moses/lib/state"
 	"github.com/SENERGY-Platform/moses/lib/util"
 	"github.com/gin-gonic/gin"
@@ -69,6 +70,16 @@ type RuntimeNotifier interface {
 	// reports ErrNotRunning for an environment the runtime does not hold, and a
 	// *repo.UnknownIdsError for zone or asset ids the definition does not have.
 	SetState(id string, change repo.StateChange) error
+
+	// StartBackfill reconstructs one environment over a past window and returns
+	// the job as it stands. It reports a *runtime.BackfillRangeError for a
+	// window it will not serve, runtime.ErrBackfillRunning when one is already
+	// running, and repo.ErrNotRunning for an environment it does not hold.
+	StartBackfill(id string, from time.Time, to time.Time) (moses_runtime.BackfillStatus, error)
+
+	// BackfillStatusOf follows a job. It reports runtime.ErrNoBackfill when
+	// nothing is known, which is also the answer after a restart.
+	BackfillStatusOf(id string) (moses_runtime.BackfillStatus, error)
 }
 
 // A nil notifier means the api runs as a store only, valid in a test, so this

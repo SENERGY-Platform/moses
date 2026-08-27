@@ -85,6 +85,19 @@ type Runtime struct {
 	commands map[commandKey]*runningChannel
 	devices  map[string]*environment
 
+	// backfills holds one job per environment, guarded by backfillMux, and
+	// backfillWorkers counts the goroutines running them so that Stop waits for
+	// the publish in flight instead of leaving it half sent.
+	//
+	// The registry is deliberately in memory only. A job is not resumable: it
+	// would have to know which readings already reached timescale, and timescale
+	// keeps a second one rather than replacing it. After a restart the honest
+	// answer is that nothing is known, which is what BackfillStatusOf gives.
+	backfillMux      sync.Mutex
+	backfills        map[string]*backfillJob
+	backfillWorkers  sync.WaitGroup
+	backfillsStopped bool
+
 	ctx     context.Context
 	cancel  context.CancelFunc
 	flusher sync.WaitGroup
@@ -146,6 +159,7 @@ func newRuntime(config config.Config, environments repo.Environments, states rep
 		envs:          map[string]*environment{},
 		commands:      map[commandKey]*runningChannel{},
 		devices:       map[string]*environment{},
+		backfills:     map[string]*backfillJob{},
 	}
 }
 
@@ -203,6 +217,10 @@ func (this *Runtime) Stop() {
 	for _, env := range envs {
 		env.runners.Wait()
 	}
+	//no further job is accepted and the running ones end; waited for so that a
+	//publish in flight finishes rather than being torn out of the connector
+	this.stopBackfills()
+	this.backfillWorkers.Wait()
 	this.flusher.Wait()
 	for _, env := range envs {
 		this.flush(env)
@@ -396,6 +414,10 @@ func (this *Runtime) stopRunners(id string) {
 // runners and the flush in flight are waited for. Only after that is it safe to
 // look at the stored state.
 func (this *Runtime) removeEnvironment(id string) {
+	//before anything else: a backfill of a deleted environment publishes to
+	//devices that are being deleted with it
+	this.cancelBackfill(id)
+
 	this.mux.Lock()
 	env := this.envs[id]
 	delete(this.envs, id)

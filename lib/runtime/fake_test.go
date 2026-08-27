@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/SENERGY-Platform/moses/lib/config"
+	"github.com/SENERGY-Platform/moses/lib/devices"
 	"github.com/SENERGY-Platform/moses/lib/domain"
 	"github.com/SENERGY-Platform/moses/lib/repo"
 )
@@ -211,19 +212,90 @@ type publishedEvent struct {
 	deviceRef  string
 	serviceRef string
 	value      interface{}
+	// at is the instant the event claims to have been taken at. For a live
+	// publish it is the moment of the call, for a backfilled one the historical
+	// instant, which is what the backfill tests assert on.
+	at time.Time
+	// live tells the two apart without having to reason about the clock.
+	live bool
 }
 
 type fakePublisher struct {
 	mux    sync.Mutex
 	events []publishedEvent
 	err    error
+
+	// shapeErr is what TimeShapeOf reports per service ref; the zero value (no
+	// entry) means the service takes a timestamp. A test that wants the
+	// ordinary "no time path" case puts devices.ErrNoTimePath in here.
+	shapeErr map[string]error
+
+	// failAt fails exactly the publishes whose instant it returns true for, so a
+	// test can make one reading of a backfill fail without failing the rest.
+	failAt func(at time.Time) error
+
+	// gate, when set, holds every timestamped publish until it is closed. It is
+	// how a test keeps a job running long enough to assert something about it.
+	// Written once before the runtime starts and never again, so reading it
+	// outside the mutex is not a race.
+	gate chan struct{}
 }
 
 func (this *fakePublisher) PublishEvent(externalDeviceRef string, externalServiceRef string, value interface{}) error {
 	this.mux.Lock()
 	defer this.mux.Unlock()
-	this.events = append(this.events, publishedEvent{deviceRef: externalDeviceRef, serviceRef: externalServiceRef, value: value})
+	this.events = append(this.events, publishedEvent{
+		deviceRef: externalDeviceRef, serviceRef: externalServiceRef, value: value,
+		at: time.Now(), live: true,
+	})
 	return this.err
+}
+
+func (this *fakePublisher) PublishEventAt(externalDeviceRef string, externalServiceRef string, value interface{}, at time.Time) error {
+	if this.gate != nil {
+		//before the lock: a test that reads the events while the job is held
+		//would otherwise block on it
+		<-this.gate
+	}
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	if this.failAt != nil {
+		if err := this.failAt(at); err != nil {
+			return err
+		}
+	}
+	this.events = append(this.events, publishedEvent{
+		deviceRef: externalDeviceRef, serviceRef: externalServiceRef, value: value, at: at,
+	})
+	return this.err
+}
+
+func (this *fakePublisher) TimeShapeOf(externalDeviceRef string, externalServiceRef string) (devices.TimeShape, error) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	if err, known := this.shapeErr[externalServiceRef]; known {
+		return devices.TimeShape{}, err
+	}
+	return devices.TimeShape{
+		RootName:  "root",
+		ValuePath: []string{"value"},
+		TimePath:  []string{"time"},
+		TimeUnit:  devices.TimeUnitMilliseconds,
+	}, nil
+}
+
+// backfilled returns the timestamped events of one channel in the order they
+// were published, which is the order the assertions are written in.
+func (this *fakePublisher) backfilled(serviceRef string) []publishedEvent {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	result := []publishedEvent{}
+	for _, event := range this.events {
+		if event.serviceRef == serviceRef && !event.live {
+			result = append(result, event)
+		}
+	}
+	return result
 }
 
 func (this *fakePublisher) all() []publishedEvent {

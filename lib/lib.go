@@ -18,6 +18,8 @@ package lib
 
 import (
 	"context"
+	"errors"
+
 	deviceRepo "github.com/SENERGY-Platform/device-repository/lib/client"
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/api"
@@ -41,7 +43,21 @@ func New(config config.Config, ctx context.Context) (err error) {
 		return err
 	}
 
+	//an event message is keyed by protocol segment name, and the event time
+	//travels in the same map under a reserved key. A protocol whose segment is
+	//named like that key would have its payload eaten by the time provider, so
+	//it is refused here rather than discovered as missing data
+	if config.ProtocolSegmentName == runtime.EventTimeKey {
+		return errors.New("protocol_segment_name must not be " + runtime.EventTimeKey + ", which is reserved for the event time")
+	}
+
 	connector, err := platform_connector_lib.New(platform_connector_lib.Config{
+		//the kafka record timestamp of an event. It is NOT what stamps the row
+		//in timescale - that time is read out of the payload at the service's
+		//senergy/time_path - but a record produced today under a timestamp of
+		//last month is what keeps the two consistent. See docs/backfill.md.
+		EventTimeProvider: runtime.EventTimeProvider,
+
 		PartitionsNum:            config.KafkaPartitionNum,
 		ReplicationFactor:        config.KafkaReplicationFactor,
 		FatalKafkaError:          config.FatalKafkaError,
@@ -241,6 +257,14 @@ func (this *environmentNotifier) SetState(id string, change repo.StateChange) er
 func (this *environmentNotifier) Remove(id string) {
 	this.runtime.Remove(id)
 	this.warn()
+}
+
+func (this *environmentNotifier) StartBackfill(id string, from time.Time, to time.Time) (runtime.BackfillStatus, error) {
+	return this.runtime.StartBackfill(id, from, to)
+}
+
+func (this *environmentNotifier) BackfillStatusOf(id string) (runtime.BackfillStatus, error) {
+	return this.runtime.BackfillStatusOf(id)
 }
 
 // warn reports the two double runs the per world cutover cannot prevent: an
