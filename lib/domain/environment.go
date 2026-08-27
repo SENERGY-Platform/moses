@@ -76,6 +76,18 @@ type Environment struct {
 	// cannot transfer ownership.
 	Owner string `json:"-" bson:"owner"`
 
+	// Version is counted by the server: every successful write increments it,
+	// and a client sends back the version of the document it read. The write is
+	// then refused unless the stored document is still that one, which is what
+	// keeps two editors from overwriting each other - and, with them, from
+	// deleting a device the winning document still publishes through.
+	//
+	// Zero means the client does not take part: the write goes through
+	// unchecked, and the version is still incremented. A document written before
+	// this field existed reads as zero too, so zero is never a version anybody
+	// has to defend.
+	Version int64 `json:"version" bson:"version"`
+
 	// ExternalGraphRef is the id of the graph this environment is mirrored as in
 	// the device-repository, so other applications can consume a simulated site
 	// like a real one.

@@ -214,17 +214,138 @@ func (this *Mongo) stateCollection() *mongo.Collection {
 	return this.client.Database(this.database).Collection(this.stateCollectionName)
 }
 
-func (this *Mongo) Put(ctx context.Context, env domain.Environment) error {
+// Put writes without a concurrency check and creates the document if it is not
+// there yet.
+func (this *Mongo) Put(ctx context.Context, env domain.Environment) (int64, error) {
 	if strings.TrimSpace(env.Id) == "" {
-		return fmt.Errorf("%w: environment", ErrMissingId)
+		return 0, fmt.Errorf("%w: environment", ErrMissingId)
 	}
 	ctx, cancel := withTimeout(ctx)
 	defer cancel()
-	err := upsert(ctx, this.environmentCollection(), bson.M{"id": env.Id}, env)
+	version, err := replaceAndIncrement(ctx, this.environmentCollection(), bson.M{"id": env.Id}, env, true)
 	if err != nil {
 		util.Logger.Error("unable to put environment", attributes.ErrorKey, err, "id", env.Id)
+		return 0, err
 	}
-	return err
+	return version, nil
+}
+
+// PutIfVersion writes only while the stored document still carries
+// expectedVersion. The comparison is the filter of the write itself, so it is
+// decided by the database on the document, not by this process on a copy it read
+// a moment ago.
+//
+// It never creates: a caller that carries a version read a document, and if that
+// document is gone, recreating it under the version of a deleted one would be
+// the opposite of what the caller asked for.
+func (this *Mongo) PutIfVersion(ctx context.Context, env domain.Environment, expectedVersion int64) (int64, error) {
+	if strings.TrimSpace(env.Id) == "" {
+		return 0, fmt.Errorf("%w: environment", ErrMissingId)
+	}
+	if expectedVersion < 1 {
+		//not treated as "no check": a stored document never carries a version
+		//below 1, so this can only be a caller mistake, and turning it into an
+		//unchecked write would remove the protection it asked for
+		return 0, fmt.Errorf("%w: expected version must be 1 or higher, got %d", ErrVersionConflict, expectedVersion)
+	}
+	ctx, cancel := withTimeout(ctx)
+	defer cancel()
+	version, err := replaceAndIncrement(ctx, this.environmentCollection(),
+		bson.M{"id": env.Id, "version": expectedVersion}, env, false)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		//nothing matched, so either the version moved on or the document is
+		//gone. Which of the two is worth saying, and the caller cannot find out
+		//without a read of its own
+		conflict := &VersionConflictError{Id: env.Id, Expected: expectedVersion}
+		conflict.Stored, conflict.Gone, conflict.StoredUnknown = this.versionOf(env.Id)
+		return 0, conflict
+	}
+	if err != nil {
+		util.Logger.Error("unable to put environment", attributes.ErrorKey, err, "id", env.Id)
+		return 0, err
+	}
+	return version, nil
+}
+
+// versionOf reads the version of a stored document, for a conflict message only.
+// It reports the three answers apart, because "it is gone", "it is at version 3"
+// and "this could not be read" send a caller to three different places.
+//
+// It takes a context of its own rather than the caller's: the caller's may
+// already be spent on the write that was just refused, and a message that then
+// claims the document disappeared would be worse than no message.
+func (this *Mongo) versionOf(id string) (version int64, gone bool, unknown bool) {
+	ctx, cancel := newContext()
+	defer cancel()
+	stored := storedVersion{}
+	err := this.environmentCollection().FindOne(ctx, bson.M{"id": id},
+		options.FindOne().SetProjection(bson.M{"version": 1})).Decode(&stored)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return 0, true, false
+	}
+	if err != nil {
+		util.Logger.Warn("unable to read the stored version for a conflict message", attributes.ErrorKey, err, "id", id)
+		return 0, false, true
+	}
+	return stored.Version, false, false
+}
+
+// storedVersion is the projection both the write and the conflict message read
+// back: the whole document would be transferred for one number otherwise.
+type storedVersion struct {
+	Version int64 `bson:"version"`
+}
+
+// replaceAndIncrement replaces the whole document and sets its version to the
+// stored version plus one, in the database, as one operation.
+//
+// The increment deliberately does not happen here: reading the version, adding
+// one and writing the result back would be a read-modify-write, and two writers
+// doing it at once would both write the same number - after which a
+// compare-and-swap could accept a document that was written over. The pipeline
+// below lets the server read, add and write in the same step on the same
+// document, so every successful write gets a version of its own.
+//
+// The filter decides what is written and what is refused: {id} writes whatever
+// is stored, {id, version} writes only that one version and matches nothing
+// otherwise, which is the compare-and-swap.
+func replaceAndIncrement(ctx context.Context, collection *mongo.Collection, filter bson.M, env domain.Environment, upsert bool) (int64, error) {
+	opts := options.FindOneAndUpdate().
+		SetUpsert(upsert).
+		SetReturnDocument(options.After).
+		SetProjection(bson.M{"version": 1})
+	stored := storedVersion{}
+	err := collection.FindOneAndUpdate(ctx, filter, versionedReplacement(env), opts).Decode(&stored)
+	if err != nil && upsert && mongo.IsDuplicateKeyError(err) {
+		//same race the plain upsert had: two writers find no document, both try
+		//to insert, and the unique index rejects one of them. The retry finds
+		//the document the other one inserted and replaces it. Documented by
+		//mongodb as the remedy for exactly this case.
+		err = collection.FindOneAndUpdate(ctx, filter, versionedReplacement(env), opts).Decode(&stored)
+	}
+	if err != nil {
+		return 0, err
+	}
+	return stored.Version, nil
+}
+
+// versionedReplacement is an update pipeline rather than a replacement document,
+// because a replacement cannot refer to what is stored and the new version has
+// to be the stored one plus one.
+//
+// $literal is not decoration: the document is data, and without it the
+// aggregation would read every string starting with a "$" as a field path - a
+// zone named "$hall" or, far more likely, a line of script code.
+func versionedReplacement(env domain.Environment) mongo.Pipeline {
+	//the version the caller handed in is overwritten by the second operand:
+	//$mergeObjects lets the later document win, and what a client sent is never
+	//what gets stored
+	return mongo.Pipeline{{{Key: "$replaceWith", Value: bson.M{"$mergeObjects": bson.A{
+		bson.M{"$literal": env},
+		//int64 literals on purpose: they make the stored version a bson int64
+		//whatever the arithmetic does, which is the type the document decodes into
+		bson.M{"version": bson.M{"$add": bson.A{bson.M{"$ifNull": bson.A{"$version", int64(0)}}, int64(1)}}},
+	}}}}}
 }
 
 // upsert replaces one document and retries once on a duplicate key error.

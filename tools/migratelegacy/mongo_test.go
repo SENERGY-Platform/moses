@@ -206,7 +206,7 @@ func TestMigrateAgainstMongo(t *testing.T) {
 	//accumulates runtime state
 	stored.Zones[0].Type = "room"
 	stored.Name = "Industry (corrected)"
-	if err := environments.Put(ctx, stored); err != nil {
+	if _, err := environments.Put(ctx, stored); err != nil {
 		t.Fatal(err)
 	}
 	if err := environments.States().Save(ctx, repo.RuntimeState{

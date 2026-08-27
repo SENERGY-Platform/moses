@@ -21,12 +21,56 @@ package repo
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/SENERGY-Platform/moses/lib/domain"
 )
 
 var ErrNotFound = errors.New("environment not found")
+
+// ErrVersionConflict is what a write gets when the stored document has moved on
+// since the caller read it. Every conflict is reported as a
+// *VersionConflictError wrapping this, so a caller can either match the class
+// with errors.Is or read both versions out with errors.As.
+var ErrVersionConflict = errors.New("version conflict")
+
+// VersionConflictError carries both sides of a refused compare-and-swap. Both
+// numbers are in the message because the only useful reaction is to read the
+// document again, and a caller that cannot see how far behind it was cannot
+// tell a stale editor from a lost write.
+type VersionConflictError struct {
+	Id string
+	// Expected is the version the caller carried.
+	Expected int64
+	// Stored is the version the document carries now, meaningful unless Gone or
+	// StoredUnknown say otherwise.
+	Stored int64
+	// Gone says the document is not there at all, which is a different message
+	// and a different fix. It is not derived from Stored being zero: a document
+	// written before the version field existed is stored and reads as zero, and
+	// telling its author that it disappeared would send them looking for the
+	// wrong thing.
+	Gone bool
+	// StoredUnknown says the stored version could not be read back - a refused
+	// write and a failed read at once. Naming a version that was never read
+	// would be worse than admitting it: the advice is the same either way.
+	StoredUnknown bool
+}
+
+func (this *VersionConflictError) Error() string {
+	switch {
+	case this.Gone:
+		return fmt.Sprintf("the document was changed since you read it: you carry version %d, and it no longer exists — reload and redo your change", this.Expected)
+	case this.StoredUnknown:
+		return fmt.Sprintf("the document was changed since you read it: you carry version %d, and the stored one could not be read — reload and redo your change", this.Expected)
+	}
+	return fmt.Sprintf("the document was changed since you read it: you carry version %d, stored is %d — reload and redo your change", this.Expected, this.Stored)
+}
+
+// Unwrap makes errors.Is(err, ErrVersionConflict) work, so a caller that only
+// wants the status code does not have to know the type.
+func (this *VersionConflictError) Unwrap() error { return ErrVersionConflict }
 
 // RuntimeState holds the live values of one environment: initial_states as
 // evolved by the running simulation.
@@ -105,8 +149,26 @@ type Approach struct {
 
 // Environments stores environment definitions.
 type Environments interface {
-	// Put replaces any previous definition under the same id.
-	Put(ctx context.Context, env domain.Environment) error
+	// Put replaces any previous definition under the same id, without a
+	// concurrency check, and returns the version the stored document carries
+	// afterwards. The version is counted up by the store itself and never taken
+	// from the document handed in: two writers arriving at once must not end up
+	// on the same number, or a third caller's compare-and-swap would compare
+	// against a version that two different documents wore.
+	//
+	// A document that did not exist yet starts at version 1.
+	Put(ctx context.Context, env domain.Environment) (version int64, err error)
+
+	// PutIfVersion is Put with a compare-and-swap: it writes only while the
+	// stored document still carries expectedVersion, and reports a
+	// *VersionConflictError otherwise. The comparison and the write are one
+	// operation in the store - checking first and writing after would leave the
+	// same race, only narrower.
+	//
+	// expectedVersion must be 1 or higher. A caller that does not know the
+	// stored version calls Put; passing zero here is refused rather than
+	// silently downgraded to an unchecked write.
+	PutIfVersion(ctx context.Context, env domain.Environment, expectedVersion int64) (version int64, err error)
 
 	// Get returns ErrNotFound if no such environment exists.
 	Get(ctx context.Context, id string) (domain.Environment, error)

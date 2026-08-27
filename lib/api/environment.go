@@ -17,6 +17,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"os"
@@ -122,6 +123,8 @@ func getEnvironmentH(environments repo.Environments, catalog DeviceCatalog, mirr
 
 // @Summary Create or replace one environment
 // @Description Idempotent. The id in the path wins over the one in the body, so a document can be copied to a new id without editing it. Ownership comes from the token on create and never transfers on update. An asset without an external_ref gets a platform device created for it, and a device created that way is deleted again when the asset that carried it is gone from the document; a device attached to an asset by the caller is never deleted. external_managed says which is which and is decided by the server, so sending it has no effect. The environment is also mirrored as a graph in the device-repository, rebuilt from the document on every save, so a change made to that graph by hand does not survive; external_graph_ref names the graph and is decided by the server, so sending it has no effect either.
+// @Description
+// @Description Send back the `version` of the document you read and the write is refused with 409 if anybody stored a change in between; the response of every successful write carries the new version. Sending 0, or leaving the field out, writes unchecked — which is what a client that knows nothing of the field does, and what makes losing a concurrent edit, and the devices only the other document still references, possible.
 // @Tags Environment
 // @Accept json
 // @Produce json
@@ -132,6 +135,7 @@ func getEnvironmentH(environments repo.Environments, catalog DeviceCatalog, mirr
 // @Failure 400 {object} domain.ValidationError "every problem, with the path of the offending field"
 // @Failure 401 {string} string "the token carries no subject"
 // @Failure 404 {string} string "the environment belongs to somebody else"
+// @Failure 409 {string} string "the document was changed since it was read; the message names both versions"
 // @Failure 500 {string} string "error message"
 // @Router /environments/{id} [put]
 func putEnvironmentH(environments repo.Environments, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
@@ -148,6 +152,9 @@ func putEnvironmentH(environments repo.Environments, catalog DeviceCatalog, mirr
 		}
 		// path wins over body, so a document can be copied to a new id
 		env.Id = gc.Param("id")
+		// read out before anything else touches the document: this is the one
+		// field of the body that is about the write rather than about the content
+		carried := env.Version
 
 		// previous stays nil for a document that is new under this id, including a
 		// copy put under a fresh one: nothing of it was provisioned by moses, so
@@ -164,8 +171,28 @@ func putEnvironmentH(environments repo.Environments, catalog DeviceCatalog, mirr
 			// ownership never transfers through an import
 			env.Owner = existing.Owner
 			previous = &existing
+			// The conflict is decided HERE, before anything outside the store is
+			// touched. Everything below has an effect that outlives a refused
+			// request: provisioning creates platform devices, mirrorGraph rewrites
+			// a graph, and the cleanup after the write deletes devices - and it is
+			// that last one the version exists for, because a loser deleting a
+			// device the winner still publishes through is the damage.
+			//
+			// This check is NOT the guard. Two callers can pass it in the same
+			// instant; the compare-and-swap in the store is what decides. What it
+			// is, is the difference between the ordinary conflict - a second
+			// editor working from a stale document - having no side effects at
+			// all, and having the side effects of a write that never happened.
+			if carried > 0 && carried != existing.Version {
+				writeVersionConflict(gc, env.Id, carried, existing.Version)
+				return
+			}
 		case errors.Is(err, repo.ErrNotFound):
 			env.Owner = token.GetUserId()
+			// a version carried against a document that is not stored is not a
+			// conflict: putting an export under a new id is how a document is
+			// copied, and that export carries the version of the original
+			carried = 0
 		default:
 			util.Logger.Error("unable to read environment", attributes.ErrorKey, err)
 			gc.String(http.StatusInternalServerError, "unable to read environment")
@@ -198,12 +225,28 @@ func putEnvironmentH(environments repo.Environments, catalog DeviceCatalog, mirr
 		//Best effort: see mirrorGraph
 		mirrorGraph(mirror, token, &env)
 
-		err = environments.Put(gc.Request.Context(), env)
-		if err != nil {
+		stored, err := storeEnvironment(gc.Request.Context(), environments, env, carried)
+		conflict := &repo.VersionConflictError{}
+		switch {
+		case err == nil:
+		case errors.As(err, &conflict):
+			// the narrow case the check above cannot catch: the winning write
+			// landed between the read and this one. The devices this call may
+			// have created are left standing and logged, which is the same thing
+			// a failed write has always left behind - and the cleanup below,
+			// the one that deletes, is what does not run
+			util.Logger.Warn("a concurrent write won, this one was refused",
+				"environment", env.Id, "carried_version", conflict.Expected, "stored_version", conflict.Stored)
+			gc.String(http.StatusConflict, "%s", conflict.Error())
+			return
+		default:
 			util.Logger.Error("unable to store environment", attributes.ErrorKey, err)
 			gc.String(http.StatusInternalServerError, "unable to store environment")
 			return
 		}
+		// the store counts the version, so the answer carries what it decided and
+		// not what the request brought
+		env.Version = stored
 		// after the write: the runtime reads the definition back, so notifying
 		// earlier would restart it on the old one
 		notifyReload(notifier, env.Id)
@@ -215,8 +258,29 @@ func putEnvironmentH(environments repo.Environments, catalog DeviceCatalog, mirr
 	}
 }
 
+// storeEnvironment writes with the concurrency check the caller asked for.
+// carried is the version the client sent back, and zero is what a client that
+// does not know the field sends - those writes go through unchecked, and are
+// still given a version of their own by the store.
+func storeEnvironment(ctx context.Context, environments repo.Environments, env domain.Environment, carried int64) (int64, error) {
+	if carried > 0 {
+		return environments.PutIfVersion(ctx, env, carried)
+	}
+	return environments.Put(ctx, env)
+}
+
+// writeVersionConflict answers a refused write with both versions in the
+// message: the only useful reaction is to read the document again, and a caller
+// that cannot see how far behind it was cannot tell a stale editor from a bug.
+func writeVersionConflict(gc *gin.Context, id string, carried int64, stored int64) {
+	conflict := &repo.VersionConflictError{Id: id, Expected: carried, Stored: stored}
+	util.Logger.Info("refused a write against an outdated version",
+		"environment", id, "carried_version", carried, "stored_version", stored)
+	gc.String(http.StatusConflict, "%s", conflict.Error())
+}
+
 // @Summary Create an environment with a server assigned id
-// @Description Any id in the body is ignored. Nested entities may omit their ids and get one assigned. An asset without an external_ref gets a platform device created for it, which is then deleted again when the asset or the environment is gone; a device attached to an asset by the caller is never deleted. external_managed is decided by the server and is always false on create. The environment is also mirrored as a graph in the device-repository; external_graph_ref names that graph and is assigned by the server, so sending it has no effect.
+// @Description Any id in the body is ignored. Nested entities may omit their ids and get one assigned. An asset without an external_ref gets a platform device created for it, which is then deleted again when the asset or the environment is gone; a device attached to an asset by the caller is never deleted. external_managed is decided by the server and is always false on create. The environment is also mirrored as a graph in the device-repository; external_graph_ref names that graph and is assigned by the server, so sending it has no effect. A version in the body is ignored as well: a document that is being created has nothing to be concurrent with, and the one in the response is the one to send back on the next PUT.
 // @Tags Environment
 // @Accept json
 // @Produce json
@@ -241,6 +305,10 @@ func postEnvironmentH(environments repo.Environments, catalog DeviceCatalog, mir
 		}
 		env.Id = ""
 		env.Owner = token.GetUserId()
+		//a create has nothing to be concurrent with: the id is assigned here and
+		//nobody else knows it yet, so a version in the body is as meaningless as
+		//the id in it
+		env.Version = 0
 		domain.AssignIds(&env)
 
 		err = domain.Validate(env)
@@ -263,12 +331,15 @@ func postEnvironmentH(environments repo.Environments, catalog DeviceCatalog, mir
 
 		mirrorGraph(mirror, token, &env)
 
-		err = environments.Put(gc.Request.Context(), env)
+		//unchecked on purpose: the id is fresh, so there is no stored version to
+		//compare against, and the store starts a new document at 1
+		stored, err := environments.Put(gc.Request.Context(), env)
 		if err != nil {
 			util.Logger.Error("unable to store environment", attributes.ErrorKey, err)
 			gc.String(http.StatusInternalServerError, "unable to store environment")
 			return
 		}
+		env.Version = stored
 		notifyReload(notifier, env.Id)
 		gc.JSON(http.StatusCreated, env)
 	}

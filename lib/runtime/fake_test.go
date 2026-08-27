@@ -51,11 +51,25 @@ func newFakeEnvironments(envs ...domain.Environment) *fakeEnvironments {
 	return result
 }
 
-func (this *fakeEnvironments) Put(ctx context.Context, env domain.Environment) error {
+func (this *fakeEnvironments) Put(ctx context.Context, env domain.Environment) (int64, error) {
 	this.mux.Lock()
 	defer this.mux.Unlock()
+	env.Version = this.stored[env.Id].Version + 1
 	this.stored[env.Id] = env
-	return nil
+	return env.Version, nil
+}
+
+// PutIfVersion is here for the interface; the runtime never writes a definition.
+func (this *fakeEnvironments) PutIfVersion(ctx context.Context, env domain.Environment, expectedVersion int64) (int64, error) {
+	this.mux.Lock()
+	stored, exists := this.stored[env.Id]
+	this.mux.Unlock()
+	if !exists || stored.Version != expectedVersion {
+		return 0, &repo.VersionConflictError{
+			Id: env.Id, Expected: expectedVersion, Stored: stored.Version, Gone: !exists,
+		}
+	}
+	return this.Put(ctx, env)
 }
 
 func (this *fakeEnvironments) Get(ctx context.Context, id string) (domain.Environment, error) {

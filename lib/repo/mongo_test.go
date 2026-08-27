@@ -194,14 +194,19 @@ func TestMongoPutAndGetPreserveTheWholeTree(t *testing.T) {
 	ctx := testContext(t)
 	want := testEnvironment("env-1", "Metallbau", "owner-1")
 
-	err := store.Put(ctx, want)
+	version, err := store.Put(ctx, want)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if version != 1 {
+		t.Errorf("a document that did not exist starts at version 1, got %d", version)
 	}
 	got, err := store.Get(ctx, "env-1")
 	if err != nil {
 		t.Fatal(err)
 	}
+	//the version is the one field the store decides rather than preserves
+	want.Version = version
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the stored tree came back changed:\nwant %#v\ngot  %#v", want, got)
 	}
@@ -210,7 +215,7 @@ func TestMongoPutAndGetPreserveTheWholeTree(t *testing.T) {
 func TestMongoGetDecodesFreeFormValuesTheWayTheLegacyDriverDid(t *testing.T) {
 	store := testStore(t)
 	ctx := testContext(t)
-	err := store.Put(ctx, testEnvironment("env-1", "Metallbau", "owner-1"))
+	_, err := store.Put(ctx, testEnvironment("env-1", "Metallbau", "owner-1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,9 +255,14 @@ func TestMongoPutTwiceStoresOneDocument(t *testing.T) {
 	ctx := testContext(t)
 	env := testEnvironment("env-1", "Metallbau", "owner-1")
 	for run := 0; run < 3; run++ {
-		err := store.Put(ctx, env)
+		version, err := store.Put(ctx, env)
 		if err != nil {
 			t.Fatal(err)
+		}
+		//every write gets a version of its own, counted from what is stored and
+		//not from the document handed in - which still carries 0 on every run
+		if want := int64(run + 1); version != want {
+			t.Errorf("expected version %d after put %d, got %d", want, run+1, version)
 		}
 	}
 	if count := countDocuments(t, store, "environments"); count != 1 {
@@ -262,6 +272,7 @@ func TestMongoPutTwiceStoresOneDocument(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	env.Version = 3
 	if !reflect.DeepEqual(got, env) {
 		t.Errorf("a repeated put changed the document:\nwant %#v\ngot  %#v", env, got)
 	}
@@ -270,14 +281,14 @@ func TestMongoPutTwiceStoresOneDocument(t *testing.T) {
 func TestMongoPutReplacesTheDocumentInsteadOfMergingIt(t *testing.T) {
 	store := testStore(t)
 	ctx := testContext(t)
-	err := store.Put(ctx, testEnvironment("env-1", "Metallbau", "owner-1"))
+	_, err := store.Put(ctx, testEnvironment("env-1", "Metallbau", "owner-1"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	//a removed zone must be gone, not merged with what was stored before
 	smaller := testEnvironment("env-1", "Metallbau", "owner-1")
 	smaller.Zones = []domain.Zone{}
-	err = store.Put(ctx, smaller)
+	_, err = store.Put(ctx, smaller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +303,7 @@ func TestMongoPutReplacesTheDocumentInsteadOfMergingIt(t *testing.T) {
 
 func TestMongoPutRejectsAnEnvironmentWithoutId(t *testing.T) {
 	store := testStore(t)
-	err := store.Put(testContext(t), testEnvironment("  ", "Metallbau", "owner-1"))
+	_, err := store.Put(testContext(t), testEnvironment("  ", "Metallbau", "owner-1"))
 	if !errors.Is(err, ErrMissingId) {
 		t.Errorf("expected an error wrapping ErrMissingId, got %v", err)
 	}
@@ -310,7 +321,7 @@ func TestMongoListByOwnerReturnsOnlyThatOwnersEnvironmentsOrderedByName(t *testi
 		testEnvironment("env-2", "beta", "owner-1"),
 		testEnvironment("env-4", "aaa", "owner-2"),
 	} {
-		err := store.Put(ctx, env)
+		_, err := store.Put(ctx, env)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -335,7 +346,7 @@ func TestMongoListByOwnerOrdersEqualNamesById(t *testing.T) {
 	store := testStore(t)
 	ctx := testContext(t)
 	for _, id := range []string{"env-c", "env-a", "env-b"} {
-		err := store.Put(ctx, testEnvironment(id, "same name", "owner-1"))
+		_, err := store.Put(ctx, testEnvironment(id, "same name", "owner-1"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -371,7 +382,7 @@ func TestMongoAllReturnsEveryEnvironment(t *testing.T) {
 		testEnvironment("env-1", "a", "owner-1"),
 		testEnvironment("env-2", "b", "owner-2"),
 	} {
-		err := store.Put(ctx, env)
+		_, err := store.Put(ctx, env)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -388,7 +399,7 @@ func TestMongoAllReturnsEveryEnvironment(t *testing.T) {
 func TestMongoAllSkipsAnUndecodableDocument(t *testing.T) {
 	store := testStore(t)
 	ctx := testContext(t)
-	err := store.Put(ctx, testEnvironment("env-1", "readable", "owner-1"))
+	_, err := store.Put(ctx, testEnvironment("env-1", "readable", "owner-1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -413,7 +424,7 @@ func TestMongoDeleteRemovesTheDefinitionAndTheState(t *testing.T) {
 	store := testStore(t)
 	states := store.States()
 	ctx := testContext(t)
-	err := store.Put(ctx, testEnvironment("env-1", "Metallbau", "owner-1"))
+	_, err := store.Put(ctx, testEnvironment("env-1", "Metallbau", "owner-1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -524,7 +535,7 @@ func TestMongoStateDeleteKeepsTheDefinition(t *testing.T) {
 	store := testStore(t)
 	states := store.States()
 	ctx := testContext(t)
-	err := store.Put(ctx, testEnvironment("env-1", "Metallbau", "owner-1"))
+	_, err := store.Put(ctx, testEnvironment("env-1", "Metallbau", "owner-1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -550,21 +561,40 @@ func TestMongoConcurrentPutOfTheSameEnvironmentStoresOneDocument(t *testing.T) {
 	ctx := testContext(t)
 	//an upsert on a unique index can be rejected with a duplicate key error when
 	//two writers race on a document that does not exist yet
-	errs := make(chan error, 20)
+	const writers = 20
+	errs := make(chan error, writers)
+	versions := make(chan int64, writers)
 	wg := sync.WaitGroup{}
-	for run := 0; run < 20; run++ {
+	for run := 0; run < writers; run++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs <- store.Put(ctx, testEnvironment("env-1", "Metallbau", "owner-1"))
+			version, err := store.Put(ctx, testEnvironment("env-1", "Metallbau", "owner-1"))
+			errs <- err
+			versions <- version
 		}()
 	}
 	wg.Wait()
 	close(errs)
+	close(versions)
 	for err := range errs {
 		if err != nil {
 			t.Errorf("a concurrent put failed: %v", err)
 		}
+	}
+	//the point of counting the version in the database rather than in this
+	//process: twenty unchecked writers must produce twenty different versions.
+	//A read-modify-write here would hand the same number to several of them, and
+	//a compare-and-swap later would then accept a document that was written over.
+	seen := map[int64]bool{}
+	for version := range versions {
+		if version < 1 || version > writers {
+			t.Errorf("a version outside 1..%d: %d", writers, version)
+		}
+		if seen[version] {
+			t.Errorf("two concurrent writes were given the same version %d", version)
+		}
+		seen[version] = true
 	}
 	if count := countDocuments(t, store, "environments"); count != 1 {
 		t.Errorf("expected 1 document after concurrent puts, got %d", count)

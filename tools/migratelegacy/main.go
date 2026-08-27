@@ -261,7 +261,9 @@ func create(ctx context.Context, environments repo.Environments, plan migration.
 	if !errors.Is(err, repo.ErrNotFound) {
 		return actionWriteFailed, "", fmt.Errorf("unable to check whether the environment already exists: %w", err)
 	}
-	if err := environments.Put(ctx, plan.Environment); err != nil {
+	//the version the store assigns is of no use here: nothing reads it back, and
+	//a migrated document is written exactly once
+	if _, err := environments.Put(ctx, plan.Environment); err != nil {
 		return actionWriteFailed, "", err
 	}
 	return actionCreated, "", nil

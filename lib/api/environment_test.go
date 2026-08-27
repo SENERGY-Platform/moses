@@ -44,18 +44,46 @@ import (
 type fakeEnvironments struct {
 	stored  map[string]domain.Environment
 	failing error
+
+	// beforeWrite runs inside a write, after the handler decided to make it and
+	// before it lands. It is how a test puts a competing write exactly into the
+	// window the handler's own version check cannot cover.
+	beforeWrite func()
 }
 
 func newFakeEnvironments() *fakeEnvironments {
 	return &fakeEnvironments{stored: map[string]domain.Environment{}}
 }
 
-func (this *fakeEnvironments) Put(ctx context.Context, env domain.Environment) error {
+func (this *fakeEnvironments) Put(ctx context.Context, env domain.Environment) (int64, error) {
 	if this.failing != nil {
-		return this.failing
+		return 0, this.failing
 	}
+	return this.write(env), nil
+}
+
+func (this *fakeEnvironments) PutIfVersion(ctx context.Context, env domain.Environment, expectedVersion int64) (int64, error) {
+	if this.failing != nil {
+		return 0, this.failing
+	}
+	if this.beforeWrite != nil {
+		this.beforeWrite()
+	}
+	stored, exists := this.stored[env.Id]
+	if !exists || stored.Version != expectedVersion {
+		return 0, &repo.VersionConflictError{
+			Id: env.Id, Expected: expectedVersion, Stored: stored.Version, Gone: !exists,
+		}
+	}
+	return this.write(env), nil
+}
+
+// write counts the version the way the store does: from what is stored, never
+// from the document handed in.
+func (this *fakeEnvironments) write(env domain.Environment) int64 {
+	env.Version = this.stored[env.Id].Version + 1
 	this.stored[env.Id] = env
-	return nil
+	return env.Version
 }
 
 func (this *fakeEnvironments) Get(ctx context.Context, id string) (domain.Environment, error) {
@@ -361,8 +389,15 @@ func TestPutIsIdempotent(t *testing.T) {
 	if err := json.Unmarshal(second.Body.Bytes(), &again); err != nil {
 		t.Fatal(err)
 	}
+	//the version is the one field a repeated put is expected to move: it counts
+	//writes, not content, and a client that sends the document back a second
+	//time has to be given the number to send along the third time
+	if again.Version != returned.Version+1 {
+		t.Errorf("expected the version to go from %d to %d, got %d", returned.Version, returned.Version+1, again.Version)
+	}
+	again.Version = returned.Version
 	if !jsonEqual(t, returned, again) {
-		t.Fatalf("expected the second put to be a no-op\nfirst:  %s\nsecond: %s", first.Body.String(), second.Body.String())
+		t.Fatalf("expected the second put to change nothing but the version\nfirst:  %s\nsecond: %s", first.Body.String(), second.Body.String())
 	}
 }
 

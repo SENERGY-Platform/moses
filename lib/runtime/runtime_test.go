@@ -252,7 +252,7 @@ func TestReloadOnlyTouchesItsOwnEnvironment(t *testing.T) {
 
 	changed := `moses.world.state.set("n", moses.world.state.get("n") + 1); moses.service.send("v2-" + moses.world.state.get("n"));`
 	updated := testEnvironment("env-a", scriptChannel("ch-1", domain.Sensor, 1, serviceRefOf("env-a"), changed))
-	if err := envs.Put(context.Background(), updated); err != nil {
+	if _, err := envs.Put(context.Background(), updated); err != nil {
 		t.Fatal(err)
 	}
 	rt.Reload("env-a")

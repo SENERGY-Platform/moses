@@ -63,13 +63,19 @@ func newFakeEnvironments(stored ...domain.Environment) *fakeEnvironments {
 	return result
 }
 
-func (this *fakeEnvironments) Put(ctx context.Context, env domain.Environment) error {
+func (this *fakeEnvironments) Put(ctx context.Context, env domain.Environment) (int64, error) {
 	this.puts++
 	if err := this.putErr[env.Id]; err != nil {
-		return err
+		return 0, err
 	}
+	env.Version = this.stored[env.Id].Version + 1
 	this.stored[env.Id] = env
-	return nil
+	return env.Version, nil
+}
+
+// PutIfVersion is here for the interface; the migration only ever creates.
+func (this *fakeEnvironments) PutIfVersion(ctx context.Context, env domain.Environment, expectedVersion int64) (int64, error) {
+	return 0, errors.New("the migration must never write against a version")
 }
 
 func (this *fakeEnvironments) Get(ctx context.Context, id string) (domain.Environment, error) {
