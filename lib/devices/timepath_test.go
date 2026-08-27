@@ -57,16 +57,32 @@ func timeMember(name string, characteristic string) models.ContentVariable {
 	return models.ContentVariable{Name: name, Type: models.Integer, CharacteristicId: characteristic}
 }
 
-func TestResolveTimeShapeAcceptsTheUnitsThePlatformCanRead(t *testing.T) {
+func timeTextMember(name string, characteristic string) models.ContentVariable {
+	return models.ContentVariable{Name: name, Type: models.String, CharacteristicId: characteristic}
+}
+
+// TestResolveTimeShapeAcceptsEveryTimeThePlatformCanRead covers all four time
+// characteristics. Nanoseconds and the iso timestamp were refused here until
+// platform-connector-lib c8133d0 repaired the ingestion; lib/devices/ingestion_test.go
+// holds them to that against the dependency itself.
+func TestResolveTimeShapeAcceptsEveryTimeThePlatformCanRead(t *testing.T) {
 	for name, testCase := range map[string]struct {
-		characteristic string
-		unit           TimeUnit
+		timeVariable models.ContentVariable
+		encoding     TimeEncoding
 	}{
-		"seconds":      {characteristics.UnixSeconds, TimeUnitSeconds},
-		"milliseconds": {characteristics.UnixMilliSeconds, TimeUnitMilliseconds},
+		"seconds":      {timeMember("time", characteristics.UnixSeconds), TimeAsUnixSeconds},
+		"milliseconds": {timeMember("time", characteristics.UnixMilliSeconds), TimeAsUnixMilliseconds},
+		"nanoseconds":  {timeMember("time", characteristics.UnixNanoSeconds), TimeAsUnixNanoseconds},
+		"nanoseconds as a string": {
+			timeTextMember("time", characteristics.UnixNanoSeconds), TimeAsUnixNanosecondText},
+		"iso timestamp": {timeTextMember("time", characteristics.IsoTimestamp), TimeAsIsoTimestamp},
+		//a float declaration is a number too, which is what the ingestion reads
+		"seconds declared as a float": {
+			models.ContentVariable{Name: "time", Type: models.Float, CharacteristicId: characteristics.UnixSeconds},
+			TimeAsUnixSeconds},
 	} {
 		t.Run(name, func(t *testing.T) {
-			service := timedService("root.time", valueMember("value"), timeMember("time", testCase.characteristic))
+			service := timedService("root.time", valueMember("value"), testCase.timeVariable)
 			shape, err := ResolveTimeShape(service)
 			if err != nil {
 				t.Fatalf("expected the service to be usable, got %v", err)
@@ -80,8 +96,8 @@ func TestResolveTimeShapeAcceptsTheUnitsThePlatformCanRead(t *testing.T) {
 			if !reflect.DeepEqual(shape.TimePath, []string{"time"}) {
 				t.Errorf("expected the time at [time], got %v", shape.TimePath)
 			}
-			if shape.TimeUnit != testCase.unit {
-				t.Errorf("expected the unit %v, got %v", testCase.unit, shape.TimeUnit)
+			if shape.TimeEncoding != testCase.encoding {
+				t.Errorf("expected the encoding %v, got %v", testCase.encoding, shape.TimeEncoding)
 			}
 		})
 	}
@@ -149,32 +165,46 @@ func TestResolveTimeShapeReportsTheOrdinaryCase(t *testing.T) {
 
 // TestResolveTimeShapeRefusesWhatThePlatformCannotIngest pins every rejection
 // with the reason it exists for. Each of these would otherwise reach the
-// platform and either lose the row or, for nanoseconds, take the connector
-// process down; TestThePlatformReallyCannotIngestTheRefusedUnits proves the two
-// unit cases against the dependency itself.
+// platform and lose the row or the message.
+//
+// What is left of the two characteristics that used to be refused outright is a
+// declaration check: the ingestion reads a unix time out of a number and an iso
+// timestamp out of a string, so a variable typed as the other one cannot carry
+// the time no matter which characteristic it names.
 func TestResolveTimeShapeRefusesWhatThePlatformCannotIngest(t *testing.T) {
 	for name, testCase := range map[string]struct {
 		service  models.Service
 		contains string
 	}{
-		"nanoseconds": {
-			timedService("root.time", valueMember("value"), timeMember("time", characteristics.UnixNanoSeconds)),
-			"nanoseconds",
-		},
-		"iso timestamp": {
-			timedService("root.time", valueMember("value"),
-				models.ContentVariable{Name: "time", Type: models.String, CharacteristicId: characteristics.IsoTimestamp}),
-			"iso timestamp",
-		},
 		"time without a characteristic": {
 			timedService("root.time", valueMember("value"),
 				models.ContentVariable{Name: "time", Type: models.Integer}),
 			"no characteristic",
 		},
-		"time is not a number": {
+		"seconds declared as a string": {
 			timedService("root.time", valueMember("value"),
-				models.ContentVariable{Name: "time", Type: models.String, CharacteristicId: characteristics.UnixSeconds}),
-			"has to be a number",
+				timeTextMember("time", characteristics.UnixSeconds)),
+			"in seconds has to be a number",
+		},
+		"milliseconds declared as a string": {
+			timedService("root.time", valueMember("value"),
+				timeTextMember("time", characteristics.UnixMilliSeconds)),
+			"in milliseconds has to be a number",
+		},
+		"iso timestamp declared as a number": {
+			timedService("root.time", valueMember("value"),
+				timeMember("time", characteristics.IsoTimestamp)),
+			"iso timestamp has to be a string",
+		},
+		"nanoseconds declared as a boolean": {
+			timedService("root.time", valueMember("value"),
+				models.ContentVariable{Name: "time", Type: models.Boolean, CharacteristicId: characteristics.UnixNanoSeconds}),
+			"in nanoseconds has to be a number or its digits as a string",
+		},
+		"a characteristic that is not a time": {
+			timedService("root.time", valueMember("value"),
+				timeMember("time", energyCharacteristic)),
+			"is not a time the platform can read",
 		},
 		"value is not a number": {
 			timedService("root.time",
@@ -252,30 +282,91 @@ func TestResolveTimeShapeRefusesAnOutputMosesCannotFill(t *testing.T) {
 	}
 }
 
+// TestPayloadPutsValueAndTimeAtTheirPaths pins the wire shape of every encoding,
+// down to the go type: a number that arrived as a string, or the other way
+// round, is a row the ingestion cannot read.
 func TestPayloadPutsValueAndTimeAtTheirPaths(t *testing.T) {
-	//not a round number of seconds, so a unit that truncates is visible
-	at := time.Date(2026, 3, 14, 15, 9, 26, 535_000_000, time.UTC)
+	//sub-second and sub-millisecond digits, so an encoding that truncates is
+	//visible rather than accidentally right
+	at := time.Date(2026, 3, 14, 15, 9, 26, 535_897_123, time.UTC)
 
-	seconds := TimeShape{RootName: "root", ValuePath: []string{"value"}, TimePath: []string{"time"}, TimeUnit: TimeUnitSeconds}
-	want := map[string]interface{}{"value": 42.5, "time": at.Unix()}
-	if got := seconds.Payload(42.5, at); !reflect.DeepEqual(got, want) {
-		t.Errorf("expected %#v, got %#v", want, got)
+	for name, testCase := range map[string]struct {
+		encoding TimeEncoding
+		want     interface{}
+	}{
+		"seconds":                 {TimeAsUnixSeconds, at.Unix()},
+		"milliseconds":            {TimeAsUnixMilliseconds, at.UnixMilli()},
+		"nanoseconds":             {TimeAsUnixNanoseconds, at.UnixNano()},
+		"nanoseconds as a string": {TimeAsUnixNanosecondText, "1773500966535897123"},
+		"iso timestamp":           {TimeAsIsoTimestamp, "2026-03-14T15:09:26.535897123Z"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			shape := TimeShape{RootName: "root", ValuePath: []string{"value"},
+				TimePath: []string{"time"}, TimeEncoding: testCase.encoding}
+			want := map[string]interface{}{"value": 42.5, "time": testCase.want}
+			if got := shape.Payload(42.5, at); !reflect.DeepEqual(got, want) {
+				t.Errorf("expected %#v, got %#v", want, got)
+			}
+		})
 	}
+}
 
-	millis := TimeShape{RootName: "root", ValuePath: []string{"value"}, TimePath: []string{"time"}, TimeUnit: TimeUnitMilliseconds}
-	want = map[string]interface{}{"value": 42.5, "time": at.UnixMilli()}
-	if got := millis.Payload(42.5, at); !reflect.DeepEqual(got, want) {
-		t.Errorf("expected %#v, got %#v", want, got)
+// TestPayloadWritesAnIsoTimestampInUtc: the instant is what matters, but the
+// text must not depend on where moses runs - two servers in different zones have
+// to put the same bytes on the wire for the same reading.
+func TestPayloadWritesAnIsoTimestampInUtc(t *testing.T) {
+	shape := TimeShape{RootName: "root", ValuePath: []string{"value"},
+		TimePath: []string{"time"}, TimeEncoding: TimeAsIsoTimestamp}
+	at := time.Date(2026, 3, 14, 15, 9, 26, 0, time.UTC)
+
+	east := shape.Payload(1, at.In(time.FixedZone("east", 9*60*60)))["time"]
+	west := shape.Payload(1, at.In(time.FixedZone("west", -5*60*60)))["time"]
+	if east != west {
+		t.Errorf("expected the same text from either zone, got %v and %v", east, west)
+	}
+	if east != "2026-03-14T15:09:26Z" {
+		t.Errorf("expected the utc form, got %v", east)
+	}
+}
+
+// TestPayloadDropsNoDigitsOfAnIsoTimestamp: RFC3339Nano omits trailing zeros of
+// the fractional second, which is fine, but it must not omit leading ones - a
+// timestamp 4 ns past the second is .000000004 and not .4.
+func TestPayloadDropsNoDigitsOfAnIsoTimestamp(t *testing.T) {
+	shape := TimeShape{RootName: "root", ValuePath: []string{"value"},
+		TimePath: []string{"time"}, TimeEncoding: TimeAsIsoTimestamp}
+
+	for _, testCase := range []struct {
+		nanosecond int
+		want       string
+	}{
+		{0, "2026-03-14T15:09:26Z"},
+		{4, "2026-03-14T15:09:26.000000004Z"},
+		{500_000_000, "2026-03-14T15:09:26.5Z"},
+		{999_999_999, "2026-03-14T15:09:26.999999999Z"},
+	} {
+		at := time.Date(2026, 3, 14, 15, 9, 26, testCase.nanosecond, time.UTC)
+		if got := shape.Payload(1, at)["time"]; got != testCase.want {
+			t.Errorf("expected %v for %d ns, got %v", testCase.want, testCase.nanosecond, got)
+		}
+		//and whatever it wrote, the ingestion's own layout has to read it back
+		parsed, err := time.Parse(time.RFC3339, shape.Payload(1, at)["time"].(string))
+		if err != nil {
+			t.Fatalf("the ingestion could not parse %v: %v", shape.Payload(1, at)["time"], err)
+		}
+		if parsed.UnixNano() != at.UnixNano() {
+			t.Errorf("expected %v to read back as %v, got %v", testCase.want, at.UnixNano(), parsed.UnixNano())
+		}
 	}
 }
 
 func TestPayloadBuildsTheContainersOfANestedPath(t *testing.T) {
 	at := time.Date(2026, 3, 14, 15, 9, 26, 0, time.UTC)
 	shape := TimeShape{
-		RootName:  "root",
-		ValuePath: []string{"reading", "kwh"},
-		TimePath:  []string{"meta", "taken_at"},
-		TimeUnit:  TimeUnitMilliseconds,
+		RootName:     "root",
+		ValuePath:    []string{"reading", "kwh"},
+		TimePath:     []string{"meta", "taken_at"},
+		TimeEncoding: TimeAsUnixMilliseconds,
 	}
 	want := map[string]interface{}{
 		"reading": map[string]interface{}{"kwh": 7.25},
@@ -291,10 +382,10 @@ func TestPayloadBuildsTheContainersOfANestedPath(t *testing.T) {
 func TestPayloadSharesAContainerBetweenValueAndTime(t *testing.T) {
 	at := time.Date(2026, 3, 14, 15, 9, 26, 0, time.UTC)
 	shape := TimeShape{
-		RootName:  "root",
-		ValuePath: []string{"m", "kwh"},
-		TimePath:  []string{"m", "t"},
-		TimeUnit:  TimeUnitSeconds,
+		RootName:     "root",
+		ValuePath:    []string{"m", "kwh"},
+		TimePath:     []string{"m", "t"},
+		TimeEncoding: TimeAsUnixSeconds,
 	}
 	want := map[string]interface{}{"m": map[string]interface{}{"kwh": 1.5, "t": at.Unix()}}
 	if got := shape.Payload(1.5, at); !reflect.DeepEqual(got, want) {

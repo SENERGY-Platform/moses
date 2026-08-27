@@ -291,10 +291,10 @@ func (this *fakePublisher) TimeShapeOf(externalDeviceRef string, externalService
 		return devices.TimeShape{}, err
 	}
 	return devices.TimeShape{
-		RootName:  "root",
-		ValuePath: []string{"value"},
-		TimePath:  []string{"time"},
-		TimeUnit:  devices.TimeUnitMilliseconds,
+		RootName:     "root",
+		ValuePath:    []string{"value"},
+		TimePath:     []string{"time"},
+		TimeEncoding: devices.TimeAsUnixMilliseconds,
 	}, nil
 }
 

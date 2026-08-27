@@ -5,7 +5,7 @@ go 1.26
 toolchain go1.26.6
 
 require (
-	github.com/SENERGY-Platform/platform-connector-lib v0.0.0-20260826082643-802ca9df203c
+	github.com/SENERGY-Platform/platform-connector-lib v0.0.0-20260827082232-c8133d0f997d
 	github.com/bradfitz/gomemcache v0.0.0-20230905024940-24af94b03874 // indirect
 	github.com/cbroglie/mustache v1.4.0
 	github.com/google/uuid v1.6.0

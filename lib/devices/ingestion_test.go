@@ -17,7 +17,15 @@
 package devices
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"math"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -33,20 +41,34 @@ import (
 // stack of this repository (lib/test/server) brings up kafka, mongodb,
 // memcached, the device-repository and permissions-v2, but no postgres, so
 // nothing here could observe a written row. What can be observed without one is
-// the part that decides the row's timestamp, and every piece of it except a ten
-// line flatten is exported: the connector's marshaller, its message cleaning and
-// the converter's cast are all called here as the platform calls them.
+// the part that decides the row's timestamp: the connector's marshaller, its
+// message cleaning and the converter's cast are exported and are called here
+// exactly as the platform calls them.
 //
-// That is the whole point of these tests. They pin why ResolveTimeShape refuses
-// two of the four time characteristics, against the dependency rather than
-// against a comment - so a version bump that repairs either case fails here and
-// prompts the refusal to be lifted, instead of leaving it in place forever.
+// Two links of that chain are not exported - psql.flatten and
+// psql.toNanoseconds - and neither is reachable through psql.Publisher, whose
+// only constructor dials postgres. They are mirrored below, and
+// TestTheMirroredIngestionInternalsAreStillTheOnesInTheLib fails as soon as the
+// file they were read from changes, so a bump cannot silently invalidate them.
+//
+// That guard is the point. Until platform-connector-lib c8133d0 this file
+// pinned the two broken cases by *reproducing* them against the converter and a
+// copy of flatten rather than by observing the lib, so when the lib was repaired
+// the tests kept passing and said nothing. What they pin now is the repair.
 
-// flattenLikeThePlatform is a verbatim copy of `flatten` in
-// platform-connector-lib psql/publisher.go at
-// v0.0.0-20260826082643-802ca9df203c. It is copied because it is unexported and
-// because its string handling - the single quotes it adds for the sql literal -
-// is exactly what the iso timestamp case founders on.
+// libraryVersionThePinsWereReadFrom / publisherSourceSha256 record which
+// psql/publisher.go the mirrors below were taken from. See
+// TestTheMirroredIngestionInternalsAreStillTheOnesInTheLib.
+const (
+	libraryVersionThePinsWereReadFrom = "v0.0.0-20260827082232-c8133d0f997d"
+	publisherSourceSha256             = "0879fda0606d558f64649eed846c6560c95a3eab50f2863aad9d8e8a533b3e74"
+)
+
+// flattenLikeThePlatform mirrors `flatten` in platform-connector-lib
+// psql/publisher.go. It used to wrap every string in the single quotes the sql
+// literal needs, which is what an iso timestamp foundered on; since c8133d0 it
+// leaves values as they were decoded and the quoting happens in formatValue,
+// after the time has been read.
 func flattenLikeThePlatform(m map[string]interface{}) (values map[string]interface{}) {
 	values = make(map[string]interface{})
 	for k, v := range m {
@@ -56,8 +78,6 @@ func flattenLikeThePlatform(m map[string]interface{}) (values map[string]interfa
 			for nk, nv := range nm {
 				values[k+"."+nk] = nv
 			}
-		case string:
-			values[k] = "'" + v.(string) + "'"
 		default:
 			values[k] = v
 		}
@@ -65,11 +85,37 @@ func flattenLikeThePlatform(m map[string]interface{}) (values map[string]interfa
 	return values
 }
 
+// toNanosecondsLikeThePlatform mirrors `toNanoseconds` in platform-connector-lib
+// psql/publisher.go. It replaced the bare `timeVal.(int64)` that used to panic
+// in a goroutine with no recover.
+func toNanosecondsLikeThePlatform(value interface{}) (nanoseconds int64, err error) {
+	switch v := value.(type) {
+	case int64:
+		return v, nil
+	case int:
+		return int64(v), nil
+	case int32:
+		return int64(v), nil
+	case float64:
+		if v >= float64(math.MaxInt64) || v < float64(math.MinInt64) {
+			return 0, fmt.Errorf("timestamp %v is out of range for unix nanoseconds", v)
+		}
+		return int64(v), nil
+	case float32:
+		return toNanosecondsLikeThePlatform(float64(v))
+	case json.Number:
+		return v.Int64()
+	case string:
+		return strconv.ParseInt(v, 10, 64)
+	default:
+		return 0, fmt.Errorf("unable to interpret %T as unix nanoseconds", value)
+	}
+}
+
 // ingest runs one reading through the platform's own code, from the bytes moses
-// puts on the wire to the nanosecond timestamp the ingestion stamps the row
-// with. It mirrors handleDeviceEvent -> unmarshalMsg -> CleanMsg ->
-// psql.Publish.
-func ingest(t *testing.T, service models.Service, shape TimeShape, value float64, at time.Time) (interface{}, error) {
+// puts on the wire to the instant the ingestion stamps the row with. It mirrors
+// handleDeviceEvent -> unmarshalMsg -> CleanMsg -> psql.Publish/getTimeString.
+func ingest(t *testing.T, service models.Service, shape TimeShape, value float64, at time.Time) (time.Time, error) {
 	t.Helper()
 
 	//what connectorPublisher.PublishEventAt puts into the protocol segment
@@ -97,7 +143,8 @@ func ingest(t *testing.T, service models.Service, shape TimeShape, value float64
 		t.Fatalf("the platform rejected the message: %v", err)
 	}
 
-	//psql.Publish: flatten, look the time up by its full dotted path, cast it
+	//getTimeString: flatten, look the time up by its full dotted path, cast it,
+	//then interpret whatever type came back
 	flat := flattenLikeThePlatform(message)
 	timePath := output.ContentVariable.Name + "." + strings.Join(shape.TimePath, ".")
 	timeValue, found := flat[timePath]
@@ -112,102 +159,194 @@ func ingest(t *testing.T, service models.Service, shape TimeShape, value float64
 	if err != nil {
 		t.Fatal(err)
 	}
-	return conv.Cast(timeValue, timeVariable.CharacteristicId, characteristics.UnixNanoSeconds)
+	cast, err := conv.Cast(timeValue, timeVariable.CharacteristicId, characteristics.UnixNanoSeconds)
+	if err != nil {
+		return time.Time{}, err
+	}
+	nanoseconds, err := toNanosecondsLikeThePlatform(cast)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Unix(0, nanoseconds).UTC(), nil
+}
+
+// TestTheMirroredIngestionInternalsAreStillTheOnesInTheLib guards the two copies
+// above. They cannot be called in the dependency - both are unexported and
+// psql.Publisher is only constructible by dialling postgres - so the next best
+// thing a bump can be held to is that the file they were read from is unchanged.
+//
+// A failure here is not a defect, it is the prompt this file exists for: read
+// psql/publisher.go again, check that flatten still leaves strings alone and
+// that toNanoseconds still interprets what moses sends, update the mirrors and
+// the two constants above.
+func TestTheMirroredIngestionInternalsAreStillTheOnesInTheLib(t *testing.T) {
+	go_, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatalf("need the go tool to locate the dependency's source: %v", err)
+	}
+	locate := exec.Command(go_, "list", "-m", "-f", "{{.Dir}}\t{{.Version}}",
+		"github.com/SENERGY-Platform/platform-connector-lib")
+	//the module is in the cache already, the test binary was linked against it;
+	//GOPROXY=off keeps a misconfigured environment from turning this into a
+	//network call that hangs
+	locate.Env = append(os.Environ(), "GOPROXY=off")
+	out, err := locate.Output()
+	if err != nil {
+		t.Fatalf("could not locate platform-connector-lib: %v", err)
+	}
+	dir, version, ok := strings.Cut(strings.TrimSpace(string(out)), "\t")
+	if !ok || dir == "" {
+		t.Fatalf("unexpected go list output %q", string(out))
+	}
+	if version != libraryVersionThePinsWereReadFrom {
+		t.Fatalf("platform-connector-lib is %v, the ingestion mirrors in this file were read from %v; "+
+			"re-read psql/publisher.go and update them", version, libraryVersionThePinsWereReadFrom)
+	}
+
+	source, err := os.ReadFile(filepath.Join(dir, "psql", "publisher.go"))
+	if err != nil {
+		t.Fatalf("could not read the ingestion source: %v", err)
+	}
+	sum := sha256.Sum256(source)
+	if got := hex.EncodeToString(sum[:]); got != publisherSourceSha256 {
+		t.Fatalf("psql/publisher.go hashes to %v, the mirrors in this file were read from %v; "+
+			"re-read it and update them", got, publisherSourceSha256)
+	}
 }
 
 // TestThePlatformStampsTheRowWithTheInstantMosesSends is the contract the whole
 // backfill rests on: what comes out at the far end is the instant that went in,
-// down to the resolution of the declared unit.
+// to the resolution of the declared encoding.
 func TestThePlatformStampsTheRowWithTheInstantMosesSends(t *testing.T) {
-	//deliberately not a round second: a unit that silently truncated would
-	//otherwise be indistinguishable from one that did not
-	at := time.Date(2026, 3, 14, 15, 9, 26, 535_897_000, time.UTC)
+	//deliberately not a round second, and with digits below the millisecond, so
+	//an encoding that silently truncated would be distinguishable from one that
+	//did not
+	at := time.Date(2026, 3, 14, 15, 9, 26, 535_897_123, time.UTC)
 
 	for name, testCase := range map[string]struct {
-		characteristic string
-		want           time.Time
+		timeVariable models.ContentVariable
+		want         time.Time
 	}{
-		"seconds":      {characteristics.UnixSeconds, at.Truncate(time.Second)},
-		"milliseconds": {characteristics.UnixMilliSeconds, at.Truncate(time.Millisecond)},
+		"seconds": {
+			timeMember("time", characteristics.UnixSeconds),
+			time.Unix(at.Unix(), 0).UTC()},
+		"milliseconds": {
+			timeMember("time", characteristics.UnixMilliSeconds),
+			time.UnixMilli(at.UnixMilli()).UTC()},
+		//the one lossy encoding: the json number is decoded into a float64,
+		//which around 1.8e18 only represents every 256th integer
+		"nanoseconds": {
+			timeMember("time", characteristics.UnixNanoSeconds),
+			time.Unix(0, int64(float64(at.UnixNano()))).UTC()},
+		"nanoseconds as a string": {
+			timeTextMember("time", characteristics.UnixNanoSeconds), at},
+		"iso timestamp": {
+			timeTextMember("time", characteristics.IsoTimestamp), at},
 	} {
 		t.Run(name, func(t *testing.T) {
-			service := timedService("root.time", valueMember("value"), timeMember("time", testCase.characteristic))
+			service := timedService("root.time", valueMember("value"), testCase.timeVariable)
 			shape, err := ResolveTimeShape(service)
 			if err != nil {
 				t.Fatalf("expected the service to be usable, got %v", err)
 			}
-			out, err := ingest(t, service, shape, 42.5, at)
+			got, err := ingest(t, service, shape, 42.5, at)
 			if err != nil {
 				t.Fatalf("the ingestion could not read the time moses sent: %v", err)
 			}
-			//the ingestion asserts exactly this type, without checking
-			nanos, isInt64 := out.(int64)
-			if !isInt64 {
-				t.Fatalf("the ingestion asserts int64 and would panic on %T", out)
-			}
-			if got := time.Unix(0, nanos).UTC(); !got.Equal(testCase.want) {
+			if !got.Equal(testCase.want) {
 				t.Errorf("expected the row to be stamped %v, got %v", testCase.want, got)
 			}
 		})
 	}
 }
 
-// TestTheIngestionWouldPanicOnANanosecondTime is the first reason
-// ResolveTimeShape refuses that unit. The converter short circuits on
-// `from == to` and hands back what json produced, which is a float64, and the
-// ingestion then asserts it to an int64 in a goroutine with no recover.
+// TestTheIngestionReadsANanosecondTimeWithinTheFloat64Grid replaces the pin that
+// used to say this unit crashes the connector. It now says what the repair costs:
+// the value is read, and it is read through a float64, which is where the
+// timestamp loses its last digits.
 //
-// Should this ever come back as an int64, the refusal in ResolveTimeShape is
-// obsolete and this test says so by failing.
-func TestTheIngestionWouldPanicOnANanosecondTime(t *testing.T) {
+// Should the loss ever disappear - a decoder using json.Number, say - the second
+// half of this test fails and the note in timeValue and docs/backfill.md can go.
+func TestTheIngestionReadsANanosecondTimeWithinTheFloat64Grid(t *testing.T) {
+	at := time.Date(2026, 3, 14, 15, 9, 26, 535_897_123, time.UTC)
+	service := timedService("root.time", valueMember("value"),
+		timeMember("time", characteristics.UnixNanoSeconds))
+	shape, err := ResolveTimeShape(service)
+	if err != nil {
+		t.Fatalf("expected a nanosecond service to be usable, got %v", err)
+	}
+
+	//the cast itself still hands back a float64: the converter short circuits on
+	//`from == to`, which is why the ingestion needs its own type switch
 	conv, err := converter.New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	//what json.Unmarshal into an interface{} produces for a nanosecond epoch
-	asJson := float64(time.Date(2026, 3, 14, 15, 9, 26, 0, time.UTC).UnixNano())
-	out, err := conv.Cast(asJson, characteristics.UnixNanoSeconds, characteristics.UnixNanoSeconds)
+	cast, err := conv.Cast(float64(at.UnixNano()), characteristics.UnixNanoSeconds, characteristics.UnixNanoSeconds)
 	if err != nil {
-		t.Fatalf("expected the cast to succeed and return the wrong type, got the error %v", err)
+		t.Fatalf("expected the cast to pass the value through, got %v", err)
 	}
-	if _, isInt64 := out.(int64); isInt64 {
-		t.Fatalf("the converter now returns an int64 for a nanosecond time; ResolveTimeShape can stop refusing it")
+	if _, isInt64 := cast.(int64); isInt64 {
+		t.Error("the converter now returns an int64 for a nanosecond time; " +
+			"the ingestion's type switch is no longer what keeps this working")
 	}
 
-	//and even with a working assertion the value itself no longer survives the
-	//trip: a nanosecond epoch is past the point where a float64 is exact
-	exact := time.Date(2026, 3, 14, 15, 9, 26, 535_897_123, time.UTC).UnixNano()
-	if int64(float64(exact)) == exact {
-		t.Errorf("expected a nanosecond epoch to lose precision as a float64, but %v survived", exact)
+	got, err := ingest(t, service, shape, 42.5, at)
+	if err != nil {
+		t.Fatalf("expected the ingestion to read a nanosecond time, got %v", err)
+	}
+
+	//exactly the value the float64 round trip produces, not merely close to it
+	if want := time.Unix(0, int64(float64(at.UnixNano()))).UTC(); !got.Equal(want) {
+		t.Errorf("expected %v, got %v", want, got)
+	}
+	//1.8e18 lies between 2^60 and 2^61, where float64 steps by 2^8, so the
+	//rounding is to the nearest 256 ns and the error is at most half of that
+	off := got.UnixNano() - at.UnixNano()
+	if off < -128 || off > 128 {
+		t.Errorf("expected the rounding to stay within 128 ns, got %d ns", off)
+	}
+	if off == 0 {
+		t.Error("expected this instant to lose precision as a float64; if it no longer does, " +
+			"the rounding note in timeValue and docs/backfill.md is obsolete")
 	}
 }
 
-// TestTheIngestionWouldNeverReadAnIsoTime is the second reason. The ingestion
-// flattens before it reads the time, and flatten wraps a string in the single
-// quotes it needs for the sql literal, so what reaches the converter is not a
-// timestamp any more.
-func TestTheIngestionWouldNeverReadAnIsoTime(t *testing.T) {
-	at := time.Date(2026, 3, 14, 15, 9, 26, 0, time.UTC)
-	conv, err := converter.New()
+// TestTheIngestionReadsAnIsoTime replaces the pin that used to say an iso
+// timestamp is never read. flatten no longer quotes, so the string reaches
+// time.Parse intact - and it is the encoding that carries the instant exactly.
+func TestTheIngestionReadsAnIsoTime(t *testing.T) {
+	at := time.Date(2026, 3, 14, 15, 9, 26, 535_897_123, time.UTC)
+	service := timedService("root.time", valueMember("value"),
+		timeTextMember("time", characteristics.IsoTimestamp))
+	shape, err := ResolveTimeShape(service)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("expected an iso service to be usable, got %v", err)
 	}
 
-	//unquoted, the cast is fine - which is what makes the failure so easy to
-	//miss when reading the converter alone
-	if _, err = conv.Cast(at.Format(time.RFC3339), characteristics.IsoTimestamp, characteristics.UnixNanoSeconds); err != nil {
-		t.Fatalf("expected an unquoted iso timestamp to cast, got %v", err)
+	//the quoting is what used to break this, so pin that it is gone rather than
+	//only pinning the outcome
+	flat := flattenLikeThePlatform(map[string]interface{}{"time": at.Format(time.RFC3339Nano)})
+	if quoted, isString := flat["time"].(string); !isString || strings.HasPrefix(quoted, "'") {
+		t.Fatalf("the ingestion quotes strings before it reads the time again; got %#v", flat["time"])
 	}
 
-	quoted := flattenLikeThePlatform(map[string]interface{}{"time": at.Format(time.RFC3339)})["time"]
-	if _, err = conv.Cast(quoted, characteristics.IsoTimestamp, characteristics.UnixNanoSeconds); err == nil {
-		t.Fatalf("the ingestion now reads a quoted iso timestamp; ResolveTimeShape can stop refusing it")
+	got, err := ingest(t, service, shape, 42.5, at)
+	if err != nil {
+		t.Fatalf("expected the ingestion to read an iso timestamp, got %v", err)
+	}
+	if !got.Equal(at) {
+		t.Errorf("expected an iso timestamp to survive to the nanosecond: wanted %v, got %v", at, got)
 	}
 }
 
 // TestTheTwoShapesMosesMustNotSendToATimedService is why the live path was
 // changed along with the backfill rather than left alone. Both alternatives to
 // carrying the time are measured here against the platform's own code.
+//
+// The second one used to take the connector process down. Since c8133d0 it is a
+// rejected row and a notification to the device's owners instead - per reading,
+// which is still a reason not to send it.
 func TestTheTwoShapesMosesMustNotSendToATimedService(t *testing.T) {
 	service := timedService("root.time", valueMember("value"), timeMember("time", characteristics.UnixSeconds))
 	root := service.Outputs[0].ContentVariable.Name
@@ -223,7 +362,7 @@ func TestTheTwoShapesMosesMustNotSendToATimedService(t *testing.T) {
 		}
 	})
 
-	t.Run("an object without the time panics the ingestion", func(t *testing.T) {
+	t.Run("an object without the time loses the row", func(t *testing.T) {
 		cleaned, err := msgvalidation.Clean(
 			map[string]interface{}{root: map[string]interface{}{"value": 42.5}}, service)
 		if err != nil {
@@ -246,16 +385,11 @@ func TestTheTwoShapesMosesMustNotSendToATimedService(t *testing.T) {
 		if err != nil {
 			t.Fatalf("expected the cast to pass the null through, got %v", err)
 		}
-		//and this is the assertion the ingestion makes, unguarded, in a
-		//goroutine with no recover
-		func() {
-			defer func() {
-				if recover() == nil {
-					t.Error("the ingestion no longer panics on a null time; the live path could stop carrying one")
-				}
-			}()
-			_ = cast.(int64)
-		}()
+		//and this is where the ingestion gives up on the row and notifies the
+		//device's owners; it used to be an unguarded assertion that panicked
+		if _, err := toNanosecondsLikeThePlatform(cast); err == nil {
+			t.Error("the ingestion now accepts a null time; the live path could stop carrying one")
+		}
 	})
 }
 
@@ -275,5 +409,79 @@ func TestTheMessageMosesSendsSurvivesTheMessageCleaning(t *testing.T) {
 	}
 	if _, err = ingest(t, service, shape, 42.5, at); err != nil {
 		t.Fatalf("the platform could not ingest a payload that leaves a member out: %v", err)
+	}
+}
+
+// TestEveryBackfillableEncodingSurvivesAWholeWindow walks a window the way a job
+// does. A single instant can be right by luck - a rounding that happens to land
+// on the value, a format that happens to have no fractional part - so this
+// checks that the whole series keeps its order and its spacing.
+func TestEveryBackfillableEncodingSurvivesAWholeWindow(t *testing.T) {
+	start := time.Date(2026, 3, 14, 15, 9, 26, 535_897_123, time.UTC)
+	step := 37*time.Second + 421*time.Millisecond
+
+	for name, testCase := range map[string]struct {
+		timeVariable models.ContentVariable
+		//how far the stamped instant may fall short of the one moses meant, and
+		//how far it may overshoot it; a truncating encoding only ever falls
+		//short, a rounding one can do either
+		shortfall time.Duration
+		overshoot time.Duration
+	}{
+		"seconds": {timeMember("time", characteristics.UnixSeconds),
+			time.Second - time.Nanosecond, 0},
+		"milliseconds": {timeMember("time", characteristics.UnixMilliSeconds),
+			time.Millisecond - time.Nanosecond, 0},
+		"nanoseconds":             {timeMember("time", characteristics.UnixNanoSeconds), 128, 128},
+		"nanoseconds as a string": {timeTextMember("time", characteristics.UnixNanoSeconds), 0, 0},
+		"iso timestamp":           {timeTextMember("time", characteristics.IsoTimestamp), 0, 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			service := timedService("root.time", valueMember("value"), testCase.timeVariable)
+			shape, err := ResolveTimeShape(service)
+			if err != nil {
+				t.Fatalf("expected the service to be usable, got %v", err)
+			}
+			previous := time.Time{}
+			for i := 0; i < 64; i++ {
+				at := start.Add(time.Duration(i) * step)
+				got, err := ingest(t, service, shape, float64(i), at)
+				if err != nil {
+					t.Fatalf("reading %d at %v: %v", i, at, err)
+				}
+				if off := got.Sub(at); off > testCase.overshoot || off < -testCase.shortfall {
+					t.Fatalf("reading %d at %v was stamped %v, off by %v", i, at, got, off)
+				}
+				if !previous.IsZero() && !got.After(previous) {
+					t.Fatalf("reading %d at %v was stamped %v, which is not after %v", i, at, got, previous)
+				}
+				previous = got
+			}
+		})
+	}
+}
+
+// TestAnInstantOutsideTheWindowTheApiAllowsIsNotSilentlyWrapped: UnixNano is only
+// defined between 1678 and 2262, and the api refuses a window that starts before
+// the year 2000 or ends in the future. This pins that the two limits really do
+// keep the nanosecond encodings inside their range, so nothing has to guard for
+// it further down.
+func TestAnInstantOutsideTheWindowTheApiAllowsIsNotSilentlyWrapped(t *testing.T) {
+	shape := TimeShape{RootName: "root", ValuePath: []string{"value"},
+		TimePath: []string{"time"}, TimeEncoding: TimeAsUnixNanoseconds}
+
+	earliest := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	latest := time.Date(2200, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, at := range []time.Time{earliest, latest} {
+		nanos, isInt64 := shape.Payload(1, at)["time"].(int64)
+		if !isInt64 {
+			t.Fatalf("expected an int64 for %v, got %T", at, shape.Payload(1, at)["time"])
+		}
+		if nanos <= 0 {
+			t.Errorf("expected %v to have a positive nanosecond epoch, got %d", at, nanos)
+		}
+		if back := time.Unix(0, nanos).UTC(); !back.Equal(at) {
+			t.Errorf("expected %v to survive UnixNano, got %v", at, back)
+		}
 	}
 }

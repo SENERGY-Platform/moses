@@ -48,31 +48,66 @@ repository, deliberately, by whoever owns the type. The job reports every
 channel it had to skip, with the reason, so the gap is visible rather than
 silent.
 
-## Only two of the four time units work
+## All four time characteristics work, one of them approximately
 
 The attribute names a content variable, and that variable's characteristic says
-what unit its number is in. Four exist. **Only unix seconds and unix
-milliseconds are accepted**, and the two rejections are not caution:
+how its value is to be read. Four exist, and **all four are backfillable since
+`platform-connector-lib` `c8133d0`** (module version
+`v0.0.0-20260827082232-c8133d0f997d`, 2026-08-27). Two of them were refused here
+before that, and the reasons are worth keeping, because they say what a
+regression would look like:
 
-- **Unix nanoseconds crashes the connector process.** The ingestion casts the
-  value to `UnixNanoSeconds` and then writes `timeVal.(int64)`. For a value that
-  is already in nanoseconds the converter short-circuits on `from == to` and
-  returns what the json marshaller produced, which is a `float64` — so the
-  assertion panics, in a goroutine of `sendEventEnvelope` that has no recover.
-  Separately, a nanosecond epoch (1.8e18) is far past the point where a float64
-  represents integers exactly (9.0e15), so even a corrected assertion would
-  round the timestamp.
-- **An iso timestamp is never read.** The ingestion flattens the message before
-  it looks the time up, and `flatten` wraps every string in the single quotes it
-  needs for the SQL literal. What reaches `time.Parse` is
-  `'2026-01-01T00:00:00Z'`, which it rejects. The row is not written and the
-  device's owner is notified — once per reading.
+- **Unix nanoseconds used to crash the connector process.** The ingestion casts
+  the value to `UnixNanoSeconds` and then wrote `timeVal.(int64)`. For a value
+  that is already in nanoseconds the converter short-circuits on `from == to`
+  and returns what the json decoder produced, which is a `float64` — so the
+  assertion panicked, in a goroutine of `sendEventEnvelope` that has no recover.
+  It now goes through `toNanoseconds`, a type switch over `int64`, `int`,
+  `int32`, `float64`, `float32`, `json.Number` and `string`.
+- **An iso timestamp used never to be read.** The ingestion flattened the
+  message before it looked the time up, and `flatten` wrapped every string in
+  the single quotes it needs for the SQL literal, so what reached `time.Parse`
+  was `'2026-01-01T00:00:00Z'`. `flatten` now leaves values as they were
+  decoded and the quoting happens in `formatValue`, after the time has been read.
 
-Both were read from `platform-connector-lib` `psql/publisher.go` at
-`v0.0.0-20260826082643-802ca9df203c` and the converter it pins.
-`lib/devices/ingestion_test.go` pins them **against those dependencies**, not
-against this paragraph: a version that repairs either case makes that test fail,
-which is the signal to lift the refusal here.
+What is left is a **declaration check**: the ingestion reads a unix time out of a
+number and an iso timestamp out of a string, so a time variable typed as the
+other one is still refused, naming which type it would need.
+
+| Characteristic | Declared type | What moses sends | Precision of the stored row |
+|---|---|---|---|
+| unix seconds | integer or float | json number | whole seconds |
+| unix milliseconds | integer or float | json number | whole milliseconds |
+| unix nanoseconds | integer or float | json number | **nearest 256 ns** — see below |
+| unix nanoseconds | string | digits as a string | exact |
+| iso timestamp | string | RFC3339 with the fractional second, in UTC | exact |
+
+### Why a numeric nanosecond time is only good to 256 ns
+
+The value travels as a json number, and the connector decodes json numbers into
+`float64` — its json marshaller calls `json.Unmarshal` into an `interface{}`
+without `UseNumber`, so `json.Number` is not reachable from moses. A `float64`
+carries 53 significant bits, and a current nanosecond epoch of 1.8e18 lies
+between 2^60 and 2^61, where only every 256th integer is representable. The
+timestamp is therefore rounded to the nearest multiple of 256 ns: what timescale
+stores is exactly `int64(float64(at.UnixNano()))`, **off by at most 128 ns**, and
+by at most 256 ns after 2043, when the step doubles again.
+
+That is accepted rather than refused. These rows are training data for operator
+models sampled at seconds or minutes, so 128 ns sits far below the resolution of
+anything that reads them, and refusing the unit would make a device type
+unbackfillable over a rounding no consumer can observe. A device type that wants
+the exact value declares its nanosecond time **as a string**: those digits are
+parsed with `strconv.ParseInt` and never touch a float64. An iso timestamp is
+exact for the same reason.
+
+All of this was read from `platform-connector-lib` `psql/publisher.go` and the
+converter it pins. `lib/devices/ingestion_test.go` holds it **against those
+dependencies**, not against this paragraph. Two links of the chain — `flatten`
+and `toNanoseconds` — are unexported and cannot be called from here, so they are
+mirrored in that file and guarded by a hash of the source file they were copied
+from: a bump that touches `psql/publisher.go` fails that test and asks for the
+ingestion to be read again. The failure is the prompt, not a defect.
 
 ## The live path carries the time too
 
@@ -85,7 +120,7 @@ at all. The three candidates were measured against the platform's own code
 | What moses sends | What the platform does |
 |---|---|
 | the bare value, as before | the message cleaning rejects it — the root of such a service is a record and the value is a number — on **every** event, and each rejection notifies the device's owners |
-| the object, time omitted | the cleaning defaults the time member to `null`, and the ingestion asserts that `null` to an `int64`: **panic**, in a goroutine of `sendEventEnvelope` that has no recover |
+| the object, time omitted | the cleaning defaults the time member to `null`, and the ingestion cannot read a time out of that: the row is dropped and the device's owners are notified, once per reading. Before `c8133d0` it asserted the `null` to an `int64` and **panicked**, in a goroutine of `sendEventEnvelope` that has no recover |
 | the object, time filled in | the row is written under that time |
 
 So a channel on a time-path service never worked on the live path before this,

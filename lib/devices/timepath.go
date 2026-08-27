@@ -19,6 +19,7 @@ package devices
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,17 +36,34 @@ import (
 // content variable, because the ingestion looks the value up in the flattened
 // message, where every column is prefixed with that root name. Verbatim from
 // platform-connector-lib, psql/publisher.go: `var timeAttributeKey =
-// "senergy/time_path"` and `timeVal, ok := m[attr.Value]` over
-// `m := flatten(envelope.Value)`.
+// "senergy/time_path"`, and `timeVal, ok := m[attr.Value]` in getTimeString over
+// the `m := flatten(envelope.Value)` that Publish hands it.
 const TimePathAttribute = "senergy/time_path"
 
-// TimeUnit is how the platform reads the number at the time path. Only these
-// two exist here, and that is not a simplification - see ResolveTimeShape.
-type TimeUnit int
+// TimeEncoding is how the value at the time path has to be written so that the
+// platform's ingestion reads the instant moses meant. It is the characteristic
+// of the time variable and, where the characteristic leaves the choice open, the
+// declared type of that variable - a nanosecond epoch is read from a json number
+// as well as from a string of digits, and the two differ in precision.
+type TimeEncoding int
 
 const (
-	TimeUnitSeconds TimeUnit = iota
-	TimeUnitMilliseconds
+	// TimeAsUnixSeconds is a json number of whole seconds.
+	TimeAsUnixSeconds TimeEncoding = iota
+
+	// TimeAsUnixMilliseconds is a json number of whole milliseconds.
+	TimeAsUnixMilliseconds
+
+	// TimeAsUnixNanoseconds is a json number of whole nanoseconds. It is the one
+	// encoding that does not survive the trip exactly; see timeValue.
+	TimeAsUnixNanoseconds
+
+	// TimeAsUnixNanosecondText is the same epoch as a string of digits, which
+	// the ingestion reads with strconv.ParseInt and which is therefore exact.
+	TimeAsUnixNanosecondText
+
+	// TimeAsIsoTimestamp is an RFC3339 string. Exact to the nanosecond.
+	TimeAsIsoTimestamp
 )
 
 // TimeShape says where the value and the event time sit inside the payload of
@@ -66,7 +84,7 @@ type TimeShape struct {
 	ValuePath []string
 	TimePath  []string
 
-	TimeUnit TimeUnit
+	TimeEncoding TimeEncoding
 }
 
 // ErrNoTimePath is the ordinary case: the service does not declare a time path,
@@ -74,40 +92,33 @@ type TimeShape struct {
 // only carry live data.
 var ErrNoTimePath = errors.New("the service carries no " + TimePathAttribute + " attribute, so the platform stamps its events with the arrival time")
 
-// The characteristics the ingestion knows for a time. Taken from the converter
-// rather than copied, so a renamed or re-issued id cannot drift apart from what
-// the ingestion actually casts with.
-var (
-	timeUnitsByCharacteristic = map[string]TimeUnit{
-		characteristics.UnixSeconds:      TimeUnitSeconds,
-		characteristics.UnixMilliSeconds: TimeUnitMilliseconds,
-	}
-)
-
 // ResolveTimeShape reports how a service wants an event that carries its own
 // timestamp, or why it cannot take one.
 //
-// Every rejection below is a condition under which the platform's ingestion
-// would either drop the row or take the connector process down with it, so none
-// of them is cosmetic. The two that are not obvious:
+// All four time characteristics the converter knows are usable. Two of them were
+// refused here until platform-connector-lib c8133d0, and the reasons are worth
+// keeping because they say what a regression would look like:
 //
-//   - A nanosecond time characteristic is refused. The ingestion casts the
-//     value to UnixNanoSeconds and then asserts `timeVal.(int64)`; for a value
-//     that is already nanoseconds the converter short circuits on `from == to`
-//     and hands back what the json marshaller produced, which is a float64, so
-//     the assertion panics in a goroutine that has no recover. A nanosecond
-//     epoch also does not fit into a float64 without loss - 1.8e18 is far past
-//     the 9.0e15 where float64 stops being exact on integers - so even a
-//     working assertion would round the timestamp.
-//   - An iso timestamp characteristic is refused. The ingestion flattens the
-//     message before it reads the time, and flatten wraps every string in the
-//     single quotes it needs for the sql literal, so the value the converter
-//     receives is `'2026-01-01T00:00:00Z'` and time.Parse rejects it. That row
-//     is never written.
+//   - A nanosecond time used to take the connector process down. The ingestion
+//     casts the value to UnixNanoSeconds and, for a value that is already
+//     nanoseconds, the converter short circuits on `from == to` and hands back
+//     what the json decoder produced - a float64. The ingestion then asserted
+//     `timeVal.(int64)`, which panicked in a goroutine with no recover. It now
+//     interprets the value with a type switch (psql/publisher.go, toNanoseconds)
+//     that covers float64, json.Number and a string of digits.
+//   - An iso timestamp used never to be read. The ingestion flattened the
+//     message before it looked the time up, and flatten wrapped every string in
+//     the single quotes it needs for the sql literal, so time.Parse saw
+//     `'2026-01-01T00:00:00Z'` and refused it. flatten now leaves values alone
+//     and the quoting happens in formatValue, after the time has been read.
 //
-// Both were read from platform-connector-lib v0.0.0-20260826082643 and the
-// converter it pins; docs/backfill.md carries the reasoning for a reader who
-// has to revisit it after a dependency bump.
+// What remains is a declaration check per characteristic: the ingestion reads a
+// unix time out of a number and an iso timestamp out of a string, so a variable
+// declared as the other type cannot carry one.
+//
+// Read from platform-connector-lib v0.0.0-20260827082232-c8133d0f997d and the
+// converter it pins; docs/backfill.md carries the reasoning, and
+// lib/devices/ingestion_test.go pins it against the dependency.
 func ResolveTimeShape(service models.Service) (TimeShape, error) {
 	//first non-empty attribute wins, which is what the ingestion does
 	path := ""
@@ -147,12 +158,9 @@ func ResolveTimeShape(service models.Service) (TimeShape, error) {
 	if err != nil {
 		return TimeShape{}, fmt.Errorf("the time path %q does not resolve: %w", path, err)
 	}
-	unit, known := timeUnitsByCharacteristic[timeVariable.CharacteristicId]
-	if !known {
-		return TimeShape{}, unsupportedTimeCharacteristic(timeVariable.CharacteristicId)
-	}
-	if !isNumeric(timeVariable.Type) {
-		return TimeShape{}, fmt.Errorf("the time variable is declared as %q; a unix time has to be a number", string(timeVariable.Type))
+	encoding, err := timeEncodingOf(timeVariable)
+	if err != nil {
+		return TimeShape{}, err
 	}
 
 	valuePath, valueVariable, found := findValueVariable(root, nil, timePath)
@@ -164,23 +172,48 @@ func ResolveTimeShape(service models.Service) (TimeShape, error) {
 	}
 
 	return TimeShape{
-		RootName:  root.Name,
-		ValuePath: valuePath,
-		TimePath:  timePath,
-		TimeUnit:  unit,
+		RootName:     root.Name,
+		ValuePath:    valuePath,
+		TimePath:     timePath,
+		TimeEncoding: encoding,
 	}, nil
 }
 
-func unsupportedTimeCharacteristic(id string) error {
-	switch id {
-	case "":
-		return errors.New("the time variable carries no characteristic, so the platform cannot tell what unit its number is in")
+// timeEncodingOf reads the characteristic of the time variable and, with it, the
+// declared type: the ingestion looks a unix time up in a number and an iso
+// timestamp in a string, so the pair has to agree before anything is published.
+func timeEncodingOf(timeVariable models.ContentVariable) (TimeEncoding, error) {
+	switch timeVariable.CharacteristicId {
+	case characteristics.UnixSeconds:
+		if !isNumeric(timeVariable.Type) {
+			return 0, fmt.Errorf("the time variable is declared as %q; a unix time in seconds has to be a number", string(timeVariable.Type))
+		}
+		return TimeAsUnixSeconds, nil
+	case characteristics.UnixMilliSeconds:
+		if !isNumeric(timeVariable.Type) {
+			return 0, fmt.Errorf("the time variable is declared as %q; a unix time in milliseconds has to be a number", string(timeVariable.Type))
+		}
+		return TimeAsUnixMilliseconds, nil
 	case characteristics.UnixNanoSeconds:
-		return errors.New("the time variable is in unix nanoseconds; the platform's ingestion cannot read that unit without losing precision and crashing, use unix seconds or milliseconds")
+		//both are read: a number through the float64 the json decoder produces,
+		//a string through strconv.ParseInt, which is the exact one
+		switch {
+		case isNumeric(timeVariable.Type):
+			return TimeAsUnixNanoseconds, nil
+		case timeVariable.Type == models.String:
+			return TimeAsUnixNanosecondText, nil
+		default:
+			return 0, fmt.Errorf("the time variable is declared as %q; a unix time in nanoseconds has to be a number or its digits as a string", string(timeVariable.Type))
+		}
 	case characteristics.IsoTimestamp:
-		return errors.New("the time variable is an iso timestamp; the platform's ingestion quotes strings before it parses them and never accepts one, use unix seconds or milliseconds")
+		if timeVariable.Type != models.String {
+			return 0, fmt.Errorf("the time variable is declared as %q; an iso timestamp has to be a string", string(timeVariable.Type))
+		}
+		return TimeAsIsoTimestamp, nil
+	case "":
+		return 0, errors.New("the time variable carries no characteristic, so the platform cannot tell what unit its number is in")
 	default:
-		return fmt.Errorf("the time variable's characteristic %q is not a unix time the platform can read", id)
+		return 0, fmt.Errorf("the time variable's characteristic %q is not a time the platform can read", timeVariable.CharacteristicId)
 	}
 }
 
@@ -279,16 +312,51 @@ func (this TimeShape) Payload(value float64, at time.Time) map[string]interface{
 	return root
 }
 
-// timeValue is an integer on purpose. It travels as a json number and comes
-// back out of the platform's unmarshaller as a float64, so it has to be a whole
-// number small enough to survive that: seconds (1.8e9) and milliseconds
-// (1.8e12) both are, nanoseconds (1.8e18) are not, which is the second reason
-// ResolveTimeShape refuses that unit.
-func (this TimeShape) timeValue(at time.Time) int64 {
-	if this.TimeUnit == TimeUnitMilliseconds {
+// timeValue is the instant in the encoding the service declares.
+//
+// Three of the four encodings survive the trip exactly. Seconds (1.8e9) and
+// milliseconds (1.8e12) are whole numbers well inside the 9.0e15 up to which a
+// float64 represents integers exactly, and the two text encodings never meet a
+// float64 at all.
+//
+// TimeAsUnixNanoseconds is the exception, and it is a deliberate one. The value
+// travels as a json number, and the connector decodes json numbers into float64
+// - its json marshaller calls json.Unmarshal into an interface{} without
+// UseNumber, so json.Number is not reachable from here. A float64 carries 53
+// significant bits, so around the current epoch of 1.8e18 ns, which lies between
+// 2^60 and 2^61, only every 256th integer is representable and the timestamp is
+// rounded to the nearest of them. What timescale stores is therefore exactly
+// int64(float64(at.UnixNano())): off by at most 128 ns, and by at most 256 ns
+// after 2043, when the step doubles again.
+//
+// That is accepted rather than refused. These rows are training data for
+// operator models sampled at seconds or minutes, so 128 ns is far below the
+// resolution of anything that reads them, and refusing the unit would make a
+// device type unbackfillable over a rounding no consumer can observe. A device
+// type that declares its nanosecond time as a string gets the exact value
+// instead, because the ingestion parses those digits with strconv.ParseInt.
+// docs/backfill.md states the same, for whoever has to weigh it again.
+//
+// UnixNano is only defined between 1678 and 2262. The api refuses a window that
+// starts before the year 2000 or ends in the future, so neither the backfill nor
+// the live path can reach that edge; an iso timestamp would not have it at all.
+func (this TimeShape) timeValue(at time.Time) interface{} {
+	switch this.TimeEncoding {
+	case TimeAsUnixMilliseconds:
 		return at.UnixMilli()
+	case TimeAsUnixNanoseconds:
+		return at.UnixNano()
+	case TimeAsUnixNanosecondText:
+		return strconv.FormatInt(at.UnixNano(), 10)
+	case TimeAsIsoTimestamp:
+		//UTC so the string is the same wherever moses runs, and RFC3339Nano so
+		//the sub-second part is carried; time.Parse reads a fractional second
+		//even though the layout the ingestion parses with, time.RFC3339, does
+		//not spell one out
+		return at.UTC().Format(time.RFC3339Nano)
+	default:
+		return at.Unix()
 	}
-	return at.Unix()
 }
 
 func setAt(root map[string]interface{}, path []string, value interface{}) {

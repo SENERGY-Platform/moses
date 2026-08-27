@@ -89,9 +89,12 @@ type eventPublisher interface {
 // A bare value sent to such a service is rejected by the platform's message
 // cleaning on every event, because the root of that service is a record and a
 // number is not one - so such a channel never worked here. An object with the
-// time left out is worse: the cleaning defaults the missing member to null, and
-// the ingestion asserts that null to an int64, which panics in a goroutine of
-// the connector that has no recover. lib/devices/ingestion_test.go pins both.
+// time left out fares no better: the cleaning defaults the missing member to
+// null, and the ingestion cannot read a time out of that, so it drops the row
+// and notifies the device's owners - once per reading. Until
+// platform-connector-lib c8133d0 it asserted that null to an int64 instead and
+// panicked in a goroutine with no recover; the shape moses has to send is the
+// same either way. lib/devices/ingestion_test.go pins both.
 type connectorPublisher struct {
 	connector   *platform_connector_lib.Connector
 	segmentName string
