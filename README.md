@@ -12,6 +12,10 @@ corner), zones hold **assets** (a machine, a meter), assets hold **channels**
 (one value each, published to a platform service). Everything is stored as one
 document; the runtime is restarted from it on every change.
 
+An asset can name another asset that meters it too via `submetered_by`,
+forming a meter tree the graph mirror reflects as device-under-device instead
+of the usual device-under-zone — see `docs/submetering.md`.
+
 Each channel has a **source** that produces its value:
 
 | Kind | Produces |

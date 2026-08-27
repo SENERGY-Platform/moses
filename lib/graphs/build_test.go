@@ -77,6 +77,16 @@ func edgeFrom(graph models.Graph, from string) (models.Edge, bool) {
 	return models.Edge{}, false
 }
 
+func edgesFrom(graph models.Graph, from string) int {
+	count := 0
+	for _, edge := range graph.Edges {
+		if edge.FromNodeId == from {
+			count++
+		}
+	}
+	return count
+}
+
 func attribute(attributes []models.Attribute, key string) string {
 	for _, attr := range attributes {
 		if attr.Key == key {
@@ -189,6 +199,19 @@ func TestBuildingTwiceProducesTheSameGraph(t *testing.T) {
 	}
 }
 
+// The submetered_by index is built fresh on every call to Build from a plain
+// map, whose iteration order Go deliberately randomizes - a build that leaked
+// that randomness into the graph would fail this intermittently rather than
+// every time.
+func TestBuildingASubmeteredEnvironmentTwiceProducesTheSameGraph(t *testing.T) {
+	first := Build(environmentWithSubmetering())
+	second := Build(environmentWithSubmetering())
+
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("two builds of one submetered document differ:\n%+v\n%+v", first, second)
+	}
+}
+
 // The repository refuses a graph its own Valid rejects, and the request would
 // then fail with a 400 nobody sees except in a warning. Every shape this package
 // can produce has to pass it.
@@ -210,6 +233,8 @@ func TestEveryBuiltGraphIsAcceptedByTheRepositoryModel(t *testing.T) {
 		"empty zone":   deep,
 		"shared ref":   environmentWithOneDeviceOnTwoAssets(),
 		"zone id root": environmentWithAZoneCalledRoot(),
+		"submetered":   environmentWithSubmetering(),
+		"device cycle": environmentWithADeviceCycle(),
 	} {
 		graph := Build(env)
 		if err := graph.Valid(); err != nil {
@@ -294,6 +319,255 @@ func TestOneDeviceOnTwoAssetsBecomesOneNode(t *testing.T) {
 func environmentWithAZoneCalledRoot() domain.Environment {
 	env := nestedEnvironment()
 	env.Zones[0].Id = RootNodeId
+	return env
+}
+
+// A sub-metered asset's edge attaches to the device of the asset named by
+// submetered_by instead of its zone, so the mirrored graph reads as a meter
+// tree for that edge.
+func TestASubmeteredAssetAttachesToTheMetersDeviceNode(t *testing.T) {
+	env := nestedEnvironment()
+	// the compressor is measured again by the meter in the side room: what
+	// the meter reads already contains what the compressor draws
+	env.Zones[0].Assets[0].SubmeteredBy = "asset-zaehler"
+
+	graph := Build(env)
+
+	edge, ok := edgeFrom(graph, "urn:device:kompressor")
+	if !ok {
+		t.Fatal("no edge out of the sub-metered device")
+	}
+	if edge.ToNodeId != "urn:device:zaehler" {
+		t.Errorf("expected the edge to attach to the meter's device, got %q", edge.ToNodeId)
+	}
+	if edge.Id != "urn:device:kompressor->urn:device:zaehler" {
+		t.Errorf("expected the edge id still derived child->parent, got %q", edge.Id)
+	}
+}
+
+// The target of a submetered_by reference can sit in a zone the recursion has
+// not reached yet, or never will on the path to the asset that names it - the
+// index Build builds upfront over the whole document has to find it anyway.
+func TestASubmeterReferenceAcrossZonesFindsTheDevice(t *testing.T) {
+	env := nestedEnvironment()
+	env.Zones = append(env.Zones, domain.Zone{
+		Id: "zone-technik", Name: "Technikraum", Type: domain.ZoneRoom,
+		Assets: []domain.Asset{{
+			Id: "asset-hauptzaehler", Name: "Hauptzähler", Kind: domain.AssetMeter,
+			ExternalRef: "urn:device:hauptzaehler",
+		}},
+	})
+	env.Zones[0].Assets[0].SubmeteredBy = "asset-hauptzaehler"
+
+	graph := Build(env)
+
+	edge, ok := edgeFrom(graph, "urn:device:kompressor")
+	if !ok {
+		t.Fatal("no edge out of the sub-metered device")
+	}
+	if edge.ToNodeId != "urn:device:hauptzaehler" {
+		t.Errorf("expected the edge to attach to the device in the other zone, got %q", edge.ToNodeId)
+	}
+}
+
+// A submetered_by target without a platform device of its own has nothing for
+// the edge to attach to, so the asset falls back to its zone like an
+// unsubmetered one would.
+func TestASubmeterReferenceToADevicelessAssetFallsBackToTheZone(t *testing.T) {
+	env := nestedEnvironment()
+	// asset-summe has no external_ref
+	env.Zones[0].Assets[0].SubmeteredBy = "asset-summe"
+
+	graph := Build(env)
+
+	edge, ok := edgeFrom(graph, "urn:device:kompressor")
+	if !ok {
+		t.Fatal("no edge out of the compressor")
+	}
+	if edge.ToNodeId != "zone-halle" {
+		t.Errorf("expected the fallback to the zone, got %q", edge.ToNodeId)
+	}
+}
+
+// Two assets are allowed to share one platform device. If the submetered_by
+// target happens to be one of those, the edge would point the shared device
+// at itself - a self-loop the repository would reject the whole graph over -
+// so this falls back to the zone too.
+func TestASubmeteredAssetSharingTheTargetsDeviceFallsBackToTheZone(t *testing.T) {
+	env := nestedEnvironment()
+	env.Zones[0].Zones[0].Assets[0].ExternalRef = "urn:device:kompressor"
+	env.Zones[0].Assets[0].SubmeteredBy = "asset-zaehler"
+
+	graph := Build(env)
+
+	edge, ok := edgeFrom(graph, "urn:device:kompressor")
+	if !ok {
+		t.Fatal("no edge out of the compressor")
+	}
+	if edge.ToNodeId != "zone-halle" {
+		t.Errorf("expected the fallback to the zone instead of a self-loop, got %q", edge.ToNodeId)
+	}
+	if graph.ContainsLoop() {
+		t.Error("must not contain a loop")
+	}
+}
+
+// environmentWithADeviceCycle is free of sub-metering cycles as the document
+// models them - A is metered by B, B by C, C by nobody - and still asks for a
+// cycle of device edges: C publishes through the same platform device as A, so
+// the two asset edges fold into one pair of device nodes pointing at each
+// other. Nothing in lib/domain can see this, because it reasons about assets
+// while the graph hangs devices.
+func environmentWithADeviceCycle() domain.Environment {
+	return domain.Environment{
+		Id: "env-ring", Name: "Ringschluss", Owner: "user-a", Type: domain.IndustrialSite,
+		Zones: []domain.Zone{{
+			Id: "zone-halle", Name: "Halle 1", Type: domain.ZoneHall,
+			Assets: []domain.Asset{{
+				Id: "asset-a", Name: "Strang A", Kind: domain.AssetMachine,
+				ExternalRef: "urn:device:x", SubmeteredBy: "asset-b",
+			}, {
+				Id: "asset-b", Name: "Zähler B", Kind: domain.AssetMeter,
+				ExternalRef: "urn:device:y", SubmeteredBy: "asset-c",
+			}, {
+				//publishes through the device of A
+				Id: "asset-c", Name: "Strang C", Kind: domain.AssetMeter,
+				ExternalRef: "urn:device:x",
+			}},
+		}},
+	}
+}
+
+// The repository rejects a graph containing a loop outright, so a device cycle
+// would cost the whole mirror rather than one edge. Exactly one edge of the
+// cycle falls back to its zone, and which one is decided by document order:
+// the earliest device involved is the one that loses its sub-metering edge, so
+// the same document always breaks the same edge.
+func TestADeviceCycleThroughASharedDeviceFallsBackToTheZone(t *testing.T) {
+	graph := Build(environmentWithADeviceCycle())
+
+	if err := graph.Valid(); err != nil {
+		t.Errorf("the repository would refuse this graph: %v", err)
+	}
+	if graph.ContainsLoop() {
+		t.Fatalf("the mirror must not contain a loop, got %+v", graph.Edges)
+	}
+	first, ok := edgeFrom(graph, "urn:device:x")
+	if !ok {
+		t.Fatal("no edge out of the shared device")
+	}
+	if first.ToNodeId != "zone-halle" {
+		t.Errorf("expected the first device of the cycle to fall back to its zone, got %q", first.ToNodeId)
+	}
+	second, ok := edgeFrom(graph, "urn:device:y")
+	if !ok {
+		t.Fatal("no edge out of the second device of the cycle")
+	}
+	if second.ToNodeId != "urn:device:x" {
+		t.Errorf("expected only one edge of the cycle to be given up, got %q", second.ToNodeId)
+	}
+	if again := Build(environmentWithADeviceCycle()); !reflect.DeepEqual(graph, again) {
+		t.Fatalf("breaking the cycle has to pick the same edge every time:\n%+v\n%+v", graph, again)
+	}
+}
+
+// The node of a shared device belongs to the first asset that carries it, but
+// a later carrier's submetered_by is a statement about that same device and
+// has to count too - it is not the node that is at stake, it is where the node
+// hangs.
+func TestALaterCarriersSubmeteringStillCounts(t *testing.T) {
+	env := nestedEnvironment()
+	//a second asset on the compressor's device, listed after it, and the only
+	//one of the two that says where that device hangs
+	env.Zones[0].Assets = append(env.Zones[0].Assets, domain.Asset{
+		Id: "asset-teilstrang", Name: "Teilstrang", Kind: domain.AssetMachine,
+		ExternalRef: "urn:device:kompressor", SubmeteredBy: "asset-zaehler",
+	})
+
+	graph := Build(env)
+
+	edge, ok := edgeFrom(graph, "urn:device:kompressor")
+	if !ok {
+		t.Fatal("no edge out of the shared device")
+	}
+	if edge.ToNodeId != "urn:device:zaehler" {
+		t.Errorf("expected the later carrier's submetering to place the device, got %q", edge.ToNodeId)
+	}
+	if count := edgesFrom(graph, "urn:device:kompressor"); count != 1 {
+		t.Errorf("expected exactly one edge out of the shared device, got %d: %+v", count, graph.Edges)
+	}
+}
+
+// Two assets publishing through one device, each sub-metered by a different
+// meter. The device is one node and can have one parent; nothing in the
+// document ranks one carrier's statement above the other's, so neither is
+// followed and the device stays in its zone.
+func TestConflictingCarrierTargetsFallBackToTheZone(t *testing.T) {
+	env := nestedEnvironment()
+	env.Zones[0].Assets[0].SubmeteredBy = "asset-zaehler"
+	env.Zones[0].Assets = append(env.Zones[0].Assets,
+		domain.Asset{
+			Id: "asset-hauptzaehler", Name: "Hauptzähler", Kind: domain.AssetMeter,
+			ExternalRef: "urn:device:hauptzaehler",
+		},
+		domain.Asset{
+			Id: "asset-nebenstrang", Name: "Nebenstrang", Kind: domain.AssetMachine,
+			ExternalRef: "urn:device:kompressor", SubmeteredBy: "asset-hauptzaehler",
+		})
+
+	graph := Build(env)
+
+	edge, ok := edgeFrom(graph, "urn:device:kompressor")
+	if !ok {
+		t.Fatal("no edge out of the contested device")
+	}
+	if edge.ToNodeId != "zone-halle" {
+		t.Errorf("expected the contested device to stay in its zone, got %q", edge.ToNodeId)
+	}
+	//the two meters themselves are untouched by the conflict
+	if other, _ := edgeFrom(graph, "urn:device:hauptzaehler"); other.ToNodeId != "zone-halle" {
+		t.Errorf("expected the uninvolved meter to keep its zone edge, got %q", other.ToNodeId)
+	}
+	if other, _ := edgeFrom(graph, "urn:device:zaehler"); other.ToNodeId != "zone-nebenraum" {
+		t.Errorf("expected the uninvolved meter to keep its zone edge, got %q", other.ToNodeId)
+	}
+}
+
+// An external_ref is free to collide with a zone id - nothing in the document
+// forbids it - and the zone that got there first keeps the node. The asset
+// behind the colliding ref then has no device node of its own, so its
+// submetered_by has nothing to hang: it must not add a second outgoing edge to
+// the zone's node, which the repository would refuse (the outgoing weights of a
+// node have to sum to 0 or 100, and two edges make 200).
+func TestADeviceRefCollidingWithAZoneIdAddsNoSecondEdge(t *testing.T) {
+	env := nestedEnvironment()
+	env.Zones[0].Zones[0].Assets = append(env.Zones[0].Zones[0].Assets, domain.Asset{
+		Id: "asset-kollision", Name: "Kollision", Kind: domain.AssetMachine,
+		ExternalRef: "zone-halle", SubmeteredBy: "asset-zaehler",
+	})
+
+	graph := Build(env)
+
+	if err := graph.Valid(); err != nil {
+		t.Errorf("the repository would refuse this graph: %v", err)
+	}
+	if count := edgesFrom(graph, "zone-halle"); count != 1 {
+		t.Errorf("expected the zone to keep its one edge, got %d: %+v", count, graph.Edges)
+	}
+	edge, ok := edgeFrom(graph, "zone-halle")
+	if !ok {
+		t.Fatal("the zone lost its edge")
+	}
+	if edge.ToNodeId != RootNodeId {
+		t.Errorf("expected the zone to keep pointing at the root, got %q", edge.ToNodeId)
+	}
+}
+
+// environmentWithSubmetering is a plain valid case for the repository model
+// test below: one asset feeding into another's device, no fallback involved.
+func environmentWithSubmetering() domain.Environment {
+	env := nestedEnvironment()
+	env.Zones[0].Assets[0].SubmeteredBy = "asset-zaehler"
 	return env
 }
 

@@ -26,7 +26,7 @@ lives in `lib/graphs`, as a pure function, and is:
 | a zone's parent | an edge from the zone's node to the parent's node |
 | a top level zone | an edge to the node `root` |
 | an asset with an `external_ref` | a node with `resource_type: device`, id and `resource_id` = the device id, `name` attribute = asset name |
-| an asset's zone | an edge from the device node to the zone's node |
+| an asset's zone, or the device of the asset named by `submetered_by` | an edge from the device node to that node - see `docs/submetering.md` for the five cases that fall back to the zone |
 
 ## The four conventions that are contract
 
@@ -62,6 +62,11 @@ repository validates the graph before storing it and rejects any edge weight
 outside `1..100`, as well as any node whose outgoing weights sum to something
 other than 0 or 100. "No edge carries anything" is not a graph it accepts;
 "every edge carries all of it" is the same statement in a form it does.
+
+Sub-metering (`docs/submetering.md`) does not change this: it moves *where* an
+asset's edge attaches - to a device instead of a zone - not what share of the
+flow it carries. Every node still has exactly one parent and still passes on
+everything it has to that one parent; the weight stays 100 either way.
 
 ## The mirror is not a document
 

@@ -72,11 +72,30 @@ type validator struct {
 	// only be checked once the whole tree is indexed.
 	channelIds  map[string]bool
 	channelRefs []channelRef
+
+	// assetSites and submeterRefs implement the same second pass for
+	// submetered_by: the target asset may be defined later in the document or
+	// in another zone entirely, and whether it shares a top level zone with
+	// the reference is only known once every zone has been walked.
+	//
+	// assetSites maps an asset id to the index of the top level zone it lives
+	// under, the same number every asset and reference below that zone
+	// carries. The site is all the second pass needs from the target; where to
+	// report a problem comes from the reference, which knows its own path.
+	assetSites   map[string]int
+	submeterRefs []submeterRef
 }
 
 type channelRef struct {
 	path string
 	id   string
+}
+
+type submeterRef struct {
+	path    string
+	assetId string
+	target  string
+	site    int
 }
 
 func (this *validator) fail(path string, format string, args ...interface{}) {
@@ -98,7 +117,7 @@ func (this *validator) claimId(path string, id string) {
 // Validate checks an environment for everything that would make it unusable or
 // ambiguous. It returns a *ValidationError listing every problem, or nil.
 func Validate(env Environment) error {
-	v := &validator{ids: map[string]string{}, channelIds: map[string]bool{}}
+	v := &validator{ids: map[string]string{}, channelIds: map[string]bool{}, assetSites: map[string]int{}}
 
 	if strings.TrimSpace(env.Name) == "" {
 		v.fail("name", "must not be empty")
@@ -116,7 +135,7 @@ func Validate(env Environment) error {
 		v.fail("zones", "an environment needs at least one zone")
 	}
 	for i := range env.Zones {
-		v.checkZone(fmt.Sprintf("zones[%d]", i), env.Zones[i], 1)
+		v.checkZone(fmt.Sprintf("zones[%d]", i), env.Zones[i], 1, i)
 	}
 
 	if v.nodes > MaxNodes {
@@ -128,6 +147,34 @@ func Validate(env Environment) error {
 		}
 	}
 
+	// submeterRefs: a target has to exist as an asset - a zone or channel id
+	// is not a valid target even if the string happens to be one - and it has
+	// to stay inside the reference's own top level zone. A meter tree is
+	// modelled per site: a reference that leaves its top level zone is in
+	// practice a misfiled asset, and refusing it puts that mistake in front of
+	// the author instead of quietly building a tree across two sites.
+	//
+	// parents carries the whole reference, not just the target: the cycle pass
+	// below reports at the path of the reference that closed the cycle, and
+	// that path is already spelled out here rather than assembled a second
+	// time from the target's own location.
+	parents := map[string]submeterRef{}
+	for _, ref := range v.submeterRefs {
+		targetSite, exists := v.assetSites[ref.target]
+		if !exists {
+			v.fail(ref.path, "the referenced asset %q does not exist in this environment", ref.target)
+			continue
+		}
+		if targetSite != ref.site {
+			v.fail(ref.path, "submetered_by must stay within the same top level zone: a meter tree is modelled per site, so a reference across that boundary is almost always an asset filed under the wrong zone")
+			continue
+		}
+		if ref.assetId != "" {
+			parents[ref.assetId] = ref
+		}
+	}
+	v.checkSubmeterCycles(parents)
+
 	if len(v.problems) == 0 {
 		return nil
 	}
@@ -135,7 +182,11 @@ func Validate(env Environment) error {
 	return &ValidationError{Problems: v.problems}
 }
 
-func (this *validator) checkZone(path string, zone Zone, depth int) {
+// checkZone walks one zone and everything below it. site is the index of the
+// top level zone this one descends from - fixed at the top of Validate and
+// unchanged by every recursive call below, so a submetered_by reference can
+// later be checked against the site of both ends without re-walking the tree.
+func (this *validator) checkZone(path string, zone Zone, depth int, site int) {
 	this.nodes++
 	if depth > MaxZoneDepth {
 		this.fail(path, "zones are nested deeper than %d levels", MaxZoneDepth)
@@ -156,14 +207,14 @@ func (this *validator) checkZone(path string, zone Zone, depth int) {
 	}
 
 	for i := range zone.Zones {
-		this.checkZone(fmt.Sprintf("%s.zones[%d]", path, i), zone.Zones[i], depth+1)
+		this.checkZone(fmt.Sprintf("%s.zones[%d]", path, i), zone.Zones[i], depth+1, site)
 	}
 	for i := range zone.Assets {
-		this.checkAsset(fmt.Sprintf("%s.assets[%d]", path, i), zone.Assets[i])
+		this.checkAsset(fmt.Sprintf("%s.assets[%d]", path, i), zone.Assets[i], site)
 	}
 }
 
-func (this *validator) checkAsset(path string, asset Asset) {
+func (this *validator) checkAsset(path string, asset Asset, site int) {
 	this.nodes++
 	if strings.TrimSpace(asset.Name) == "" {
 		this.fail(path+".name", "must not be empty")
@@ -172,6 +223,14 @@ func (this *validator) checkAsset(path string, asset Asset) {
 		this.fail(path+".kind", "unknown asset kind %q, expected one of %v", asset.Kind, assetKinds())
 	}
 	this.claimId(path+".id", asset.Id)
+	// registered for the submetered_by second pass below; an empty id is
+	// assigned by the server later. A duplicate id is already reported by
+	// claimId above, and the first asset under it keeps the entry there, so it
+	// keeps the entry here too: letting the second one overwrite it would add
+	// a second, misleading complaint about a site nobody referenced.
+	if _, taken := this.assetSites[asset.Id]; asset.Id != "" && !taken {
+		this.assetSites[asset.Id] = site
+	}
 	// external_ref may be empty: the platform device is created by the server
 	// when an asset is new. external_type_id however is a choice only the
 	// author can make, and every channel's semantics derive from it.
@@ -180,8 +239,88 @@ func (this *validator) checkAsset(path string, asset Asset) {
 	}
 	this.checkStates(path+".initial_states", asset.InitialStates)
 
+	if asset.SubmeteredBy != "" {
+		if asset.Id != "" && asset.SubmeteredBy == asset.Id {
+			this.fail(path+".submetered_by", "an asset cannot be sub-metered by itself")
+		} else {
+			this.submeterRefs = append(this.submeterRefs, submeterRef{
+				path:    path + ".submetered_by",
+				assetId: asset.Id,
+				target:  asset.SubmeteredBy,
+				site:    site,
+			})
+		}
+	}
+
 	for i := range asset.Channels {
 		this.checkChannel(fmt.Sprintf("%s.channels[%d]", path, i), asset.Channels[i])
+	}
+}
+
+// checkSubmeterCycles finds cycles in the sub-metering tree. parents maps an
+// asset id to the reference naming the asset that meters it too, already
+// filtered to refs whose target exists and stays within its site - a missing
+// or out-of-site target was reported above, and reporting it again as a cycle
+// of its own would be confusing.
+//
+// A cycle here would never be walked by anything today: the graph mirror in
+// lib/graphs is best effort and the repository rejects a graph containing a
+// loop outright. Refusing it at validation time is still worth doing all the
+// same - a stored cycle is a modelling mistake nothing else would ever
+// surface.
+//
+// Standard three-color depth first search, iterated so every asset gets a
+// chance to start a walk: white (unseen), gray (on the current walk's path),
+// black (fully explored, already reported if it was ever part of a cycle).
+func (this *validator) checkSubmeterCycles(parents map[string]submeterRef) {
+	const white, gray, black = 0, 1, 2
+	color := map[string]int{}
+
+	var walk func(id string, path []string)
+	walk = func(id string, path []string) {
+		switch color[id] {
+		case black:
+			return
+		case gray:
+			// id is already on this path: the suffix starting at its first
+			// occurrence is the cycle, everything before it just leads into
+			// one and is not itself part of it.
+			start := 0
+			for i, member := range path {
+				if member == id {
+					start = i
+					break
+				}
+			}
+			cycle := append(append([]string{}, path[start:]...), id)
+			for _, member := range path[start:] {
+				// every member of the cycle points at the next one, so every
+				// one of them has a reference here to report at
+				this.fail(parents[member].path, "submetered_by forms a cycle: %s", strings.Join(cycle, " -> "))
+			}
+			return
+		}
+		color[id] = gray
+		path = append(path, id)
+		if next, ok := parents[id]; ok {
+			walk(next.target, path)
+		}
+		color[id] = black
+	}
+
+	// sorted, not ranged: the map order would decide which member a walk
+	// starts at, and with it the wording of the cycle message - the same
+	// broken document would report "a -> b -> a" on one save and
+	// "b -> a -> b" on the next.
+	ids := make([]string, 0, len(parents))
+	for id := range parents {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		if color[id] == white {
+			walk(id, nil)
+		}
 	}
 }
 

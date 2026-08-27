@@ -161,6 +161,18 @@ type Asset struct {
 	// real device is deleted. See reconcileManagedFlags in lib/api.
 	ExternalManaged bool `json:"external_managed" bson:"external_managed"`
 
+	// SubmeteredBy names, by asset id, the asset whose device meters this one
+	// too: what that asset reads already contains what this one draws or
+	// produces on its own. Empty is the ordinary case and means this asset
+	// attaches to its zone in the mirrored graph - the behavior of every
+	// document stored before this field existed.
+	//
+	// Unlike ExternalManaged and ExternalRef, this is authoring, not
+	// reconciliation: nothing on the platform is read back to correct a wrong
+	// value. It only misrepresents this simulation's own meter tree, never a
+	// resource outside it.
+	SubmeteredBy string `json:"submetered_by,omitempty" bson:"submetered_by,omitempty"`
+
 	InitialStates map[string]interface{} `json:"initial_states" bson:"initial_states"`
 
 	Channels []Channel `json:"channels" bson:"channels"`
