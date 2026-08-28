@@ -33,6 +33,19 @@ const MaxZoneDepth = 8
 // imported document is untrusted input and must not be able to exhaust memory.
 const MaxNodes = 10000
 
+// MaxScheduleStates bounds the steps of one schedule. The states are not nodes
+// in the MaxNodes sense and would otherwise be an unbounded list on an
+// untrusted document; the runtime walks all of them on every evaluation of the
+// channel, so the bound is a runtime cost as much as a memory one. A day
+// programme in quarter hours is 96 steps, so the limit is far above anything a
+// plant needs.
+const MaxScheduleStates = 256
+
+// MaxScheduleDurationSeconds bounds one step at a year. The walk over whole
+// cycles sums durations in int64 seconds, and an unbounded duration would let a
+// hand written document overflow that sum rather than describe a machine.
+const MaxScheduleDurationSeconds = int64(366 * 24 * 60 * 60)
+
 // Problem is a single validation failure. Path points at the offending field in
 // the document, so a caller can mark exactly that input instead of reporting
 // that something somewhere is wrong.
@@ -84,6 +97,12 @@ type validator struct {
 	// report a problem comes from the reference, which knows its own path.
 	assetSites   map[string]int
 	submeterRefs []submeterRef
+
+	// gateRefs implements the second pass for a schedule's gate: the context key
+	// it waits for may be declared as a static context entry or driven by a
+	// context source, and both of those are read from the top of the document
+	// while the reference is found deep inside a zone.
+	gateRefs []channelRef
 }
 
 type channelRef struct {
@@ -145,6 +164,24 @@ func Validate(env Environment) error {
 		if !v.channelIds[ref.id] {
 			v.fail(ref.path, "the referenced channel %q does not exist in this environment", ref.id)
 		}
+	}
+
+	// gateRefs: the key a schedule waits for has to be declared somewhere in
+	// this environment, either as a static context entry or as a context source
+	// driving it. The rule is about the document saying what it does, not about
+	// what can write the key: a script can set it through moses.world.state.set
+	// and the state endpoint can patch it, so a gate on an undeclared key is not
+	// necessarily dead - it is unreadable. Whoever opens the document sees a
+	// machine waiting for something nothing in it mentions. The escape is one
+	// line, an initial 0 in context, which is why the rule stays.
+	for _, ref := range v.gateRefs {
+		if _, static := env.Context[ref.id]; static {
+			continue
+		}
+		if _, driven := env.ContextSources[ref.id]; driven {
+			continue
+		}
+		v.fail(ref.path, "the gate key %q is neither in context nor driven by a context source; declare it in context (an initial 0 is enough) even when a script or the state endpoint writes it, so the document shows what the gate reads", ref.id)
 	}
 
 	// submeterRefs: a target has to exist as an asset - a zone or channel id
@@ -256,6 +293,7 @@ func (this *validator) checkAsset(path string, asset Asset, site int) {
 		this.checkChannel(fmt.Sprintf("%s.channels[%d]", path, i), asset.Channels[i])
 	}
 	this.checkAggregateOverlap(path, asset)
+	this.checkScheduleKeys(path, asset)
 }
 
 // checkAggregateOverlap refuses a second reading of the same quantity on an
@@ -426,6 +464,9 @@ func (this *validator) checkChannel(path string, channel Channel) {
 	if channel.Source.Kind == SourceFormula && (channel.Direction != Sensor || channel.IntervalSeconds <= 0) {
 		this.fail(path, "a formula computes when the channel publishes, so the channel must be a sensor with an interval")
 	}
+	if channel.Source.Kind == SourceSchedule && (channel.Direction != Sensor || channel.IntervalSeconds <= 0) {
+		this.fail(path, "a schedule computes when the channel publishes, so the channel must be a sensor with an interval")
+	}
 	if channel.Source.Kind == SourceAggregate {
 		if channel.Direction != Sensor || channel.IntervalSeconds <= 0 {
 			this.fail(path, "an aggregate sums when the channel publishes, so the channel must be a sensor with an interval")
@@ -514,6 +555,9 @@ func (this *validator) checkSource(path string, source Source) {
 	if source.Formula != nil {
 		set = append(set, string(SourceFormula))
 	}
+	if source.Schedule != nil {
+		set = append(set, string(SourceSchedule))
+	}
 	if len(set) > 1 {
 		this.fail(path, "only one source variant may be set, found %v", set)
 	}
@@ -531,6 +575,8 @@ func (this *validator) checkSource(path string, source Source) {
 		this.checkDataset(path, source)
 	case SourceFormula:
 		this.checkFormula(path, source)
+	case SourceSchedule:
+		this.checkSchedule(path, source)
 	case SourceAggregate:
 		this.checkAggregate(path, source, set)
 	case "":
@@ -551,6 +597,205 @@ func (this *validator) checkAggregate(path string, source Source, set []string) 
 	if source.IntervalSeconds != 0 {
 		this.fail(path+".interval_seconds", "an aggregate sums when the channel publishes and has no own interval")
 	}
+}
+
+// checkSchedule refuses a programme that could not run the way it reads. Every
+// rule here is a document that looks like a declared machine cycle in the
+// editor and is something else in the data: a cycle without states, a step of
+// no length, a gate on a key nobody writes, or a state key that lands on top of
+// a value another channel of the same asset already stores there.
+func (this *validator) checkSchedule(path string, source Source) {
+	if source.Schedule == nil {
+		this.fail(path+".schedule", "must be set when kind is %q", SourceSchedule)
+		return
+	}
+	if source.IntervalSeconds != 0 {
+		this.fail(path+".interval_seconds", "a schedule computes when the channel publishes and has no own interval")
+	}
+	schedule := source.Schedule
+	schedulePath := path + ".schedule"
+
+	//the state key is the whole point of the source: without it the running
+	//state is an anonymous number again, which is what a script already was
+	this.checkScheduleKey(schedulePath+".state_key", schedule.StateKey,
+		"it is where the name of the running state is written, and a schedule nobody can read the state of is a profile with extra steps")
+
+	if len(schedule.States) == 0 {
+		this.fail(schedulePath+".states", "a schedule needs at least one state, otherwise there is no programme to run")
+	}
+	if len(schedule.States) > MaxScheduleStates {
+		this.fail(schedulePath+".states", "a schedule may have at most %d states, got %d", MaxScheduleStates, len(schedule.States))
+	}
+
+	if schedule.Gate != nil {
+		gatePath := schedulePath + ".gate"
+		switch {
+		case strings.TrimSpace(schedule.Gate.ContextKey) == "":
+			this.fail(gatePath+".context_key", "a gate must name the context key it waits for, otherwise the schedule reads 0 and never starts")
+		case schedule.Gate.ContextKey != strings.TrimSpace(schedule.Gate.ContextKey):
+			this.fail(gatePath+".context_key", "must not begin or end with whitespace: the runtime looks the key up in the context exactly as it stands, so %q is a gate that never finds the calendar the editor shows it waiting for", schedule.Gate.ContextKey)
+		default:
+			//checked in the second pass: the key may be driven by a context
+			//source declared at the top of a document whose zones are walked here
+			this.gateRefs = append(this.gateRefs, channelRef{path: gatePath + ".context_key", id: schedule.Gate.ContextKey})
+		}
+		//a threshold may be negative - a gate on a temperature is a legitimate
+		//shape - but it has to be comparable at all
+		this.checkFinite(gatePath+".threshold", schedule.Gate.Threshold)
+	}
+
+	names := map[string]int{}
+	for i := range schedule.States {
+		state := schedule.States[i]
+		statePath := fmt.Sprintf("%s.states[%d]", schedulePath, i)
+		name := state.Name
+		switch {
+		case strings.TrimSpace(name) == "":
+			this.fail(statePath+".name", "must not be empty: the name is what the state key carries and what a formula and a dashboard read")
+		case name != strings.TrimSpace(name):
+			//the name is written into the asset state verbatim, so it is the
+			//string every comparison downstream is made against
+			this.fail(statePath+".name", "must not begin or end with whitespace: %q is the value a formula and a dashboard would have to compare against, and it reads as %q everywhere a human looks at it", name, strings.TrimSpace(name))
+		case schedule.Gate != nil && name == ScheduleClosedState:
+			this.fail(statePath+".name", "%q is the name a gated schedule writes while its gate is closed, so a state of that name could not be told apart from the machine standing still", ScheduleClosedState)
+		default:
+			if previous, taken := names[name]; taken {
+				this.fail(statePath+".name", "duplicate state name %q, already used by states[%d]: the name is the only thing a reader has to tell two steps apart", name, previous)
+			} else {
+				names[name] = i
+			}
+		}
+		switch {
+		case state.DurationSeconds <= 0:
+			this.fail(statePath+".duration_seconds", "must be greater than zero, a step of no length is never reached")
+		case state.DurationSeconds > MaxScheduleDurationSeconds:
+			this.fail(statePath+".duration_seconds", "must be at most %d seconds (a year)", MaxScheduleDurationSeconds)
+		}
+		//100 percent would allow a drawn duration of zero, and the runtime would
+		//have to invent a floor the document never mentions
+		if !(state.DurationSpreadPercent >= 0 && state.DurationSpreadPercent < 100) {
+			this.fail(statePath+".duration_spread_percent", "must be at least 0 and less than 100, otherwise a cycle could draw a step of no length at all")
+		}
+		this.checkThreshold(statePath+".spread_percent", state.SpreadPercent)
+		this.checkFinite(statePath+".value", state.Value)
+		for _, key := range sortedWriteKeys(state.StateWrites) {
+			this.checkScheduleKey(fmt.Sprintf("%s.state_writes.%s", statePath, key), key,
+				"a state write with no key writes nothing")
+			this.checkFinite(fmt.Sprintf("%s.state_writes.%s", statePath, key), state.StateWrites[key])
+		}
+	}
+}
+
+// checkScheduleKey applies the state key rules to a key a schedule writes.
+// damage says what an empty one costs, which differs per field.
+func (this *validator) checkScheduleKey(path string, key string, damage string) {
+	if strings.TrimSpace(key) == "" {
+		this.fail(path, "must not be empty: %s", damage)
+		return
+	}
+	//the key is written into the asset state exactly as it stands here, while a
+	//formula input, a dashboard tile and the state endpoint all name it trimmed:
+	//a stray space is a value nothing that reads the document can address
+	if key != strings.TrimSpace(key) {
+		this.fail(path, "must not begin or end with whitespace: the asset state would carry %q, which is not the key %q anything reading it would name", key, strings.TrimSpace(key))
+	}
+	//the same rule checkStates applies to every other state key: mongodb reads
+	//both characters as structure rather than as a name
+	if strings.ContainsAny(key, ".$") {
+		this.fail(path, "a state key must not contain '.' or '$'")
+	}
+}
+
+// checkFinite rejects a number that cannot be compared or stored. It is the
+// checkThreshold rule without the sign: NaN loses every comparison it takes
+// part in, an infinity cannot be marshalled, and both are what a generated
+// document produces from a division.
+func (this *validator) checkFinite(path string, value float64) {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		this.fail(path, "must be a finite number")
+	}
+}
+
+// checkScheduleKeys refuses two writers of one asset state key.
+//
+// The asset state map is flat and shared: a cumulative profile stores its meter
+// reading under its own channel id, and every schedule of the asset writes its
+// state name and its declared values there too. A collision is not ill formed
+// and produces no error at runtime - the last writer of the tick simply wins,
+// and the loser's value is a reading that silently stops moving or a meter that
+// jumps between a count and a string. That is worth refusing at store time,
+// where the author can still see both writers.
+//
+// Reported at the later channel: the first claim on a key is the one that keeps
+// it, the same way checkAggregateOverlap reports at the channel that collides.
+func (this *validator) checkScheduleKeys(path string, asset Asset) {
+	channelIds := map[string]bool{}
+	for i := range asset.Channels {
+		if asset.Channels[i].Id != "" {
+			channelIds[asset.Channels[i].Id] = true
+		}
+	}
+	claimed := map[string]int{}
+	for i := range asset.Channels {
+		channel := asset.Channels[i]
+		if channel.Source.Kind != SourceSchedule || channel.Source.Schedule == nil {
+			continue
+		}
+		schedule := channel.Source.Schedule
+		channelPath := fmt.Sprintf("%s.channels[%d].source.schedule", path, i)
+
+		//sorted and deduplicated: a key declared by several states is the union
+		//semantics working as intended and not a collision, and a map iteration
+		//would order the problems of one document differently on every save
+		writes := map[string]bool{}
+		for j := range schedule.States {
+			for key := range schedule.States[j].StateWrites {
+				writes[key] = true
+			}
+		}
+		keys := []string{}
+		for key := range writes {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+
+		if writes[schedule.StateKey] {
+			this.fail(channelPath+".state_key",
+				"the state key %q is also written as a state write of this schedule, so the name of the running state would be overwritten by a number on every evaluation",
+				schedule.StateKey)
+		}
+		if schedule.StateKey != "" {
+			keys = append([]string{schedule.StateKey}, keys...)
+		}
+
+		for _, key := range keys {
+			if channelIds[key] {
+				this.fail(channelPath,
+					"this schedule writes the asset state key %q, which is the channel id of a channel of the same asset: a cumulative profile stores its meter reading under exactly that key, so the two would overwrite each other",
+					key)
+				continue
+			}
+			if previous, taken := claimed[key]; taken {
+				this.fail(channelPath,
+					"this schedule writes the asset state key %q, which the schedule of channels[%d] already writes: whichever of them evaluates last would win, and neither document says which",
+					key, previous)
+				continue
+			}
+			claimed[key] = i
+		}
+	}
+}
+
+// sortedKeys is how a map is walked when the order decides the order of the
+// reported problems: the same document has to produce the same message list on
+// every save.
+func sortedWriteKeys(values map[string]float64) []string {
+	result := make([]string, 0, len(values))
+	for key := range values {
+		result = append(result, key)
+	}
+	sort.Strings(result)
+	return result
 }
 
 // checkStates rejects values that cannot survive the round trip through bson
@@ -666,11 +911,13 @@ func (this *validator) checkContextSource(path string, key string, source Source
 		}
 	case SourceDataset:
 		this.checkDatasetFields(path, source)
-	case SourceScript, SourceFormula, SourceAggregate:
+	case SourceScript, SourceFormula, SourceAggregate, SourceSchedule:
 		//named rather than left to the unknown-kind default: these kinds exist,
 		//they are simply not available here, and "unknown" would send their
 		//author looking for a typo. An aggregate needs an asset to sum below,
-		//and a context key has none.
+		//and a context key has none. A schedule writes the name of its state
+		//into an asset state and would have no asset here either - and a gate
+		//reading the context while the schedule writes it would be a cycle.
 		this.fail(path+".kind", "source kind %q is not supported for context sources", source.Kind)
 	case "":
 		this.fail(path+".kind", "must be set")

@@ -719,6 +719,11 @@ func (this *Runtime) dispatch(env *environment, gen *generation, binding channel
 		this.executeFormula(env, binding, remembered)
 	case domain.SourceAggregate:
 		this.executeAggregate(env, gen, binding, remembered)
+	case domain.SourceSchedule:
+		//through remembered like every other declarative source: the value of a
+		//schedule is what a formula reading channel.<id> sees, and what an
+		//aggregate above the asset sums
+		this.executeSchedule(env, gen, binding, remembered)
 	default:
 		this.execute(env, gen, binding, input, remembered)
 	}

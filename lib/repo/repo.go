@@ -101,6 +101,19 @@ type RuntimeState struct {
 	// channel id.
 	LastPublished map[string]PublishedValue `json:"last_published,omitempty" bson:"last_published,omitempty"`
 
+	// ScheduleRuns holds, per channel with a schedule source, where its
+	// programme currently stands. Without it a restart would put every declared
+	// machine back at its first state, so a deployment would look like every
+	// plant of the site setting itself up at once - and a gated one would sit
+	// closed until the next rising edge, which for a shift calendar is the next
+	// morning.
+	//
+	// A sibling of Anchors and LastPublished, for their reasons: it is
+	// bookkeeping of the runtime, no client can reach it (StateChange does not
+	// carry it), and keeping it out of the asset map means it cannot collide
+	// with the state keys the schedule itself writes there.
+	ScheduleRuns map[string]ScheduleRun `json:"schedule_runs,omitempty" bson:"schedule_runs,omitempty"`
+
 	// Approaching holds the zone values that are moving towards a set point,
 	// keyed by zone id and state key. It is stored, so a restart continues an
 	// approach instead of jumping to its target.
@@ -169,6 +182,35 @@ type Approach struct {
 type PublishedValue struct {
 	Value  float64 `json:"value" bson:"value"`
 	AtUnix int64   `json:"at_unix" bson:"at_unix"`
+}
+
+// ScheduleRun is where one schedule channel stands: the instant its current
+// pass through the states began, how many whole cycles were already behind that
+// instant, and whether its gate is open.
+//
+// The two numbers are one anchor in two parts, and both are needed. A cycling
+// schedule rolls StartUnix forward by the cycles it has consumed so that the
+// walk from the anchor to now stays short however long the environment runs;
+// CycleOffset then keeps counting the cycles that roll-forward dropped, and the
+// per-cycle duration draw is taken on that absolute count - which is what makes
+// the roll-forward invisible in the values instead of a slow drift.
+//
+// Open is the edge detector of a gated schedule: the cycle restarts at the
+// first state on every rise, so the flag has to survive a restart or a service
+// that came back inside a shift would start the programme over.
+type ScheduleRun struct {
+	StartUnix   int64 `json:"start_unix" bson:"start_unix"`
+	CycleOffset int64 `json:"cycle_offset" bson:"cycle_offset"`
+
+	// PassUnix is the salt of the pass that is running: it is set to StartUnix
+	// when the run is created and again on every rising edge, and it never moves
+	// afterwards - while StartUnix wanders with the roll-forward. A gated
+	// schedule draws its durations on this number, so that two mornings do not
+	// set up in exactly the same number of seconds and so that moving the anchor
+	// cannot redraw the shift that is running.
+	PassUnix int64 `json:"pass_unix,omitempty" bson:"pass_unix,omitempty"`
+
+	Open bool `json:"open" bson:"open"`
 }
 
 // Environments stores environment definitions.

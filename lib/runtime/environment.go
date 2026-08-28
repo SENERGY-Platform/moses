@@ -395,6 +395,11 @@ func (this *generation) addAsset(envId string, zoneId string, asset domain.Asset
 		//meaningful channel too - a distribution meter without sub-meters
 		//reads zero, which is a reading and not silence
 		aggregate := channel.Source.Kind == domain.SourceAggregate
+		//a schedule without states has no programme to run: it would publish the
+		//value of a state that does not exist, so it is dropped here the way an
+		//unloadable dataset is
+		schedule := channel.Source.Kind == domain.SourceSchedule &&
+			channel.Source.Schedule != nil && len(channel.Source.Schedule.States) > 0
 		var program *formula.Program
 		if channel.Source.Kind == domain.SourceFormula && channel.Source.Formula != nil {
 			var err error
@@ -405,7 +410,7 @@ func (this *generation) addAsset(envId string, zoneId string, asset domain.Asset
 					attributes.ErrorKey, err, "environment", envId, "channel", channel.Id)
 			}
 		}
-		if !script && !profile && !replay && !aggregate && program == nil {
+		if !script && !profile && !replay && !aggregate && !schedule && program == nil {
 			//validation rejects these on the way in, so this is a document that
 			//bypassed the api or one written for a later version of the format
 			util.Logger.Warn("channel source kind is not executed yet, the channel does nothing",
@@ -600,6 +605,35 @@ func (this *environment) carryLastValues(gen *generation) {
 		}
 	}
 
+	// and the same prune again for the anchors of the declared programmes. An
+	// entry is kept only for a channel that still runs a schedule in the new
+	// generation: turn such a channel into a profile and its anchor is a start
+	// instant nothing reads, written out on every flush forever - and one that
+	// would come back as the position of a programme that has not run for weeks
+	// if the source were ever switched back.
+	if len(this.state.ScheduleRuns) > 0 {
+		scheduled := make(map[string]bool, len(gen.sensors))
+		keep := func(binding channelBinding) {
+			if binding.channel.Source.Kind == domain.SourceSchedule && binding.channel.Source.Schedule != nil {
+				scheduled[binding.channel.Id] = true
+			}
+		}
+		for _, binding := range gen.sensors {
+			keep(binding)
+		}
+		//a channel a command can reach advances its programme when the command
+		//arrives, the same reason the value cache keeps its entry
+		for _, binding := range gen.commands {
+			keep(binding)
+		}
+		for id := range this.state.ScheduleRuns {
+			if !scheduled[id] {
+				delete(this.state.ScheduleRuns, id)
+				this.dirty = true
+			}
+		}
+	}
+
 	for _, binding := range gen.sensors {
 		profile := binding.channel.Source.Profile
 		if binding.channel.Source.Kind != domain.SourceProfile || profile == nil || !profile.Cumulative {
@@ -686,6 +720,12 @@ func (this *environment) snapshot() repo.RuntimeState {
 		result.LastPublished = make(map[string]repo.PublishedValue, len(this.state.LastPublished))
 		for id, published := range this.state.LastPublished {
 			result.LastPublished[id] = published
+		}
+	}
+	if len(this.state.ScheduleRuns) > 0 {
+		result.ScheduleRuns = make(map[string]repo.ScheduleRun, len(this.state.ScheduleRuns))
+		for id, run := range this.state.ScheduleRuns {
+			result.ScheduleRuns[id] = run
 		}
 	}
 	if len(this.state.Approaching) > 0 {

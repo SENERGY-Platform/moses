@@ -25,12 +25,21 @@ Each channel has a **source** that produces its value:
 | `dataset` | replay of an uploaded CSV timeseries (stored in GridFS, German CSV dialect detected, timezone parameter) |
 | `formula` | an [expr-lang/expr](https://github.com/expr-lang/expr) expression over other channels and the context |
 | `aggregate` | the sum of the same-`characteristic_id` channels of every asset whose `submetered_by` points here — no configuration, the meter tree is the configuration |
+| `schedule` | a declared machine programme: named states with a duration and a value each, cycled deterministically, optionally started by a context key |
 
 A sensor channel can carry `publish_on_change`: it then sends when its value
 moves by more than an absolute and/or a relative threshold, and in any case
 once per `interval_seconds` (the heartbeat). That is what real metering
 hardware does, and the last published value is persisted so a restart produces
 no burst of transients — see `docs/publish-on-change.md`.
+
+A `schedule` channel writes the name of the state it is in into the asset
+state, along with the values that state declares (the air a running machine
+consumes), so a formula, the live state and a dashboard read what the plant is
+doing instead of guessing it from the load. A `gate` on a context key — a shift
+calendar — restarts the programme at its first state on every rise, which is
+where a morning peak comes from. Where the programme stands is persisted, so a
+restart continues it — see `docs/schedule.md`.
 
 The **context** is the site-wide state every zone and formula can read
 (`context.outdoor_temperature`). Static entries keep their value; *context

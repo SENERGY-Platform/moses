@@ -152,10 +152,19 @@ replay history to kafka consumers.
 | `script` | no | stateful: its value depends on the state its earlier runs left behind, and that state does not exist for a past moment |
 | `formula` | no | derived: it follows from other channels and the context rather than being a series of its own |
 | `aggregate` | no | derived: it follows from the channels of the sub-metered assets rather than being a series of its own |
+| `schedule` | no | anchored: it stands where its persisted run anchor and, with a gate, the live context put it, and neither exists for a past moment |
 
 A change trigger changes nothing about *what* is backfillable — it is a property
 of the source, and `profile` and `dataset` stay the two that are — only about
 *how*, see the section above.
+
+A `schedule` channel is the one whose refusal is not structural. A free running
+schedule is a pure function of the seed and its anchor, so a window could be
+reconstructed — but the anchor is runtime state and does not exist before the
+programme first ran, and a gated schedule additionally follows a context key
+whose past values nothing keeps. Reconstructing it would mean inventing both, so
+the window would carry a different programme than the one that ran. See
+`docs/schedule.md`.
 
 Also skipped, each with its own reason in the status: a channel that does not
 publish on a schedule, an asset without a platform device, a channel without a

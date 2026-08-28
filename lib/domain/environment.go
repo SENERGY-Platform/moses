@@ -260,6 +260,10 @@ const (
 	// meter tree, so a channel added below is summed without editing anything
 	// here - which is the difference to a formula naming its inputs one by one.
 	SourceAggregate SourceKind = "aggregate"
+	// SourceSchedule cycles through named states, each with a duration and a
+	// value: the machine programme of a plant, declared as data instead of
+	// written as a script.
+	SourceSchedule SourceKind = "schedule"
 )
 
 // Source is what drives a channel; exactly one variant matches Kind, with
@@ -276,10 +280,11 @@ type Source struct {
 	// on another, and folding the two together would change the simulation.
 	IntervalSeconds int64 `json:"interval_seconds,omitempty" bson:"interval_seconds,omitempty,truncate"`
 
-	Script  *ScriptSource  `json:"script,omitempty" bson:"script,omitempty"`
-	Profile *ProfileSource `json:"profile,omitempty" bson:"profile,omitempty"`
-	Dataset *DatasetSource `json:"dataset,omitempty" bson:"dataset,omitempty"`
-	Formula *FormulaSource `json:"formula,omitempty" bson:"formula,omitempty"`
+	Script   *ScriptSource   `json:"script,omitempty" bson:"script,omitempty"`
+	Profile  *ProfileSource  `json:"profile,omitempty" bson:"profile,omitempty"`
+	Dataset  *DatasetSource  `json:"dataset,omitempty" bson:"dataset,omitempty"`
+	Formula  *FormulaSource  `json:"formula,omitempty" bson:"formula,omitempty"`
+	Schedule *ScheduleSource `json:"schedule,omitempty" bson:"schedule,omitempty"`
 }
 
 type ScriptSource struct {
@@ -368,6 +373,95 @@ type FormulaSource struct {
 	// Inputs maps a name usable in Expression to a channel id or context key.
 	Inputs map[string]string `json:"inputs" bson:"inputs"`
 }
+
+// ScheduleSource is a machine programme declared as data: a cycle of named
+// states, each held for a duration and publishing a value of its own.
+//
+// It exists because the alternative for "idle, then set up, then running" was a
+// script - unvalidatable, not editable in a form, and its running state an
+// anonymous number in a timeseries. Here the states are a list an editor can
+// show, the value of each one is a field, and the name of the state the machine
+// is in right now is written into the asset state, so that a formula, the live
+// state endpoint and a dashboard can all read what the plant is doing rather
+// than guessing it from the load.
+//
+// What it deliberately cannot do is react. There are no transitions and no
+// conditions per state: a programme that depends on a measurement is a script,
+// and pretending otherwise would turn this into a state machine language nobody
+// asked for. The one thing the outside world can do is start it, through Gate.
+type ScheduleSource struct {
+	// States are run in the order they are written, and the last one is followed
+	// by the first again unless RunOnce says otherwise.
+	States []ScheduleState `json:"states" bson:"states"`
+
+	// StateKey is the asset state key the name of the current state is written
+	// to. It is mandatory and explicit rather than derived from the channel id:
+	// whoever reads it - a formula input, a dashboard tile - has to spell it out,
+	// and a key nobody chose is a key nobody finds.
+	StateKey string `json:"state_key" bson:"state_key"`
+
+	// Gate, when set, is the switch that starts the programme. Nil means the
+	// cycle runs for as long as the environment does.
+	Gate *ScheduleGate `json:"gate,omitempty" bson:"gate,omitempty"`
+
+	// RunOnce holds the last state instead of starting the cycle over. It is the
+	// shape of a job rather than of a running plant: a forklift charging once per
+	// shift stops charging and stays stopped. With a Gate every opening starts a
+	// new single run.
+	RunOnce bool `json:"run_once,omitempty" bson:"run_once,omitempty"`
+}
+
+// ScheduleState is one step of the programme.
+type ScheduleState struct {
+	// Name is what is written into the asset state while this step runs. It is
+	// the reason the source exists, so it is not optional.
+	Name string `json:"name" bson:"name"`
+
+	// DurationSeconds is how long the step is held. DurationSpreadPercent varies
+	// it per cycle, drawn from the environment seed, so that a plant does not
+	// need exactly 412 seconds to set up every single time; it is a percentage
+	// below 100, because a step of no length is not a step.
+	DurationSeconds       int64   `json:"duration_seconds" bson:"duration_seconds"`
+	DurationSpreadPercent float64 `json:"duration_spread_percent,omitempty" bson:"duration_spread_percent,omitempty"`
+
+	// Value is what the channel publishes while the step runs, and
+	// SpreadPercent varies it the way a profile's spread does - per time slot,
+	// not per cycle, so that a channel publishing on change has something to see
+	// inside a step that would otherwise be a perfectly flat line.
+	Value         float64 `json:"value" bson:"value"`
+	SpreadPercent float64 `json:"spread_percent,omitempty" bson:"spread_percent,omitempty"`
+
+	// StateWrites are further asset state values this step declares: the air
+	// demand of a machine that is running, the setpoint it asks of the hall.
+	// They are read by formulas and by whoever reads the live state.
+	//
+	// The keys of every state of the schedule are written on every evaluation,
+	// not only the ones of the current state: a key another state declares is
+	// written as 0 here. Without that union an air demand set while running
+	// would still stand while the machine is idle, and nothing in the document
+	// would say so.
+	StateWrites map[string]float64 `json:"state_writes,omitempty" bson:"state_writes,omitempty"`
+}
+
+// ScheduleGate starts the programme from a context key, which is what a shift
+// calendar is: the cycle restarts at the first state every time the key rises
+// above Threshold, so the morning peak is produced by the programme rather than
+// hand-drawn into a profile.
+//
+// Threshold is exclusive - open means strictly greater - so the default of 0
+// fits the 0/1 calendar every context source writes without anybody having to
+// think about it.
+type ScheduleGate struct {
+	ContextKey string  `json:"context_key" bson:"context_key"`
+	Threshold  float64 `json:"threshold,omitempty" bson:"threshold,omitempty"`
+}
+
+// ScheduleClosedState is the name written while a gate is closed. It is fixed
+// rather than configurable because it has to mean the same thing in every
+// document a dashboard reads, and it is refused as a state name of a gated
+// schedule (see checkSchedule) so that "the machine is standing still" and "the
+// machine is in a state its author called off" cannot look identical.
+const ScheduleClosedState = "off"
 
 // ParseWindow reads a replay window. time.ParseDuration covers h/m/s; days and
 // weeks are worth having because "7d" is how people think about load data.

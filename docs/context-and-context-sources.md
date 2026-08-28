@@ -22,9 +22,11 @@ each on its own ticker (`lib/runtime/contextsource.go`):
 
 - **Allowed: `profile` and `dataset`.** A day-cycle temperature, a replayed
   weather series.
-- **Refused: `script` and `formula`** — validation answers
-  `not supported for context sources`. A formula reading the context it writes
-  would be a cycle; scripts already can write the context directly.
+- **Refused: `script`, `formula`, `aggregate` and `schedule`** — validation
+  answers `not supported for context sources`. A formula reading the context it
+  writes would be a cycle; scripts already can write the context directly; an
+  aggregate needs an asset to sum below; a schedule writes the name of its state
+  into an *asset* state, and a context key has none.
 - **`interval_seconds` is mandatory and > 0** — validation answers
   `a context source has no publish tick to piggyback on, it needs its own interval`.
 
@@ -33,3 +35,15 @@ Replay anchors of dataset context sources persist under the series id
 
 Nothing is published by a context source itself: it only moves the value that
 channels and formulas then read on their own ticks.
+
+## A context key as a switch
+
+A context key is also what a `schedule` channel's `gate` reads: the schedule
+restarts its programme at the first state whenever the key rises above the
+gate's threshold, and stands the machine still while it does not (`docs/schedule.md`).
+The key has to be declared here — as a static `context` entry or as a
+`context_sources` entry — or validation refuses the gate. A script and the state
+endpoint write context keys too, so an undeclared key is not necessarily dead;
+what it is, is unreadable, a machine waiting for something nothing in the
+document mentions. Declaring an initial `0` is the whole cost of it. The schedule
+only *reads* the key; nothing about it makes the schedule a context source.

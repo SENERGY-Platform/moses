@@ -430,6 +430,8 @@ func backfillSkipsByDefinition(channel domain.Channel) string {
 		return "a formula is derived from other channels and the context, and follows from them rather than being a series of its own"
 	case domain.SourceAggregate:
 		return "an aggregate is derived from the channels of the sub-metered assets, and follows from them rather than being a series of its own"
+	case domain.SourceSchedule:
+		return "a schedule stands where its persisted anchor and, with a gate, the live context put it: neither of those exists for a past moment, so a reconstructed window would be a different programme than the one that ran"
 	case domain.SourceProfile:
 		if source.Profile == nil {
 			return "the profile source carries no profile"
