@@ -161,6 +161,22 @@ type channelBinding struct {
 	// channel publishes, which is the only behaviour the legacy runtime had.
 	sourceInterval int64
 
+	// cov is the resolved change trigger, nil for a channel that publishes on
+	// its ticker alone. It is a copy rather than a pointer into the definition,
+	// like the profile executeProfile takes, so a runner never reads a document
+	// that could be edited under it.
+	cov *covSettings
+
+	// stepSeconds is the span one computation of this channel stands for: the
+	// evaluation interval with a change trigger, the publish interval without
+	// one. It is what a cumulative profile integrates over and what the spread
+	// slot and a distributing replay are cut by - all three would otherwise be
+	// counted in publish intervals while the value is computed far more often.
+	//
+	// Without a trigger it is exactly channel.IntervalSeconds, which keeps every
+	// existing document byte identical.
+	stepSeconds int64
+
 	// points is the parsed series of a dataset channel, loaded at start.
 	points []dataset.Point
 
@@ -421,6 +437,20 @@ func (this *generation) addAsset(envId string, zoneId string, asset domain.Asset
 				"interval_seconds", channel.IntervalSeconds, "limit", maxIntervalSeconds)
 			publishes = false
 		}
+		//the span one computation stands for, overwritten below when a change
+		//trigger moves the computation onto its own cadence
+		binding.stepSeconds = channel.IntervalSeconds
+		if cov, usable, reason := covOf(channel); reason != "" {
+			//validation refuses every one of these, so the document bypassed the
+			//api or was written for a later version of the format. Degrading to
+			//the plain ticker is the honest fallback: the channel keeps
+			//publishing, only not on change.
+			util.Logger.Warn("the change trigger of this channel is unusable, it publishes on its interval alone",
+				"environment", envId, "channel", channel.Id, "reason", reason)
+		} else if usable {
+			binding.cov = &cov
+			binding.stepSeconds = cov.evalSeconds
+		}
 		//a source interval makes the channel tick even when nothing is published
 		//on a schedule: that is a state the other channels of the asset read
 		if publishes || binding.sourceInterval > 0 {
@@ -550,6 +580,26 @@ func (this *environment) carryLastValues(gen *generation) {
 		}
 	}
 
+	// the same prune for the persisted side, and for the same reason. An entry
+	// only means something for a channel that still compares against it: once a
+	// trigger is removed or the channel is gone, it is a number nothing reads
+	// and that would be written out on every flush forever. Unlike lastValues
+	// this is stored, so dropping an entry is a change and has to be flushed.
+	if len(this.state.LastPublished) > 0 {
+		compares := make(map[string]bool, len(gen.sensors))
+		for _, binding := range gen.sensors {
+			if binding.cov != nil {
+				compares[binding.channel.Id] = true
+			}
+		}
+		for id := range this.state.LastPublished {
+			if !compares[id] {
+				delete(this.state.LastPublished, id)
+				this.dirty = true
+			}
+		}
+	}
+
 	for _, binding := range gen.sensors {
 		profile := binding.channel.Source.Profile
 		if binding.channel.Source.Kind != domain.SourceProfile || profile == nil || !profile.Cumulative {
@@ -630,6 +680,12 @@ func (this *environment) snapshot() repo.RuntimeState {
 		result.Anchors = make(map[string]int64, len(this.state.Anchors))
 		for id, anchor := range this.state.Anchors {
 			result.Anchors[id] = anchor
+		}
+	}
+	if len(this.state.LastPublished) > 0 {
+		result.LastPublished = make(map[string]repo.PublishedValue, len(this.state.LastPublished))
+		for id, published := range this.state.LastPublished {
+			result.LastPublished[id] = published
 		}
 	}
 	if len(this.state.Approaching) > 0 {

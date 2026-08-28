@@ -107,9 +107,11 @@ type BackfillChannelStatus struct {
 	Backfillable bool   `json:"backfillable"`
 	SkipReason   string `json:"skip_reason,omitempty"`
 
-	// Published counts the readings that reached the platform, Silent the ticks
-	// that produced no value at all (a dataset outside its own time range), and
-	// Failed the ones the platform refused.
+	// Published counts the readings that reached the platform, Silent the steps
+	// that sent nothing - a tick that produced no value at all (a dataset
+	// outside its own time range), or one whose value did not move far enough
+	// for a channel publishing on change - and Failed the ones the platform
+	// refused. The three add up to the steps of the channel's grid.
 	Published int64 `json:"published"`
 	Silent    int64 `json:"silent,omitempty"`
 	Failed    int64 `json:"failed,omitempty"`
@@ -316,12 +318,24 @@ func validateBackfillWindow(from time.Time, to time.Time, now time.Time) (time.T
 
 // checkBackfillVolume refuses a job before it starts rather than after it has
 // been running for a day. The count is the upper bound: it assumes every
-// scheduled channel turns out to be backfillable, and the job can only publish
+// counted channel turns out to be backfillable, and the job can only publish
 // fewer.
+//
+// Only what the job could write is counted. The skip reasons that follow from
+// the definition alone are asked here, exactly as the job will ask them, because
+// a channel the job refuses must not spend the reading budget: a script channel
+// with a one second evaluation cadence comes to two and a half million steps
+// over a month and would take the whole job down with it, for a channel the
+// backfill never writes a single reading for. The remaining reasons need the
+// loaded series or a device type read and cannot be asked before the job exists;
+// they only ever remove channels, so leaving them out keeps this an upper bound.
 func checkBackfillVolume(channels []backfillChannel, from time.Time, to time.Time) error {
 	total := int64(0)
 	for _, channel := range channels {
-		total += backfillTicks(channel.channel.IntervalSeconds, from, to)
+		if backfillSkipsByDefinition(channel.channel) != "" {
+			continue
+		}
+		total += backfillTicks(backfillStepSeconds(channel.channel), from, to)
 		if total > maxBackfillEvents {
 			return &BackfillRangeError{Reason: fmt.Sprintf(
 				"this window and the channel intervals of this environment come to more than %d readings; shorten the window or widen the intervals",
@@ -329,6 +343,20 @@ func checkBackfillVolume(channels []backfillChannel, from time.Time, to time.Tim
 		}
 	}
 	return nil
+}
+
+// backfillStepSeconds is the grid one channel is reconstructed on: its publish
+// interval, or the evaluation interval of a usable change trigger.
+//
+// The volume check counts on this grid too, which is the honest number: a
+// channel publishing on change can, in the worst case, publish on every
+// evaluation, and a check counting heartbeats would wave through a job that then
+// publishes a hundred times as much as it promised.
+func backfillStepSeconds(channel domain.Channel) int64 {
+	if cov, usable, _ := covOf(channel); usable {
+		return cov.evalSeconds
+	}
+	return channel.IntervalSeconds
 }
 
 // backfillTicks is how many readings one channel produces over the window: the
@@ -382,14 +410,17 @@ func backfillChannels(def domain.Environment) []backfillChannel {
 	return result
 }
 
-// skipReason says why a channel cannot be backfilled, or "" when it can. The
-// cheap reasons come first: the last one costs a device type read.
-func (this *Runtime) skipReason(channel backfillChannel, points []dataset.Point) string {
-	source := channel.channel.Source
-	if channel.channel.Direction != domain.Sensor || channel.channel.IntervalSeconds <= 0 {
+// backfillSkipsByDefinition is the half of skipReason that follows from the
+// channel definition alone: direction, schedule and source kind. It is split out
+// so that the volume check can ask exactly the question the job will ask, before
+// a job exists - see checkBackfillVolume - rather than a second, slightly
+// different one that would drift away from this one.
+func backfillSkipsByDefinition(channel domain.Channel) string {
+	source := channel.Source
+	if channel.Direction != domain.Sensor || channel.IntervalSeconds <= 0 {
 		return "the channel does not publish on a schedule, so there is no series to reconstruct"
 	}
-	if channel.channel.IntervalSeconds > maxIntervalSeconds {
+	if channel.IntervalSeconds > maxIntervalSeconds {
 		return "the channel interval is out of range"
 	}
 	switch source.Kind {
@@ -407,6 +438,19 @@ func (this *Runtime) skipReason(channel backfillChannel, points []dataset.Point)
 		if source.Dataset == nil {
 			return "the dataset source carries no dataset"
 		}
+	default:
+		return "this source kind is not backfilled"
+	}
+	return ""
+}
+
+// skipReason says why a channel cannot be backfilled, or "" when it can. The
+// cheap reasons come first: the last one costs a device type read.
+func (this *Runtime) skipReason(channel backfillChannel, points []dataset.Point) string {
+	if reason := backfillSkipsByDefinition(channel.channel); reason != "" {
+		return reason
+	}
+	if channel.channel.Source.Kind == domain.SourceDataset {
 		if len(points) < 2 {
 			return "the dataset of this channel is not loaded, so there is nothing to replay"
 		}
@@ -414,8 +458,6 @@ func (this *Runtime) skipReason(channel backfillChannel, points []dataset.Point)
 			//replayValue divides the elapsed time by this span
 			return "the dataset of this channel covers no time span"
 		}
-	default:
-		return "this source kind is not backfilled"
 	}
 	if channel.externalDeviceRef == "" {
 		return "the asset has no platform device, so a reading has nowhere to go"
@@ -520,7 +562,14 @@ func (this *Runtime) runBackfill(ctx context.Context, job *backfillJob, gen *gen
 // would make the live channel jump to a different point in its data.
 func (this *Runtime) runBackfillChannel(ctx context.Context, job *backfillJob, gen *generation, channel backfillChannel, points []dataset.Point, from time.Time, to time.Time, status *BackfillChannelStatus) {
 	interval := channel.channel.IntervalSeconds
-	steps := backfillTicks(interval, from, to)
+	//with a change trigger the value is computed on the evaluation grid and the
+	//publish interval becomes the heartbeat, exactly as it does live
+	cov, hasCov, _ := covOf(channel.channel)
+	step := interval
+	if hasCov {
+		step = cov.evalSeconds
+	}
+	steps := backfillTicks(step, from, to)
 
 	//a looping replay plays relative to an anchor. The live anchor is the moment
 	//the simulation started, which lies after this window, so replayValue would
@@ -534,6 +583,21 @@ func (this *Runtime) runBackfillChannel(ctx context.Context, job *backfillJob, g
 	counter := float64(0)
 	cumulative := channel.channel.Source.Kind == domain.SourceProfile && channel.channel.Source.Profile.Cumulative
 
+	//the change trigger is reproduced the same way: local bookkeeping, from
+	//nothing, so the window decides the result and not whatever the live channel
+	//published last. It is the same pure covSends the live gate uses, which is
+	//what makes a reconstructed series and a live one agree.
+	//
+	//Two pieces, because the live gate keeps two: the comparison base, which only
+	//a finite published value becomes, and the moment of the last publish, which
+	//every publish restarts. Live those are the stored last_published entry and
+	//the heartbeat timer, and the timer starts with the channel - which is why
+	//this one starts at the window start rather than at zero. A channel whose
+	//first samples are not numbers then waits one heartbeat here as it does live,
+	//instead of having every instant count as overdue.
+	var lastPublished *float64
+	lastPublishedAt := from.Unix()
+
 	for i := int64(0); i < steps; i++ {
 		if ctx.Err() != nil {
 			return
@@ -543,10 +607,17 @@ func (this *Runtime) runBackfillChannel(ctx context.Context, job *backfillJob, g
 		//the hour and the weekday off the instant, and the live path hands it a
 		//local time.Now(), so a window given in UTC would otherwise shift every
 		//day profile by this server's zone offset
-		at := from.Add(time.Duration(i*interval) * time.Second).In(time.Local)
+		at := from.Add(time.Duration(i*step) * time.Second).In(time.Local)
 
-		value, ok := this.backfillValue(gen, channel, points, anchor, at, &counter, cumulative)
+		value, ok := this.backfillValue(gen, channel, points, anchor, at, &counter, cumulative, step)
 		if !ok {
+			status.Silent++
+			continue
+		}
+		if hasCov && !covBackfillSends(cov, lastPublished, lastPublishedAt, value, at, interval) {
+			//suppressed, and counted as silent for the same reason a value that
+			//was never produced is: nothing was sent at this instant. Published
+			//plus silent plus failed stays the number of steps.
 			status.Silent++
 			continue
 		}
@@ -559,7 +630,33 @@ func (this *Runtime) runBackfillChannel(ctx context.Context, job *backfillJob, g
 				util.Logger.Warn("unable to publish a backfilled reading", attributes.ErrorKey, err,
 					"environment", gen.def.Id, "channel", channel.channel.Id, "at", at)
 			}
+			//the attempt restarts the heartbeat gap whether or not the reading
+			//went out, because that is what the live runner does: it resets the
+			//timer right after covPublish, unconditionally. Keeping the old
+			//moment here would make every following instant overdue and shift
+			//the rest of the reconstructed grid off the live cadence over one
+			//refused reading. The comparison base stays as it was, exactly as
+			//covPublish leaves the stored entry alone on a failure.
+			if hasCov {
+				lastPublishedAt = at.Unix()
+			}
 			continue
+		}
+		if hasCov {
+			//every publish restarts the heartbeat gap, mirroring the live
+			//timer reset after covPublish
+			lastPublishedAt = at.Unix()
+			if finite(value) {
+				sent := value
+				lastPublished = &sent
+			}
+			//a value that is not finite went out but must not become the
+			//comparison base, exactly as covPublish refuses to store one: every
+			//later comparison against it would be false, so a single NaN sample
+			//in the middle of a dataset would suppress every movement until the
+			//next heartbeat here while the live channel published it - the two
+			//series would then disagree over a bad sample, which is precisely
+			//what the parity is bought for.
 		}
 		status.Published++
 		if status.Published%backfillLogEvery == 0 {
@@ -574,21 +671,41 @@ func (this *Runtime) runBackfillChannel(ctx context.Context, job *backfillJob, g
 	}
 }
 
+// covBackfillSends is the live gate's decision, replayed on the grid: whatever
+// covSends says goes out - the first finite reading, and every one that moved
+// far enough - and one that says no goes out anyway once the heartbeat gap has
+// run.
+//
+// The gap is measured with >= against integer seconds, so a heartbeat lands on
+// the grid instant exactly one interval after the last publish whenever the
+// interval is a multiple of the evaluation step - and at most one step later
+// when it is not.
+func covBackfillSends(cov covSettings, lastPublished *float64, lastPublishedAt int64, value float64, at time.Time, heartbeatSeconds int64) bool {
+	if covSends(cov, lastPublished, value) {
+		return true
+	}
+	return at.Unix()-lastPublishedAt >= heartbeatSeconds
+}
+
 // backfillValue is the reading of one channel at one instant, from the same
 // pure functions the live path uses.
-func (this *Runtime) backfillValue(gen *generation, channel backfillChannel, points []dataset.Point, anchor int64, at time.Time, counter *float64, cumulative bool) (float64, bool) {
+//
+// stepSeconds is the span one computation stands for - the publish interval, or
+// the evaluation interval of a change trigger - and is what the live path passes
+// as binding.stepSeconds for exactly the same three uses.
+func (this *Runtime) backfillValue(gen *generation, channel backfillChannel, points []dataset.Point, anchor int64, at time.Time, counter *float64, cumulative bool, stepSeconds int64) (float64, bool) {
 	source := channel.channel.Source
 	switch source.Kind {
 	case domain.SourceProfile:
-		value := profileValue(*source.Profile, gen.def.Seed, channel.channel.Id, channel.channel.IntervalSeconds, at)
+		value := profileValue(*source.Profile, gen.def.Seed, channel.channel.Id, stepSeconds, at)
 		if cumulative {
 			//the same share of an hourly rate the live tick adds
-			*counter += value * float64(channel.channel.IntervalSeconds) / 3600
+			*counter += value * float64(stepSeconds) / 3600
 			value = *counter
 		}
 		return value, true
 	case domain.SourceDataset:
-		return replayValue(*source.Dataset, points, anchor, at, channel.channel.IntervalSeconds)
+		return replayValue(*source.Dataset, points, anchor, at, stepSeconds)
 	}
 	return 0, false
 }

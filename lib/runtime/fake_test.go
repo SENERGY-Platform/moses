@@ -298,6 +298,16 @@ func (this *fakePublisher) TimeShapeOf(externalDeviceRef string, externalService
 	}, nil
 }
 
+// failWith makes every further publish report err, and every event that was
+// attempted is still recorded - so a test can count the attempts a channel made
+// while the platform refused them. Set under the mutex, because unlike gate and
+// failAt it is changed while the runtime is running.
+func (this *fakePublisher) failWith(err error) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	this.err = err
+}
+
 // backfilled returns the timestamped events of one channel in the order they
 // were published, which is the order the assertions are written in.
 func (this *fakePublisher) backfilled(serviceRef string) []publishedEvent {

@@ -413,6 +413,9 @@ func (this *validator) checkChannel(path string, channel Channel) {
 	if channel.Direction == Actuator && channel.IntervalSeconds > 0 {
 		this.fail(path+".interval_seconds", "an actuator is driven from outside and must not have an interval")
 	}
+	if channel.PublishOnChange != nil {
+		this.checkPublishOnChange(path, channel)
+	}
 	this.checkSource(path+".source", channel.Source)
 	if channel.Source.Kind == SourceProfile && (channel.Direction != Sensor || channel.IntervalSeconds <= 0) {
 		this.fail(path, "a profile source computes when the channel publishes, so the channel must be a sensor with an interval")
@@ -433,6 +436,67 @@ func (this *validator) checkChannel(path string, channel Channel) {
 		if strings.TrimSpace(channel.CharacteristicId) == "" {
 			this.fail(path+".characteristic_id", "an aggregate sums the channels of the sub-metered assets that carry the same characteristic, so it must name one")
 		}
+	}
+}
+
+// checkPublishOnChange refuses a trigger that cannot do what it promises. Every
+// rule here is a shape the runtime would otherwise have to degrade silently: a
+// trigger that never fires, one whose value is never looked at, or one on a
+// channel that publishes nothing at all. A document carrying one of them looks
+// like event driven metering in the editor and is a plain ticker in the data.
+func (this *validator) checkPublishOnChange(path string, channel Channel) {
+	trigger := channel.PublishOnChange
+	triggerPath := path + ".publish_on_change"
+
+	if channel.Direction != Sensor {
+		this.fail(triggerPath, "only a sensor publishes readings of its own, so only a sensor can publish them on change")
+	}
+	if channel.IntervalSeconds <= 0 {
+		this.fail(path+".interval_seconds", "a channel publishing on change needs an interval as its heartbeat: it is the longest silence the channel allows, and without it a value that stops moving would never be sent again")
+	}
+	this.checkThreshold(triggerPath+".absolute", trigger.Absolute)
+	this.checkThreshold(triggerPath+".relative", trigger.Relative)
+	//NaN fails both comparisons, so a threshold that is not a number counts as
+	//unset here as well as in the runtime
+	if !(trigger.Absolute > 0) && !(trigger.Relative > 0) {
+		this.fail(triggerPath, "at least one of absolute and relative must be greater than zero, otherwise nothing ever counts as a change and only the heartbeat publishes")
+	}
+
+	// exactly one evaluation cadence: the source's own interval, or this field.
+	evaluate := trigger.EvaluateIntervalSeconds
+	switch {
+	case evaluate < 0:
+		this.fail(triggerPath+".evaluate_interval_seconds", "must not be negative")
+	case channel.Source.IntervalSeconds > 0 && evaluate > 0:
+		this.fail(triggerPath+".evaluate_interval_seconds", "the source of this channel already carries an interval, and that is when the value is computed and therefore when it can be compared; a second cadence here would be a contradiction, so leave it at zero")
+	case channel.Source.IntervalSeconds <= 0 && evaluate == 0:
+		this.fail(triggerPath+".evaluate_interval_seconds", "a change can only be noticed when the value is computed, so a channel whose source has no interval of its own needs one here")
+	}
+
+	// and the value has to be looked at at least as often as the heartbeat
+	// fires, or the trigger could never be the reason for a publish.
+	evaluateEvery := evaluate
+	cadencePath := triggerPath + ".evaluate_interval_seconds"
+	if evaluateEvery <= 0 {
+		evaluateEvery = channel.Source.IntervalSeconds
+		cadencePath = path + ".source.interval_seconds"
+	}
+	if evaluateEvery > 0 && channel.IntervalSeconds > 0 && evaluateEvery > channel.IntervalSeconds {
+		this.fail(cadencePath, "the value would be computed every %d seconds while the heartbeat fires every %d, so the heartbeat would always be first and the trigger would never publish anything; evaluate at least as often as the heartbeat",
+			evaluateEvery, channel.IntervalSeconds)
+	}
+}
+
+// checkThreshold rejects what would silently disable a threshold. NaN and
+// infinity are what a generated document produces from a division, and neither
+// compares the way its author expects: NaN is never greater than anything, and
+// an infinite threshold is never exceeded.
+func (this *validator) checkThreshold(path string, value float64) {
+	switch {
+	case math.IsNaN(value) || math.IsInf(value, 0):
+		this.fail(path, "must be a finite number")
+	case value < 0:
+		this.fail(path, "must not be negative")
 	}
 }
 

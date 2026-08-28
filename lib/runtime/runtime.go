@@ -628,6 +628,13 @@ func validateChangeIds(gen *generation, change repo.StateChange) error {
 // legacy shape: one ticker, and what the script sends goes out at once.
 func (this *Runtime) runChannel(ctx context.Context, env *environment, gen *generation, binding channelBinding) {
 	defer env.runners.Done()
+	//before the split: a change trigger replaces both shapes. Its evaluation
+	//ticker is the source interval where the channel has one, and the publish
+	//ticker becomes the heartbeat.
+	if binding.cov != nil {
+		this.runChangeChannel(ctx, env, gen, binding)
+		return
+	}
 	if binding.sourceInterval > 0 {
 		this.runSplitChannel(ctx, env, gen, binding)
 		return
@@ -916,7 +923,11 @@ func (this *Runtime) executeDataset(env *environment, binding channelBinding, se
 	env.mux.Lock()
 	defer env.mux.Unlock()
 	anchor := this.anchorFor(env, binding.channel.Id, &source)
-	value, playable := replayValue(source, binding.points, anchor, time.Now(), binding.channel.IntervalSeconds)
+	//stepSeconds, not the publish interval: a distributing replay hands out the
+	//share of a sample one computation stands for, and with a change trigger the
+	//value is computed on the evaluation cadence. Without a trigger the two are
+	//the same number.
+	value, playable := replayValue(source, binding.points, anchor, time.Now(), binding.stepSeconds)
 	if !playable {
 		return
 	}
@@ -931,7 +942,12 @@ func (this *Runtime) executeProfile(env *environment, gen *generation, binding c
 	p := *binding.channel.Source.Profile
 	env.mux.Lock()
 	defer env.mux.Unlock()
-	value := profileValue(p, gen.def.Seed, binding.channel.Id, binding.channel.IntervalSeconds, time.Now())
+	//stepSeconds is the span one computation stands for: the publish interval
+	//without a change trigger, the evaluation interval with one. It cuts the
+	//spread slot and, below, the share of the hourly rate a tick adds - a
+	//channel evaluating six times per publish interval must not add six full
+	//intervals to its meter.
+	value := profileValue(p, gen.def.Seed, binding.channel.Id, binding.stepSeconds, time.Now())
 	if p.Cumulative {
 		states := env.assetStates(binding.asset.id)
 		counter, _ := asFloat(states[binding.channel.Id])
@@ -939,7 +955,7 @@ func (this *Runtime) executeProfile(env *environment, gen *generation, binding c
 			//the profile value is a rate per hour; one tick adds its share.
 			//a gap (restart, downtime) is not caught up: a stopped plant does
 			//not consume.
-			counter += value * float64(binding.channel.IntervalSeconds) / 3600
+			counter += value * float64(binding.stepSeconds) / 3600
 			states[binding.channel.Id] = counter
 			env.dirty = true
 		}
@@ -958,24 +974,48 @@ func (this *Runtime) execute(env *environment, gen *generation, binding channelB
 }
 
 // publish sends what a script handed to moses.service.send().
-func (this *Runtime) publish(env *environment, binding channelBinding, value interface{}) {
+//
+// The bool says whether the value really reached the platform. Only the change
+// trigger reads it - it must not remember a value as published when the send
+// failed - and the ticker paths ignore it, because there is nothing they could
+// do differently: the next tick comes either way.
+func (this *Runtime) publish(env *environment, binding channelBinding, value interface{}) bool {
+	return this.publishReporting(env, binding, value, true)
+}
+
+// publishReporting is publish with the log output made optional. Only the change
+// trigger passes false, and only for an attempt that follows a failure it has
+// already reported - see covLogGate. The ticker paths always report: they
+// publish once per interval, so a line per failure is a line per interval.
+//
+// The debug line is not throttled. It is off unless debug is configured, and
+// whoever turned it on asked for every send.
+func (this *Runtime) publishReporting(env *environment, binding channelBinding, value interface{}, report bool) bool {
 	if this.config.Debug {
 		util.Logger.Debug("send channel data", "environment", env.id, "asset", binding.asset.id,
 			"channel", binding.channel.Id, "value", value)
 	}
 	if binding.asset.externalRef == "" {
-		util.Logger.Warn("no external ref for asset, nothing was sent", "environment", env.id, "asset", binding.asset.id)
-		return
+		if report {
+			util.Logger.Warn("no external ref for asset, nothing was sent", "environment", env.id, "asset", binding.asset.id)
+		}
+		return false
 	}
 	if binding.channel.ExternalRef == "" {
-		util.Logger.Warn("no external ref for channel, nothing was sent", "environment", env.id, "channel", binding.channel.Id)
-		return
+		if report {
+			util.Logger.Warn("no external ref for channel, nothing was sent", "environment", env.id, "channel", binding.channel.Id)
+		}
+		return false
 	}
 	err := this.publisher.PublishEvent(binding.asset.externalRef, binding.channel.ExternalRef, value)
 	if err != nil {
-		util.Logger.Error("unable to send channel data", attributes.ErrorKey, err,
-			"device_ref", binding.asset.externalRef, "service_ref", binding.channel.ExternalRef)
+		if report {
+			util.Logger.Error("unable to send channel data", attributes.ErrorKey, err,
+				"device_ref", binding.asset.externalRef, "service_ref", binding.channel.ExternalRef)
+		}
+		return false
 	}
+	return true
 }
 
 // flushLoop is the write behind: one goroutine for the whole runtime, writing

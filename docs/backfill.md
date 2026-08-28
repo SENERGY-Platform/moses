@@ -153,6 +153,10 @@ replay history to kafka consumers.
 | `formula` | no | derived: it follows from other channels and the context rather than being a series of its own |
 | `aggregate` | no | derived: it follows from the channels of the sub-metered assets rather than being a series of its own |
 
+A change trigger changes nothing about *what* is backfillable — it is a property
+of the source, and `profile` and `dataset` stay the two that are — only about
+*how*, see the section above.
+
 Also skipped, each with its own reason in the status: a channel that does not
 publish on a schedule, an asset without a platform device, a channel without a
 platform service, a dataset that is not loaded or covers no time span, and every
@@ -165,6 +169,33 @@ from the backfilled inputs, not here. An `aggregate` channel is the same
 argument in structural form: its inputs are the channels of the sub-metered
 assets (`docs/submetering.md`), the backfill writes those, and a total over them
 is a sum a consumer can take at any moment it likes.
+
+## A channel publishing on change is reconstructed with its trigger
+
+A channel carrying `publish_on_change` is not backfilled on its publish interval
+but on its **evaluation grid**, and the trigger decides which of those instants
+produce a reading — through the same `exceedsChange` the live gate uses, which is
+what makes the reconstructed series and the live one agree instead of merely
+resembling each other. See `docs/publish-on-change.md`.
+
+Three consequences are worth knowing before reading such a dataset:
+
+- **The volume check counts evaluation steps**, not heartbeats. That is the
+  honest upper bound: in the worst case such a channel publishes on every
+  evaluation. A window that is fine for an hourly heartbeat can therefore be
+  refused for the same channel with a ten second evaluation.
+- **A suppressed instant counts as silent.** Published plus silent plus failed
+  is still the number of steps of the grid, only the grid is now the evaluation
+  one.
+- **A heartbeat lands up to one evaluation late** when the heartbeat interval is
+  not a whole multiple of the evaluation interval: the job publishes at the first
+  grid instant at which the gap has run, and there is no grid instant in between.
+  With a multiple — the usual shape — it lands exactly.
+
+Like the replay anchor and the cumulative counter, the job keeps its own
+comparison base and its own heartbeat, starting from nothing. The live channel's
+persisted `last_published` is neither read nor written, so a job over a window
+that is weeks old cannot silence or wake the live channel.
 
 ## The clock a profile is read by
 

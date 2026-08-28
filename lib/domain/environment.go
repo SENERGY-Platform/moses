@@ -195,9 +195,52 @@ type Channel struct {
 
 	// IntervalSeconds is how often a sensor channel emits. Zero means the
 	// channel is only driven from outside, which is the normal case for actuators.
+	//
+	// With PublishOnChange set it is the heartbeat instead: the longest silence
+	// the channel allows, counted from the last publish whatever its reason was.
 	IntervalSeconds int64 `json:"interval_seconds" bson:"interval_seconds"`
 
+	// PublishOnChange makes the channel send when its value moves rather than
+	// only when the clock says so. That is what real metering hardware does: an
+	// Eltako meter sends every ten minutes and additionally on a step of
+	// 0.1 kWh, so a series simulated on a ticker alone is either far finer than
+	// the hardware or misses every transient.
+	//
+	// Nil is the ordinary case and means the channel publishes on
+	// IntervalSeconds alone, which is what every document stored before this
+	// field existed does.
+	PublishOnChange *ChangeTrigger `json:"publish_on_change,omitempty" bson:"publish_on_change,omitempty"`
+
 	Source Source `json:"source" bson:"source"`
+}
+
+// ChangeTrigger is what counts as a change between two heartbeats. The two
+// thresholds are ORed: whichever one is exceeded first sends the value, and a
+// threshold left at zero is an unused one rather than a threshold of zero.
+//
+// Both are compared against the value last *published*, not against the value
+// last computed, so a slow drift accumulates until it crosses the threshold
+// instead of being lost one sub-threshold step at a time.
+type ChangeTrigger struct {
+	// Absolute is a deviation in the channel's own unit.
+	Absolute float64 `json:"absolute,omitempty" bson:"absolute,omitempty"`
+
+	// Relative is a fraction of the last published value: 0.05 is five percent.
+	// It is compared by multiplying the threshold with that value rather than
+	// by dividing the deviation through it, which is what makes a last
+	// published value of 0 a base every deviation exceeds - the reading a meter
+	// starting from zero has to produce, instead of a division by zero.
+	Relative float64 `json:"relative,omitempty" bson:"relative,omitempty"`
+
+	// EvaluateIntervalSeconds is how often the value is computed and compared.
+	// It sits in the trigger and not on the channel because a third interval on
+	// the channel would be representable without a trigger and would mean
+	// nothing there.
+	//
+	// A channel whose source carries its own interval is evaluated on that one
+	// and must leave this at zero: one channel has exactly one evaluation
+	// cadence, and two of them would be a contradiction nobody could resolve.
+	EvaluateIntervalSeconds int64 `json:"evaluate_interval_seconds,omitempty" bson:"evaluate_interval_seconds,omitempty,truncate"`
 }
 
 type SourceKind string

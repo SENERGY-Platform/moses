@@ -87,6 +87,20 @@ type RuntimeState struct {
 	// a looping replay mid-loop instead of starting the data over.
 	Anchors map[string]int64 `json:"anchors,omitempty" bson:"anchors,omitempty"`
 
+	// LastPublished holds, per channel with a change trigger, the value that
+	// last went out and when. It is what the next computed value is compared
+	// against, so it has to survive a restart: without it every such channel
+	// would publish once on its first evaluation and start its heartbeat gap
+	// over, which is a burst of transients across a whole site after a
+	// deployment.
+	//
+	// A sibling of Anchors rather than an entry in the asset states: it is
+	// bookkeeping of the runtime, no client can reach it (StateChange does not
+	// carry it), and keeping it out of the asset map means it cannot collide
+	// with the meter reading a cumulative profile stores there under the same
+	// channel id.
+	LastPublished map[string]PublishedValue `json:"last_published,omitempty" bson:"last_published,omitempty"`
+
 	// Approaching holds the zone values that are moving towards a set point,
 	// keyed by zone id and state key. It is stored, so a restart continues an
 	// approach instead of jumping to its target.
@@ -145,6 +159,16 @@ type Approach struct {
 	Target     float64 `json:"target" bson:"target"`
 	StartUnix  int64   `json:"start_unix" bson:"start_unix"`
 	TauSeconds int64   `json:"tau_seconds" bson:"tau_seconds"`
+}
+
+// PublishedValue is one reading that reached the platform: the number and the
+// second it was sent in. The time is stored next to the value, not derived from
+// UpdatedAtUnix, because the heartbeat gap of a channel publishing on change is
+// measured from its own last publish - a state written for another channel says
+// nothing about this one.
+type PublishedValue struct {
+	Value  float64 `json:"value" bson:"value"`
+	AtUnix int64   `json:"at_unix" bson:"at_unix"`
 }
 
 // Environments stores environment definitions.

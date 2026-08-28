@@ -26,6 +26,12 @@ Each channel has a **source** that produces its value:
 | `formula` | an [expr-lang/expr](https://github.com/expr-lang/expr) expression over other channels and the context |
 | `aggregate` | the sum of the same-`characteristic_id` channels of every asset whose `submetered_by` points here — no configuration, the meter tree is the configuration |
 
+A sensor channel can carry `publish_on_change`: it then sends when its value
+moves by more than an absolute and/or a relative threshold, and in any case
+once per `interval_seconds` (the heartbeat). That is what real metering
+hardware does, and the last published value is persisted so a restart produces
+no burst of transients — see `docs/publish-on-change.md`.
+
 The **context** is the site-wide state every zone and formula can read
 (`context.outdoor_temperature`). Static entries keep their value; *context
 sources* drive entries over time — see

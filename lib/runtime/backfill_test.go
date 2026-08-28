@@ -699,6 +699,365 @@ func TestABackfillDoesNotDisturbTheLiveChannel(t *testing.T) {
 	}
 }
 
+// TestABackfillReproducesTheChangeTriggerOnItsEvaluationGrid is the parity the
+// backfill is worth having: the same document, reconstructed, applies the same
+// rule to the same values, because it is the same exceedsChange. A cumulative
+// meter rising by 60 per evaluation crosses a threshold of 600 every eleventh
+// one, and the reconstructed series has to show exactly that.
+func TestABackfillReproducesTheChangeTriggerOnItsEvaluationGrid(t *testing.T) {
+	const id = "env-bf-cov"
+	//an hourly rate of 3600 makes one second worth exactly 1, so one 60 second
+	//evaluation adds exactly 60
+	channel := profileChannel("ch-1", serviceRefOf(id), 3600, domain.ProfileSource{Base: 3600, Cumulative: true})
+	channel.PublishOnChange = &domain.ChangeTrigger{Absolute: 600, EvaluateIntervalSeconds: 60}
+	env := testEnvironment(id, channel)
+
+	events, status := runOneBackfill(t, env, backfillFrom, backfillFrom.Add(time.Hour))
+
+	//the meter stands at 60 after the first evaluation and is published because
+	//nothing was published before it; from there every 660 seconds
+	wanted := []struct {
+		offset time.Duration
+		value  float64
+	}{
+		{0, 60}, {660 * time.Second, 720}, {1320 * time.Second, 1380},
+		{1980 * time.Second, 2040}, {2640 * time.Second, 2700}, {3300 * time.Second, 3360},
+	}
+	if len(events) != len(wanted) {
+		t.Fatalf("expected %d readings on the evaluation grid, got %d: %v", len(wanted), len(events), events)
+	}
+	for i, want := range wanted {
+		if !events[i].at.Equal(backfillFrom.Add(want.offset)) {
+			t.Errorf("reading %d was stamped %v, expected %v", i, events[i].at, backfillFrom.Add(want.offset))
+		}
+		if value := events[i].value.(float64); math.Abs(value-want.value) > 1e-6 {
+			t.Errorf("reading %d was %v, expected the meter at %v", i, value, want.value)
+		}
+	}
+
+	//the invariant the status is read by: every step of the grid is accounted
+	//for, and a suppressed one is silent rather than missing
+	steps := backfillTicks(60, backfillFrom, backfillFrom.Add(time.Hour))
+	channelStatus := status.Channels[0]
+	if channelStatus.Published+channelStatus.Silent+channelStatus.Failed != steps {
+		t.Errorf("%d published, %d silent, %d failed do not add up to the %d steps of the grid",
+			channelStatus.Published, channelStatus.Silent, channelStatus.Failed, steps)
+	}
+}
+
+// TestABackfillOfAValueThatDoesNotMovePublishesOnlyHeartbeats: the heartbeat is
+// reconstructed too, so a constant channel produces a sparse series rather than
+// a dense one or none at all.
+func TestABackfillOfAValueThatDoesNotMovePublishesOnlyHeartbeats(t *testing.T) {
+	const id = "env-bf-cov-flat"
+	channel := profileChannel("ch-1", serviceRefOf(id), 600, flatProfile(230, 0))
+	channel.PublishOnChange = &domain.ChangeTrigger{Absolute: 5, EvaluateIntervalSeconds: 60}
+	env := testEnvironment(id, channel)
+
+	events, status := runOneBackfill(t, env, backfillFrom, backfillFrom.Add(time.Hour))
+
+	//one at the start, then one per ten minute heartbeat up to the end
+	if len(events) != 7 {
+		t.Fatalf("expected 7 heartbeats over an hour of a constant value, got %d", len(events))
+	}
+	for i, event := range events {
+		want := backfillFrom.Add(time.Duration(i) * 600 * time.Second)
+		if !event.at.Equal(want) {
+			t.Fatalf("reading %d was stamped %v, expected %v", i, event.at, want)
+		}
+		if event.value.(float64) != 230 {
+			t.Fatalf("reading %d was %v, expected the unchanged 230", i, event.value)
+		}
+	}
+	if status.Channels[0].Silent != 54 {
+		t.Errorf("expected the 54 suppressed evaluations to be counted as silent, got %d", status.Channels[0].Silent)
+	}
+}
+
+// TestARefusedReadingDoesNotShiftTheReconstructedHeartbeatGrid: the live runner
+// restarts the heartbeat gap on every attempt, sent or refused. If the job only
+// restarted it on success, one refused heartbeat would make every following
+// evaluation overdue and offset the whole remaining grid by one evaluation step
+// against the live cadence.
+func TestARefusedReadingDoesNotShiftTheReconstructedHeartbeatGrid(t *testing.T) {
+	const id = "env-bf-cov-refused"
+	channel := profileChannel("ch-1", serviceRefOf(id), 600, flatProfile(230, 0))
+	channel.PublishOnChange = &domain.ChangeTrigger{Absolute: 5, EvaluateIntervalSeconds: 60}
+	env := testEnvironment(id, channel)
+
+	refused := backfillFrom.Add(600 * time.Second)
+	publisher := &fakePublisher{failAt: func(at time.Time) error {
+		if at.Equal(refused) {
+			return errors.New("the platform refused this reading")
+		}
+		return nil
+	}}
+	rt := startRuntime(t, testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), publisher)
+	if _, err := rt.StartBackfill(id, backfillFrom, backfillFrom.Add(time.Hour)); err != nil {
+		t.Fatalf("unable to start the backfill: %v", err)
+	}
+	status := waitForBackfill(t, rt, id)
+	events := publisher.backfilled(serviceRefOf(id))
+
+	//the refused ten minute mark stays a gap; the readings around it keep the
+	//heartbeat cadence instead of moving to eleven, twenty-one, thirty-one...
+	wanted := []time.Duration{0, 1200 * time.Second, 1800 * time.Second,
+		2400 * time.Second, 3000 * time.Second, 3600 * time.Second}
+	if len(events) != len(wanted) {
+		t.Fatalf("expected %d readings on the unshifted grid, got %d: %v", len(wanted), len(events), events)
+	}
+	for i, offset := range wanted {
+		if !events[i].at.Equal(backfillFrom.Add(offset)) {
+			t.Errorf("reading %d was stamped %v, expected %v", i, events[i].at, backfillFrom.Add(offset))
+		}
+	}
+	channelStatus := status.Channels[0]
+	if channelStatus.Failed != 1 {
+		t.Errorf("expected exactly the one refused reading to be counted, got %d", channelStatus.Failed)
+	}
+	if channelStatus.Silent != 54 {
+		t.Errorf("expected the 54 suppressed evaluations to be counted as silent, got %d", channelStatus.Silent)
+	}
+}
+
+// TestABackfillVolumeIsCountedOnTheEvaluationGrid: the worst case of a channel
+// publishing on change is one reading per evaluation, so counting heartbeats
+// would wave a job through that then publishes a thousandfold of what it
+// promised.
+func TestABackfillVolumeIsCountedOnTheEvaluationGrid(t *testing.T) {
+	const id = "env-bf-cov-volume"
+	//an hourly heartbeat over 90 days is 2160 readings and would be accepted;
+	//the same window on a one second evaluation is 7.8 million
+	channel := profileChannel("ch-1", serviceRefOf(id), 3600, hourlyProfile())
+	channel.PublishOnChange = &domain.ChangeTrigger{Absolute: 1, EvaluateIntervalSeconds: 1}
+	env := testEnvironment(id, channel)
+	rt := startRuntime(t, testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), &fakePublisher{})
+
+	_, err := rt.StartBackfill(id, time.Now().Add(-90*24*time.Hour), time.Now())
+	rangeError := &BackfillRangeError{}
+	if !errors.As(err, &rangeError) {
+		t.Fatalf("expected the evaluation grid to be counted and the window refused, got %v", err)
+	}
+}
+
+// TestAChannelTheBackfillNeverWritesDoesNotSpendTheVolumeBudget: the volume
+// check counts evaluation grids, and a script channel with a trigger has one -
+// but the job refuses every script source, so not one of those steps can ever
+// become a reading. Counting them anyway takes the whole job down over a channel
+// it was never going to write, and the reason it reports names an interval the
+// caller cannot shorten by touching the channels that are actually backfilled.
+func TestAChannelTheBackfillNeverWritesDoesNotSpendTheVolumeBudget(t *testing.T) {
+	const id = "env-bf-cov-budget"
+	ref := func(suffix string) string { return serviceRefOf(id) + ":" + suffix }
+
+	//validation accepts this shape: a sensor, a heartbeat, a threshold and an
+	//evaluation cadence. The backfill still refuses it, because a script's value
+	//depends on state a past moment no longer has.
+	scripted := scriptChannel("ch-script", domain.Sensor, 3600, ref("script"), "moses.service.send(1);")
+	scripted.PublishOnChange = &domain.ChangeTrigger{Absolute: 1, EvaluateIntervalSeconds: 1}
+	good := profileChannel("ch-good", ref("good"), 3600, hourlyProfile())
+	env := testEnvironment(id, scripted, good)
+
+	from := time.Now().Add(-30 * 24 * time.Hour)
+	to := time.Now()
+	//the premise of the test: counted, this one channel alone is over the limit
+	if steps := backfillTicks(1, from, to); steps <= maxBackfillEvents {
+		t.Fatalf("the scenario no longer reproduces: %d steps are inside the limit of %d", steps, maxBackfillEvents)
+	}
+
+	publisher := &fakePublisher{}
+	rt := startRuntime(t, testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), publisher)
+	if _, err := rt.StartBackfill(id, from, to); err != nil {
+		t.Fatalf("the job was refused over a channel it never writes a reading for: %v", err)
+	}
+	status := waitForBackfill(t, rt, id)
+
+	if status.State != BackfillDone {
+		t.Errorf("expected the job to be done, it is %v (%v)", status.State, status.Error)
+	}
+	for _, channel := range status.Channels {
+		switch channel.ChannelId {
+		case "ch-script":
+			if channel.Backfillable || channel.Published != 0 {
+				t.Errorf("the script channel was backfilled after all: %#v", channel)
+			}
+		case "ch-good":
+			//30 days on an hourly channel: one at the start, one per hour after
+			if !channel.Backfillable || channel.Published != 30*24+1 {
+				t.Errorf("expected 721 readings of the profile channel, got %#v", channel)
+			}
+		}
+	}
+	if published := len(publisher.backfilled(ref("script"))); published != 0 {
+		t.Errorf("the script channel published %d backfilled readings", published)
+	}
+}
+
+// sameReadings compares two decision sequences the way this parity test needs
+// it: NaN equals NaN here, because "both paths sent the sample that is not a
+// number" is exactly what is being asserted, and NaN != NaN would make any two
+// such sequences differ.
+func sameReadings(a []float64, b []float64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] == b[i] {
+			continue
+		}
+		if math.IsNaN(a[i]) && math.IsNaN(b[i]) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// TestABackfillAndTheLiveChannelAgreeOverASampleThatIsNotANumber is what the
+// shared covSends is bought for. A dataset may carry a NaN - strconv.ParseFloat
+// takes one, so an export writing its gaps as "NaN" loads - and the two paths
+// keep their bookkeeping separately, so nothing but the shared rule makes them
+// agree.
+//
+// The trap is the heartbeat that carries a NaN out in the middle of the series.
+// That reading went out, so the gap restarts - but it must not become the
+// comparison base, or the movement right after it would compare against NaN, be
+// false, and wait for the next heartbeat here while the live channel publishes it
+// at once. The reconstructed window would then miss a step the live one has, and
+// a model trained on it would learn the wrong shape.
+//
+// Both run over the same document at the same time. The live channel replays
+// from its own start, the job from the window start; the series opens with a
+// finite value so that the two are in phase - live the heartbeat starts with the
+// channel while the first evaluation is one cadence later, which the job has no
+// counterpart for and which is not what this test is about.
+func TestABackfillAndTheLiveChannelAgreeOverASampleThatIsNotANumber(t *testing.T) {
+	const id = "env-bf-cov-nan"
+	csv := "Zeit;strom\n" +
+		"2026-01-05 00:00:00;100\n" +
+		"2026-01-05 00:00:04;NaN\n" +
+		"2026-01-05 00:00:10;106\n" +
+		"2026-01-05 00:00:11;200\n" +
+		"2026-01-05 00:00:30;300\n"
+	store := &fakeRuntimeDatasets{
+		meta:    repo.DatasetMeta{Id: "d1", Owner: "user-a", Name: "Lastgang", Timezone: "Europe/Berlin"},
+		content: []byte(csv),
+	}
+
+	channel := datasetChannel(id, replaySource(domain.ResampleHold, domain.AnchorLoop))
+	//a three second heartbeat, evaluated every second: short enough that the
+	//heartbeat carries a NaN out twice inside the window
+	channel.IntervalSeconds = 3
+	channel.PublishOnChange = &domain.ChangeTrigger{Absolute: 5, EvaluateIntervalSeconds: 1}
+	env := testEnvironment(id, channel)
+
+	publisher := &fakePublisher{}
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), store, publisher)
+	if err := rt.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(rt.Stop)
+
+	if _, err := rt.StartBackfill(id, backfillFrom, backfillFrom.Add(12*time.Second)); err != nil {
+		t.Fatalf("unable to start the backfill: %v", err)
+	}
+	waitForBackfill(t, rt, id)
+
+	//the 100 is the first reading and the heartbeat repeats it at +3; the NaN
+	//goes out at +6 and +9 because nothing else does; and the 106 at +10 is a
+	//change against the 100 the NaN did not overwrite - a lost comparison base
+	//would have swallowed it and sent only the 200, one heartbeat later
+	wantOffsets := []time.Duration{0, 3 * time.Second, 6 * time.Second, 9 * time.Second, 10 * time.Second, 11 * time.Second}
+	reconstructed := publisher.backfilled(serviceRefOf(id))
+	values := []float64{}
+	for _, event := range reconstructed {
+		values = append(values, event.value.(float64))
+	}
+	if len(reconstructed) != len(wantOffsets) {
+		t.Fatalf("expected %d reconstructed readings, got %d: %v", len(wantOffsets), len(reconstructed), values)
+	}
+	for i, offset := range wantOffsets {
+		if !reconstructed[i].at.Equal(backfillFrom.Add(offset)) {
+			t.Errorf("reading %d was stamped %v, expected %v", i, reconstructed[i].at, backfillFrom.Add(offset))
+		}
+	}
+	if !sameReadings(values, []float64{100, 100, math.NaN(), math.NaN(), 106, 200}) {
+		t.Fatalf("expected the reconstructed readings 100, 100, NaN, NaN, 106, 200, got %v", values)
+	}
+
+	//and the live channel, walking the same series, has to reach the same
+	//decisions
+	live := func() []float64 {
+		result := []float64{}
+		for _, event := range publisher.all() {
+			if !event.live || event.deviceRef != deviceRefOf(id) {
+				continue
+			}
+			number, ok := event.value.(float64)
+			if !ok {
+				t.Errorf("expected a number, got %T (%v)", event.value, event.value)
+				continue
+			}
+			result = append(result, number)
+		}
+		return result
+	}
+	if !waitFor(25*time.Second, func() bool { return len(live()) >= len(values) }) {
+		t.Fatalf("the live channel published %v, expected the same readings as %v", live(), values)
+	}
+	if !sameReadings(live()[:len(values)], values) {
+		t.Fatalf("the live channel published %v where the reconstruction published %v", live()[:len(values)], values)
+	}
+}
+
+// TestABackfillDoesNotMoveTheLastPublishedValueOfTheLiveSimulation: the job
+// reproduces the trigger with bookkeeping of its own, like the replay anchor and
+// the cumulative counter. Writing the job's comparison base into the live state
+// would silence or wake the live channel over a window that is weeks old.
+func TestABackfillDoesNotMoveTheLastPublishedValueOfTheLiveSimulation(t *testing.T) {
+	const id = "env-bf-cov-live"
+	//evaluated once an hour, so the live channel does not run during the test
+	channel := profileChannel("ch-1", serviceRefOf(id), 3600, flatProfile(230, 0))
+	channel.PublishOnChange = &domain.ChangeTrigger{Absolute: 5, EvaluateIntervalSeconds: 3600}
+	env := testEnvironment(id, channel)
+
+	live := repo.PublishedValue{Value: 999, AtUnix: time.Now().Unix()}
+	states := newFakeStates()
+	states.stored[id] = repo.RuntimeState{
+		EnvironmentId: id,
+		Context:       map[string]interface{}{},
+		Zones:         map[string]map[string]interface{}{},
+		Assets:        map[string]map[string]interface{}{},
+		LastPublished: map[string]repo.PublishedValue{"ch-1": live},
+	}
+
+	publisher := &fakePublisher{}
+	rt := startRuntime(t, testConfig(time.Hour), newFakeEnvironments(env), states, publisher)
+	if _, err := rt.StartBackfill(id, backfillFrom, backfillTo); err != nil {
+		t.Fatalf("unable to start the backfill: %v", err)
+	}
+	status := waitForBackfill(t, rt, id)
+	//the evaluation grid is the heartbeat here, so every step is due
+	if status.Published != 25 {
+		t.Fatalf("expected 25 hourly readings, got %d: %#v", status.Published, status.Channels)
+	}
+
+	rt.mux.RLock()
+	running := rt.envs[id]
+	rt.mux.RUnlock()
+	running.mux.Lock()
+	stored, known := running.state.LastPublished["ch-1"]
+	dirty := running.dirty
+	running.mux.Unlock()
+
+	if !known || stored != live {
+		t.Errorf("the backfill moved the live comparison base from %#v to %#v", live, stored)
+	}
+	if dirty {
+		t.Error("the backfill marked the environment state dirty, so it wrote into it")
+	}
+}
+
 // TestBackfillThroughput measures the loop itself, with the platform faked
 // away. It asserts only that the loop is not pathologically slow; the number it
 // logs is what the documented volume limit is reasoned from, and the real rate
