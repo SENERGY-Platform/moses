@@ -46,12 +46,11 @@ assumes, and `lib/graphs/build_test.go` pins each one:
 
 ## Why an asset without a device is missing
 
-An asset with no `external_ref` publishes nowhere. It is a helper inside the
-simulation — a computed total, a placeholder for something not yet provisioned —
-and there is nothing behind it a consumer of the graph could read. A node for it
-would be a location with no data, indistinguishable from a device that is merely
-silent. Assets without a device are therefore left out; the zone they sit in is
-still there, so nothing disappears from the structure.
+An asset with no `external_ref` publishes nowhere - a helper inside the
+simulation, a computed total, a placeholder for something not yet provisioned -
+and there is nothing behind it a consumer of the graph could read. Assets
+without a device are therefore left out; the zone they sit in is still there,
+so nothing disappears from the structure.
 
 ## Why every edge has the weight 100
 
@@ -72,9 +71,8 @@ everything it has to that one parent; the weight stays 100 either way.
 
 The graph is rebuilt from the environment on every save and written in full. A
 node moved, renamed or removed by hand in a graph editor does not survive the
-next save of the environment. This is the point of the feature rather than a
-limitation of it: two editable representations of one site drift, and there is
-no rule that could decide which of the two is right.
+next save - two editable representations of one site would otherwise drift,
+with no rule to decide which one is right.
 
 ## Who owns which graph
 

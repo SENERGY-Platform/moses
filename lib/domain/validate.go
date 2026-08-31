@@ -36,9 +36,8 @@ const MaxNodes = 10000
 // MaxScheduleStates bounds the steps of one schedule. The states are not nodes
 // in the MaxNodes sense and would otherwise be an unbounded list on an
 // untrusted document; the runtime walks all of them on every evaluation of the
-// channel, so the bound is a runtime cost as much as a memory one. A day
-// programme in quarter hours is 96 steps, so the limit is far above anything a
-// plant needs.
+// channel, so the bound is a runtime cost as much as a memory one, set well
+// above anything a real plant needs.
 const MaxScheduleStates = 256
 
 // MaxScheduleDurationSeconds bounds one step at a year. The walk over whole
@@ -88,13 +87,12 @@ type validator struct {
 
 	// assetSites and submeterRefs implement the same second pass for
 	// submetered_by: the target asset may be defined later in the document or
-	// in another zone entirely, and whether it shares a top level zone with
-	// the reference is only known once every zone has been walked.
+	// in another zone entirely, and whether it shares a top level zone with the
+	// reference is only known once every zone has been walked.
 	//
 	// assetSites maps an asset id to the index of the top level zone it lives
-	// under, the same number every asset and reference below that zone
-	// carries. The site is all the second pass needs from the target; where to
-	// report a problem comes from the reference, which knows its own path.
+	// under. The site is all the second pass needs from the target; where to
+	// report a problem comes from the reference itself.
 	assetSites   map[string]int
 	submeterRefs []submeterRef
 
@@ -169,11 +167,10 @@ func Validate(env Environment) error {
 	// gateRefs: the key a schedule waits for has to be declared somewhere in
 	// this environment, either as a static context entry or as a context source
 	// driving it. The rule is about the document saying what it does, not about
-	// what can write the key: a script can set it through moses.world.state.set
-	// and the state endpoint can patch it, so a gate on an undeclared key is not
-	// necessarily dead - it is unreadable. Whoever opens the document sees a
-	// machine waiting for something nothing in it mentions. The escape is one
-	// line, an initial 0 in context, which is why the rule stays.
+	// what can write the key - a script or the state endpoint can still set an
+	// undeclared key at runtime - so an undeclared gate reads as unreadable
+	// rather than necessarily dead. The escape is one line, an initial 0 in
+	// context.
 	for _, ref := range v.gateRefs {
 		if _, static := env.Context[ref.id]; static {
 			continue
@@ -184,17 +181,14 @@ func Validate(env Environment) error {
 		v.fail(ref.path, "the gate key %q is neither in context nor driven by a context source; declare it in context (an initial 0 is enough) even when a script or the state endpoint writes it, so the document shows what the gate reads", ref.id)
 	}
 
-	// submeterRefs: a target has to exist as an asset - a zone or channel id
-	// is not a valid target even if the string happens to be one - and it has
-	// to stay inside the reference's own top level zone. A meter tree is
-	// modelled per site: a reference that leaves its top level zone is in
-	// practice a misfiled asset, and refusing it puts that mistake in front of
-	// the author instead of quietly building a tree across two sites.
+	// submeterRefs: a target has to exist as an asset - a zone or channel id is
+	// not a valid target even if the string matches - and stay inside the
+	// reference's own top level zone, since a meter tree is modelled per site
+	// and a reference crossing that boundary is in practice a misfiled asset.
 	//
-	// parents carries the whole reference, not just the target: the cycle pass
-	// below reports at the path of the reference that closed the cycle, and
-	// that path is already spelled out here rather than assembled a second
-	// time from the target's own location.
+	// parents carries the whole reference, not just the target, so the cycle
+	// pass below can report at the path of the reference that closed the cycle
+	// without reassembling it from the target's location.
 	parents := map[string]submeterRef{}
 	for _, ref := range v.submeterRefs {
 		targetSite, exists := v.assetSites[ref.target]
@@ -262,9 +256,9 @@ func (this *validator) checkAsset(path string, asset Asset, site int) {
 	this.claimId(path+".id", asset.Id)
 	// registered for the submetered_by second pass below; an empty id is
 	// assigned by the server later. A duplicate id is already reported by
-	// claimId above, and the first asset under it keeps the entry there, so it
-	// keeps the entry here too: letting the second one overwrite it would add
-	// a second, misleading complaint about a site nobody referenced.
+	// claimId above, so the first asset keeps the entry here too - letting the
+	// second overwrite it would add a misleading complaint about a site nobody
+	// referenced.
 	if _, taken := this.assetSites[asset.Id]; asset.Id != "" && !taken {
 		this.assetSites[asset.Id] = site
 	}
@@ -297,23 +291,17 @@ func (this *validator) checkAsset(path string, asset Asset, site int) {
 }
 
 // checkAggregateOverlap refuses a second reading of the same quantity on an
-// asset that already totals that quantity over its sub-meters.
+// asset that already totals that quantity over its sub-meters - typically a
+// distribution meter carrying both its own kWh channel and an aggregate over
+// the meters below it. Two channels of the same characteristic on one asset
+// are indistinguishable to a reader, and an aggregate one level further up
+// sums this asset's channels by characteristic, so the sub-tree is counted
+// twice.
 //
-// The shape it rejects is the one an author reaches for first: a distribution
-// meter asset carrying both its real kWh channel and an aggregate over the
-// meters below it. Nothing about that document is ill formed, and it is wrong
-// in two ways at once. Two channels of the same characteristic on one asset are
-// indistinguishable to whoever reads the asset's readings, and an aggregate one
-// level further up sums the channels of this asset by characteristic - so it
-// adds the meter and the total of the same sub-tree together and counts that
-// sub-tree twice.
-//
-// The way to model a distribution meter's own share is an asset of its own,
-// sub-metered by this one; it needs no device (docs/submetering.md). Then the
-// share is a leaf like any other and each level is summed exactly once.
-//
-// Reported at the colliding channel rather than at the aggregate: the aggregate
-// is the channel that is meant to stay.
+// The fix is to model the meter's own share as an asset of its own,
+// sub-metered by this one and needing no device (docs/submetering.md), so each
+// level is summed exactly once. Reported at the colliding channel rather than
+// at the aggregate, which is the channel meant to stay.
 func (this *validator) checkAggregateOverlap(path string, asset Asset) {
 	//the first aggregate per characteristic owns it; every further sensor
 	//channel carrying the same one is the collision. Trimmed, like the runtime
@@ -359,21 +347,16 @@ func (this *validator) checkAggregateOverlap(path string, asset Asset) {
 
 // checkSubmeterCycles finds cycles in the sub-metering tree. parents maps an
 // asset id to the reference naming the asset that meters it too, already
-// filtered to refs whose target exists and stays within its site - a missing
-// or out-of-site target was reported above, and reporting it again as a cycle
-// of its own would be confusing.
+// filtered to refs whose target exists and stays within its site, since a
+// missing or out-of-site target was reported above and reporting it again as a
+// cycle would be confusing.
 //
-// Nothing walks a cycle here: the graph mirror in lib/graphs is best effort and
-// the repository rejects a graph containing a loop outright, and the aggregate
-// source reads the value each channel last published (lib/runtime,
-// executeAggregate) rather than recursing over the relation, so a cycle cannot
-// produce an endless walk.
-//
-// What it does produce is worse than an error: two totals that each include the
-// other's previous value, so every tick adds what the assets below measure to a
-// number that already contains it. The sum grows without bound and looks like a
-// plausible meter reading the whole way, which is worth a refusal here even
-// though no walk of the relation could ever hang.
+// A cycle here cannot hang the runtime - the aggregate source reads each
+// channel's last published value rather than recursing (lib/runtime,
+// executeAggregate) - but it does produce two totals that each include the
+// other's previous value, so the sum grows without bound and looks like a
+// plausible reading the whole way. That is worse than an error and worth
+// refusing here.
 //
 // Standard three-color depth first search, iterated so every asset gets a
 // chance to start a walk: white (unseen), gray (on the current walk's path),
@@ -480,11 +463,10 @@ func (this *validator) checkChannel(path string, channel Channel) {
 	}
 }
 
-// checkPublishOnChange refuses a trigger that cannot do what it promises. Every
-// rule here is a shape the runtime would otherwise have to degrade silently: a
-// trigger that never fires, one whose value is never looked at, or one on a
-// channel that publishes nothing at all. A document carrying one of them looks
-// like event driven metering in the editor and is a plain ticker in the data.
+// checkPublishOnChange refuses a trigger that cannot do what it promises: one
+// that never fires, whose value is never looked at, or on a channel that
+// publishes nothing at all. A document carrying one of them looks like event
+// driven metering in the editor and is a plain ticker in the data.
 func (this *validator) checkPublishOnChange(path string, channel Channel) {
 	trigger := channel.PublishOnChange
 	triggerPath := path + ".publish_on_change"
@@ -718,16 +700,15 @@ func (this *validator) checkFinite(path string, value float64) {
 
 // checkScheduleKeys refuses two writers of one asset state key.
 //
-// The asset state map is flat and shared: a cumulative profile stores its meter
-// reading under its own channel id, and every schedule of the asset writes its
-// state name and its declared values there too. A collision is not ill formed
-// and produces no error at runtime - the last writer of the tick simply wins,
-// and the loser's value is a reading that silently stops moving or a meter that
-// jumps between a count and a string. That is worth refusing at store time,
-// where the author can still see both writers.
+// The asset state map is flat and shared: a cumulative profile stores its
+// meter reading under its own channel id, and every schedule of the asset
+// writes its state name and declared values there too. A collision is not ill
+// formed - the last writer of the tick simply wins - but the loser's value
+// silently stops moving or jumps between a count and a string, which is worth
+// refusing at store time instead.
 //
-// Reported at the later channel: the first claim on a key is the one that keeps
-// it, the same way checkAggregateOverlap reports at the channel that collides.
+// Reported at the later channel: the first claim on a key keeps it, the same
+// way checkAggregateOverlap reports at the channel that collides.
 func (this *validator) checkScheduleKeys(path string, asset Asset) {
 	channelIds := map[string]bool{}
 	for i := range asset.Channels {
@@ -914,10 +895,9 @@ func (this *validator) checkContextSource(path string, key string, source Source
 	case SourceScript, SourceFormula, SourceAggregate, SourceSchedule:
 		//named rather than left to the unknown-kind default: these kinds exist,
 		//they are simply not available here, and "unknown" would send their
-		//author looking for a typo. An aggregate needs an asset to sum below,
-		//and a context key has none. A schedule writes the name of its state
-		//into an asset state and would have no asset here either - and a gate
-		//reading the context while the schedule writes it would be a cycle.
+		//author looking for a typo. An aggregate and a schedule both need an
+		//asset that a context key has none of, and a schedule's gate reading
+		//the context while it writes it would also be a cycle.
 		this.fail(path+".kind", "source kind %q is not supported for context sources", source.Kind)
 	case "":
 		this.fail(path+".kind", "must be set")

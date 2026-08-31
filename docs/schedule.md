@@ -67,47 +67,36 @@ A forklift that charges once per shift, and only while the shift is on:
 }
 ```
 
-`run_once` means the last state is **held** rather than the cycle starting over,
-which is the shape of a job rather than of a running plant. With a gate, every
-opening starts a new single pass.
+`run_once` means the last state is **held** rather than the cycle starting over.
+With a gate, every opening starts a new single pass.
 
 ## The gate
 
 `gate` names a context key and a threshold. The gate is **open while the key
-reads strictly greater than the threshold**, so the default threshold of 0 fits
-the 0/1 shift calendar a context source writes without anybody having to think
-about it.
+reads strictly greater than the threshold**; the default threshold of 0 fits a
+0/1 shift calendar without anybody having to think about it.
 
 The key is read with the same leniency a formula input has: a key nothing has
 written yet, or one carrying something that is not a number, reads as **0** and
-therefore as closed. A gate that defaulted to open would run every declared
-machine of a site through a shift nobody scheduled.
+therefore as closed.
 
-**Every rising edge starts the programme over at the first state.** That is the
-whole reason the gate exists: a schedule that merely paused would resume in the
-middle of whatever it was doing, and the morning after a break would look like
-the middle of the previous afternoon. The morning peak of a site is then a
-consequence of its programmes rather than a shape somebody drew into a profile.
+**Every rising edge starts the programme over at the first state.** A schedule
+that merely paused would resume in the middle of whatever it was doing, and the
+morning after a break would look like the middle of the previous afternoon.
 
 While the gate is closed the channel publishes **0.0**, writes the name **`off`**
 into its state key and writes **0 for every key any of its states declares**. A
-gated schedule may therefore not have a state called `off` - validation refuses
-it, because "the machine is standing still" and "the machine is in the state its
-author called off" would be the same string.
+gated schedule may therefore not have a state called `off` - that name would be
+indistinguishable from the closed state itself.
 
 The key a gate names has to be declared in the environment, either in `context`
-or as a `context_sources` entry. This is a rule about the document saying what it
-does, not about what may write the key: a script writes context keys through
-`moses.world.state.set` and `PATCH /environments/{id}/state` writes them too, so
-an undeclared key is not necessarily dead - it is unreadable, and whoever opens
-the document sees a machine waiting for something nothing in it mentions.
-**Declare it in `context` even when a script or the state endpoint writes it - an
-initial `0` is enough**, and it is what the validation message asks for.
+or as a `context_sources` entry, even when a script or the state endpoint is
+what writes it at runtime - **an initial `0` is enough**, and it is what the
+validation message asks for.
 
-**A flank is noticed on the next evaluation**, not at the instant it happens: the
-channel is what looks at the context, and it looks on its own interval. For a
-shift calendar that is irrelevant; for a gate somebody flips by hand it means the
-programme starts within one `interval_seconds`.
+**A flank is noticed on the next evaluation**, not at the instant it happens:
+for a gate somebody flips by hand, the programme starts within one
+`interval_seconds`.
 
 ## The state writes, and why they are a union
 
@@ -117,61 +106,48 @@ asset state, so a formula reads them through `asset.<key>`, the live state
 endpoint returns them, and a dashboard tile shows them.
 
 Every key **any** state of the schedule declares is written on every evaluation.
-A key the running state does not declare is written as **0**. Without that union
-the air demand of a machine that was running would keep standing while it idles,
-and nothing in the document would ever say that it stopped.
+A key the running state does not declare is written as **0** - without that
+union the air demand of a machine that was running would keep standing while it
+idles.
 
 The name of the running state is written under `state_key`, which is mandatory
-and explicit. A key nobody chose is a key nobody finds, and the whole difference
-between this source and a script is that the running state is not an anonymous
-number.
+and explicit.
 
 ## It is a pure function of seed, anchor and clock
 
 Durations and values vary, and both draws are hashes rather than a random
-stream, for the reason `profile` uses one: a stream's position would depend on
-how many ticks had happened before, so a restart would replay different values.
+stream, the way `profile` draws them: a stream's position would depend on how
+many ticks had happened before, so a restart would replay different values.
 
-- **`duration_spread_percent`** varies the length of a step **per cycle**. It is
-  drawn once for the whole step - a step whose own end kept moving while it ran
-  would be a step nobody could measure - and it is floored at one second.
+- **`duration_spread_percent`** varies the length of a step **per cycle**,
+  drawn once for the whole step, and floored at one second.
 - **`spread_percent`** varies the published value **per evaluation step**, the
-  way a profile's spread does. A perfectly flat value would give a channel
-  publishing on change nothing to see between two state transitions, and a real
-  machine's power draw is not flat while it runs.
+  way a profile's spread does.
 
 ## It survives a restart
 
 Where a programme stands is persisted per channel (`RuntimeState.schedule_runs`):
 the anchor the walk starts at (`start_unix`), how many whole cycles lie behind it
 (`cycle_offset`), the instant the current pass began (`pass_unix`) and whether the
-gate was open. Without it a deployment would look like every declared machine of a
-site setting itself up at the same moment, and a gated one would sit closed until
-the next rising edge - for a shift calendar, the next morning.
+gate was open.
 
 The anchor of **every cycling** schedule, gated or not, is **rolled forward** by
 the whole cycles it has consumed, so the walk from the anchor to now stays short
-however long the environment runs. The cycles that roll-forward drops keep being
-counted in `cycle_offset`, and the per-cycle duration draw is taken on that
-absolute count - which is what makes the roll-forward invisible in the values
-rather than a slow drift. It is pinned by a test over a dense time series, for
-both shapes (`TestRollingTheAnchorForwardMovesNeitherThePositionNorTheDraws`).
+however long the environment runs. The dropped cycles keep being counted in
+`cycle_offset`, and the per-cycle duration draw is taken on that absolute count,
+which keeps the roll-forward invisible in the values rather than a slow drift.
 
-A **gated** schedule needs one number more, because its durations are salted per
-pass: two mornings do not set up in exactly the same number of seconds. That salt
-is `pass_unix` and **not** the anchor - written when the run is created and again
-on every rising edge, never moved afterwards. Salting on the anchor instead would
-mean redrawing the whole running shift on every roll; not rolling a gated run at
-all would mean walking from the rising edge again on every evaluation, and a gate
-that never closes is not exotic - a 24/7 line is a context key held at 1. A run
-persisted without `pass_unix` adopts its anchor as the salt once, on the next
-evaluation, before that anchor starts moving.
+A **gated** schedule needs one number more: its durations are salted per pass,
+so two mornings do not set up in exactly the same number of seconds. That salt
+is `pass_unix` and **not** the anchor - written when the run is created and
+again on every rising edge, never moved afterwards. A run persisted without
+`pass_unix` adopts its anchor as the salt once, on the next evaluation, before
+that anchor starts moving.
 
 A **run_once** schedule does not roll: it has no second cycle to advance into.
 
 **A clock that ran backwards** - or an anchor written by a machine whose clock was
-ahead - clamps the programme to its first state. Any other answer would be a
-position nobody can derive.
+ahead - clamps the programme to its first state.
 
 ## Publishing on change composes without a special case
 
@@ -199,16 +175,14 @@ the editor and be something else in the data.
   every evaluation.
 - **Names** are non-empty, carry **no leading or trailing whitespace** and are
   **unique**: the name is the only thing a reader has to tell two steps apart,
-  and it is written into the asset state verbatim - `" idle "` is what a formula
-  would have to compare against while every human reading the document sees
-  `idle`. `off` is refused for a **gated** schedule.
+  and it is written into the asset state verbatim. `off` is refused for a
+  **gated** schedule.
 - **`duration_seconds` > 0** and at most a year. A step of no length is never
   reached, and an unbounded one would overflow the sum the walk takes.
 - **`duration_spread_percent` in [0, 100)** - at 100 a cycle could draw a step of
   no length at all - and **`spread_percent` ≥ 0**.
 - Every number is **finite**: value, both spreads, the gate threshold and every
-  state write. NaN and infinity are what a generated document produces from a
-  division, and neither survives the round trip through bson.
+  state write - NaN and infinity do not survive the round trip through bson.
 - **`state_key`** and every **state write key** are non-empty, carry no leading
   or trailing whitespace and no `.` or `$`, the rule every other state key
   follows. The key is written into the asset state exactly as it stands, so a
@@ -224,26 +198,11 @@ the editor and be something else in the data.
   schedule. A collision produces no error at runtime: the last writer of the tick
   wins, and the loser is a reading that silently stops moving.
 
-## Rejected alternatives
-
-- **Transitions and conditions per state.** It would make this a state machine
-  language: every condition needs a value to read, an editor to express it and a
-  cycle check nobody can do statically. Anything conditional stays `script`.
-- **A configurable name for the closed state.** A dashboard reading two
-  environments has to be able to compare them, and one document calling it
-  `aus` and the next `standby` would make that impossible.
-- **A `schedule` context source.** A schedule writes the name of its state into
-  an *asset* state, and a context key has no asset. A gate reading the context
-  that the same schedule writes would be a cycle on top of it.
-- **Keeping the anchor in `RuntimeState.anchors`.** That map holds one int64 per
-  channel, and a run is three values. Widening it would have touched the replay.
-- **A backfill of the gate-less case.** Possible in principle - a free running
-  schedule is a pure function of seed and anchor - but the anchor is runtime
-  state, so a window before the anchor exists has no defined position. It is
-  left out rather than half done.
-
 ## Limits
 
+- **Not available as a context source.** A schedule writes the name of its
+  state into an *asset* state, and a context key has no asset for it to attach
+  to.
 - **A script writing the same asset state key is not caught.** Validation can see
   the keys a schedule declares, but not the ones a script writes at runtime.
   Whoever writes both owns the collision.

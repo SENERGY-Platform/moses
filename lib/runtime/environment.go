@@ -91,14 +91,11 @@ type generation struct {
 
 	// aggregateInputs maps an aggregate channel's id to the ids of the channels
 	// it sums: the channels carrying the same characteristic on every asset
-	// whose submetered_by names the aggregate's asset. The list is in document
-	// order, so the sum is the same sequence of float additions on every start
-	// of the same document.
-	//
-	// The indirection through ids is what keeps the aggregate from recursing
-	// over the tree: executeAggregate reads the last value each of these
-	// channels published, one level deep, whatever the level below is itself
-	// made of.
+	// whose submetered_by names the aggregate's asset, in document order so the
+	// sum is the same sequence of float additions on every start. The
+	// indirection through ids keeps the aggregate from recursing over the tree -
+	// executeAggregate reads only the last value each input published, one
+	// level deep, whatever the level below is made of.
 	aggregateInputs map[string][]string
 
 	// candidates is scaffolding of the indexing pass, not part of the indexed
@@ -170,11 +167,10 @@ type channelBinding struct {
 	// stepSeconds is the span one computation of this channel stands for: the
 	// evaluation interval with a change trigger, the publish interval without
 	// one. It is what a cumulative profile integrates over and what the spread
-	// slot and a distributing replay are cut by - all three would otherwise be
-	// counted in publish intervals while the value is computed far more often.
-	//
-	// Without a trigger it is exactly channel.IntervalSeconds, which keeps every
-	// existing document byte identical.
+	// slot and a distributing replay are cut by, so the value is not counted in
+	// publish intervals while it is computed far more often. Without a trigger
+	// it is exactly channel.IntervalSeconds, which keeps every existing
+	// document byte identical.
 	stepSeconds int64
 
 	// points is the parsed series of a dataset channel, loaded at start.
@@ -184,13 +180,12 @@ type channelBinding struct {
 	program *formula.Program
 }
 
-// latest holds the value a source produced but has not published yet. It exists
-// only for a channel whose source runs more often than the channel publishes:
-// the source goroutine writes, the publish goroutine reads.
-//
-// The value is kept, not consumed. A legacy sensor re-read the state on every
-// tick, so a publish interval that elapses without the source having run again
-// sent the previous value rather than nothing.
+// latest holds the value a source produced but has not published yet, for a
+// channel whose source runs more often than the channel publishes: the source
+// goroutine writes, the publish goroutine reads. The value is kept, not
+// consumed, matching a legacy sensor that re-read state on every tick - a
+// publish interval that elapses without the source running again sends the
+// previous value rather than nothing.
 type latest struct {
 	mux   sync.Mutex
 	value interface{}
@@ -277,11 +272,10 @@ func (this *generation) indexAggregates(envId string) {
 					"environment", envId, "asset", candidate.assetId, "channel", channel.Id)
 				continue
 			}
-			//trimmed on both sides, here and on every sub-metered channel
-			//below: validation only refuses a characteristic that is empty
-			//after trimming, so "kwh" and "kwh " are both storable and are the
-			//same characteristic to everybody reading the document. Comparing
-			//them raw made the aggregate match nothing over a trailing space.
+			//trimmed on both sides, here and on every sub-metered channel below:
+			//validation only refuses a characteristic that is empty after
+			//trimming, so comparing the raw values could make the aggregate miss
+			//a match over nothing more than trailing whitespace.
 			characteristic := strings.TrimSpace(channel.CharacteristicId)
 			if characteristic == "" {
 				//validation demands one: without it there is nothing to match
@@ -479,12 +473,10 @@ func (this *generation) addAsset(envId string, zoneId string, asset domain.Asset
 }
 
 // seed fills in what the stored state does not have yet from the definition's
-// initial states. It never removes anything: a zone or asset that is currently
-// not in the definition may come back with the next edit, and its values are
-// worth more than the few bytes they occupy.
-//
-// The definition is not touched, and the values are copied deeply: a script
-// writing into a nested map must not reach the document that is exported.
+// initial states. It never removes anything, since a zone or asset that is
+// currently not in the definition may come back with the next edit. The
+// definition itself is not touched, and the values are copied deeply, so a
+// script writing into a nested map cannot reach the exported document.
 func (this *environment) seed(gen *generation) {
 	this.mux.Lock()
 	defer this.mux.Unlock()
@@ -543,26 +535,20 @@ func seedInto(target map[string]interface{}, initial map[string]interface{}) (ch
 	return changed
 }
 
-// carryLastValues brings the value cache into a new generation. The environment
-// object survives a Reload and lastValues with it, while the generation does
-// not - so this is the one place where the cache and the definition are lined
-// up again. Both halves exist because a wrong entry here is invisible: it is
-// what every aggregate above that channel adds into its total.
+// carryLastValues brings the value cache into a new generation: the
+// environment object and lastValues survive a Reload, but the generation does
+// not, so this is where the two are lined up again - a wrong entry here is
+// invisible, since it is what every aggregate above that channel adds into
+// its total.
 //
-// Prune. An entry is kept only for a channel that can still produce a value in
-// the new generation: every channel with a runner (gen.sensors) and every
-// channel a command can reach (gen.commands), which are the two paths through
-// dispatch that write the cache. Anything else froze on the value it last
-// published. That was how an edit leaked a stale reading across a reload -
-// turn a metered channel into something without a runner and its last value
-// kept being summed into every total above it forever, while indexAggregates
-// logged that the channel contributes nothing.
-//
-// Seed. A cumulative profile channel's meter reading is persisted state, and
-// the last value the channel published is that same reading. Without restoring
-// it, an aggregate over cumulative children starts the process at 0 and jumps
-// to the real total once every child has ticked once - a zero phase followed by
-// a step, in a series whose whole point is that it only ever rises.
+// An entry is kept only for a channel that can still produce a value in the
+// new generation (gen.sensors or gen.commands, the two paths through dispatch
+// that write the cache); anything else would otherwise freeze on its last
+// published value and keep being summed into every total above it, even after
+// indexAggregates reports it contributes nothing. A cumulative profile
+// channel's persisted meter reading is restored into the cache too, so an
+// aggregate over cumulative children does not start at 0 and jump to the real
+// total once every child has ticked once.
 //
 // It takes the mutex itself and must be called before the runners of the new
 // generation start.
@@ -585,11 +571,11 @@ func (this *environment) carryLastValues(gen *generation) {
 		}
 	}
 
-	// the same prune for the persisted side, and for the same reason. An entry
-	// only means something for a channel that still compares against it: once a
-	// trigger is removed or the channel is gone, it is a number nothing reads
-	// and that would be written out on every flush forever. Unlike lastValues
-	// this is stored, so dropping an entry is a change and has to be flushed.
+	// the same prune for the persisted side: an entry only means something for
+	// a channel that still compares against it, so once a trigger is removed or
+	// the channel is gone it is a number nothing reads and would be written out
+	// on every flush forever. Unlike lastValues this is stored, so dropping an
+	// entry is a change and has to be flushed.
 	if len(this.state.LastPublished) > 0 {
 		compares := make(map[string]bool, len(gen.sensors))
 		for _, binding := range gen.sensors {
@@ -605,12 +591,11 @@ func (this *environment) carryLastValues(gen *generation) {
 		}
 	}
 
-	// and the same prune again for the anchors of the declared programmes. An
+	// and the same prune again for the anchors of the declared programmes: an
 	// entry is kept only for a channel that still runs a schedule in the new
-	// generation: turn such a channel into a profile and its anchor is a start
-	// instant nothing reads, written out on every flush forever - and one that
-	// would come back as the position of a programme that has not run for weeks
-	// if the source were ever switched back.
+	// generation, since otherwise the anchor is a start instant nothing reads,
+	// written out on every flush forever, and would resurface as a stale
+	// position if the source were ever switched back to a schedule.
 	if len(this.state.ScheduleRuns) > 0 {
 		scheduled := make(map[string]bool, len(gen.sensors))
 		keep := func(binding channelBinding) {
@@ -749,14 +734,12 @@ func copyStates(in map[string]interface{}) map[string]interface{} {
 	return out
 }
 
-// copyValue copies a state value deeply and replaces a non finite float by 0.
-//
-// The zero is not cosmetic: NaN and infinity are what a division by zero in a
-// script produces, they are rejected by the validator on the way in, and a
-// document containing one cannot be marshalled to json - so a state carrying
-// one would make every reader of the state fail rather than the one channel
-// that produced it. The in memory value is left as it is, so the script that
-// produced it still sees what it wrote.
+// copyValue copies a state value deeply and replaces a non finite float by 0
+// for storage: NaN and infinity, typically from a division by zero in a
+// script, cannot be marshalled to json, and one would make every reader of
+// the state fail rather than the one channel that produced it. The in memory
+// value is left as it is, so the script that produced it still sees what it
+// wrote.
 func copyValue(in interface{}) interface{} {
 	switch value := in.(type) {
 	case map[string]interface{}:

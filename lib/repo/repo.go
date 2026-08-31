@@ -46,11 +46,10 @@ type VersionConflictError struct {
 	// Stored is the version the document carries now, meaningful unless Gone or
 	// StoredUnknown say otherwise.
 	Stored int64
-	// Gone says the document is not there at all, which is a different message
-	// and a different fix. It is not derived from Stored being zero: a document
-	// written before the version field existed is stored and reads as zero, and
-	// telling its author that it disappeared would send them looking for the
-	// wrong thing.
+	// Gone says the document is not there at all - a different message and a
+	// different fix. Not derived from Stored being zero: a pre-version-field
+	// document is stored and reads as zero too, and reporting it as gone would
+	// send its author looking for the wrong thing.
 	Gone bool
 	// StoredUnknown says the stored version could not be read back - a refused
 	// write and a failed read at once. Naming a version that was never read
@@ -88,30 +87,25 @@ type RuntimeState struct {
 	Anchors map[string]int64 `json:"anchors,omitempty" bson:"anchors,omitempty"`
 
 	// LastPublished holds, per channel with a change trigger, the value that
-	// last went out and when. It is what the next computed value is compared
-	// against, so it has to survive a restart: without it every such channel
-	// would publish once on its first evaluation and start its heartbeat gap
-	// over, which is a burst of transients across a whole site after a
-	// deployment.
+	// last went out and when - what the next computed value is compared
+	// against, so it has to survive a restart or every such channel would
+	// publish once and restart its heartbeat gap on every deployment.
 	//
-	// A sibling of Anchors rather than an entry in the asset states: it is
-	// bookkeeping of the runtime, no client can reach it (StateChange does not
-	// carry it), and keeping it out of the asset map means it cannot collide
-	// with the meter reading a cumulative profile stores there under the same
-	// channel id.
+	// A sibling of Anchors rather than an asset state entry: it is runtime
+	// bookkeeping no client can reach, and keeping it out of the asset map
+	// avoids colliding with the meter reading a cumulative profile stores there
+	// under the same channel id.
 	LastPublished map[string]PublishedValue `json:"last_published,omitempty" bson:"last_published,omitempty"`
 
 	// ScheduleRuns holds, per channel with a schedule source, where its
-	// programme currently stands. Without it a restart would put every declared
-	// machine back at its first state, so a deployment would look like every
-	// plant of the site setting itself up at once - and a gated one would sit
-	// closed until the next rising edge, which for a shift calendar is the next
+	// programme currently stands, so a restart does not put every declared
+	// machine back at its first state - a gated one would otherwise sit closed
+	// until the next rising edge, which for a shift calendar is the next
 	// morning.
 	//
-	// A sibling of Anchors and LastPublished, for their reasons: it is
-	// bookkeeping of the runtime, no client can reach it (StateChange does not
-	// carry it), and keeping it out of the asset map means it cannot collide
-	// with the state keys the schedule itself writes there.
+	// A sibling of Anchors and LastPublished, for the same reasons: runtime
+	// bookkeeping no client can reach, kept out of the asset map so it cannot
+	// collide with the state keys the schedule itself writes there.
 	ScheduleRuns map[string]ScheduleRun `json:"schedule_runs,omitempty" bson:"schedule_runs,omitempty"`
 
 	// Approaching holds the zone values that are moving towards a set point,
@@ -185,28 +179,25 @@ type PublishedValue struct {
 }
 
 // ScheduleRun is where one schedule channel stands: the instant its current
-// pass through the states began, how many whole cycles were already behind that
-// instant, and whether its gate is open.
+// pass through the states began, how many whole cycles were already behind
+// that instant, and whether its gate is open.
 //
-// The two numbers are one anchor in two parts, and both are needed. A cycling
-// schedule rolls StartUnix forward by the cycles it has consumed so that the
-// walk from the anchor to now stays short however long the environment runs;
-// CycleOffset then keeps counting the cycles that roll-forward dropped, and the
-// per-cycle duration draw is taken on that absolute count - which is what makes
-// the roll-forward invisible in the values instead of a slow drift.
+// StartUnix and CycleOffset are one anchor in two parts: a cycling schedule
+// rolls StartUnix forward by consumed cycles so the walk to now stays short,
+// while CycleOffset keeps counting them so the duration draw stays on the
+// absolute cycle count and the roll-forward stays invisible in the values.
 //
-// Open is the edge detector of a gated schedule: the cycle restarts at the
-// first state on every rise, so the flag has to survive a restart or a service
-// that came back inside a shift would start the programme over.
+// Open is the edge detector of a gated schedule - the cycle restarts at the
+// first state on every rise - so it has to survive a restart, or a service
+// that came back mid-shift would start the programme over.
 type ScheduleRun struct {
 	StartUnix   int64 `json:"start_unix" bson:"start_unix"`
 	CycleOffset int64 `json:"cycle_offset" bson:"cycle_offset"`
 
-	// PassUnix is the salt of the pass that is running: it is set to StartUnix
-	// when the run is created and again on every rising edge, and it never moves
-	// afterwards - while StartUnix wanders with the roll-forward. A gated
-	// schedule draws its durations on this number, so that two mornings do not
-	// set up in exactly the same number of seconds and so that moving the anchor
+	// PassUnix is the salt of the pass that is running: set to StartUnix when
+	// the run is created and on every rising edge, then never moved again, while
+	// StartUnix wanders with the roll-forward. A gated schedule draws its
+	// durations on this number, so two mornings differ and moving the anchor
 	// cannot redraw the shift that is running.
 	PassUnix int64 `json:"pass_unix,omitempty" bson:"pass_unix,omitempty"`
 
@@ -215,12 +206,11 @@ type ScheduleRun struct {
 
 // Environments stores environment definitions.
 type Environments interface {
-	// Put replaces any previous definition under the same id, without a
+	// Put replaces any previous definition under the same id without a
 	// concurrency check, and returns the version the stored document carries
-	// afterwards. The version is counted up by the store itself and never taken
-	// from the document handed in: two writers arriving at once must not end up
-	// on the same number, or a third caller's compare-and-swap would compare
-	// against a version that two different documents wore.
+	// afterwards. The version is counted by the store itself, never taken from
+	// the document handed in, so two writers arriving at once cannot end up on
+	// the same number.
 	//
 	// A document that did not exist yet starts at version 1.
 	Put(ctx context.Context, env domain.Environment) (version int64, err error)

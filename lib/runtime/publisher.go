@@ -83,27 +83,22 @@ type eventPublisher interface {
 // shape is what the platform's marshaller reads, so a migrated channel must
 // produce the same bytes for the same script.
 //
-// A service that declares a time path is the exception, and deliberately so:
-// there the bytes have to be an object carrying the value and the time, on the
-// live path as much as on the backfill. Neither of the other two options works.
-// A bare value sent to such a service is rejected by the platform's message
-// cleaning on every event, because the root of that service is a record and a
-// number is not one - so such a channel never worked here. An object with the
-// time left out fares no better: the cleaning defaults the missing member to
-// null, and the ingestion cannot read a time out of that, so it drops the row
-// and notifies the device's owners - once per reading. Until
-// platform-connector-lib c8133d0 it asserted that null to an int64 instead and
-// panicked in a goroutine with no recover; the shape moses has to send is the
-// same either way. lib/devices/ingestion_test.go pins both.
+// A service that declares a time path is the exception: there the bytes must
+// be an object carrying value and time, on the live path and the backfill
+// alike. A bare value is rejected by the platform's message cleaning, since
+// the root of such a service is a record; an object with the time left out
+// fares no better, since the cleaning defaults the missing member to null and
+// the ingestion drops the row and notifies the device's owners.
+// lib/devices/ingestion_test.go pins both cases.
 type connectorPublisher struct {
 	connector   *platform_connector_lib.Connector
 	segmentName string
 
-	// shapes caches the resolved time shape per service. The lookup behind it is
-	// a device and a device type read, which the connector performs again for
-	// every event anyway; without the cache a publish would pay for it twice.
-	// The ttl mirrors what the platform's own ingestion caches the same fact
-	// for, so a changed device type takes effect equally fast on both sides.
+	// shapes caches the resolved time shape per service: the lookup behind it is
+	// a device and device-type read the connector performs on every event
+	// anyway, so without the cache a publish would pay for it twice. The ttl
+	// mirrors what platform-connector-lib caches the same fact for, so a changed
+	// device type takes effect equally fast on both sides.
 	shapesMux sync.RWMutex
 	shapes    map[string]cachedShape
 }

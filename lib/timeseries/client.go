@@ -31,14 +31,14 @@ import (
 	"github.com/SENERGY-Platform/moses/lib/dataset"
 )
 
-// requestTimeout allows for the largest replay window, a year at minute
-// resolution: ~525k points / ~20-30 MB of JSON. That fetch runs once, when
-// the environment starts, not on the publish tick, so a generous timeout
-// here does not cost anything while the environment is running.
+// requestTimeout allows for the largest replay window, up to a year at
+// minute resolution. That fetch runs once, when the environment starts, not
+// on the publish tick, so a generous timeout does not cost anything while
+// the environment is running.
 //
-// It is applied per request, on a context derived from the caller's, rather
-// than as http.Client.Timeout: the caller's own budget has to be able to end
-// the call earlier, and nested deadlines take the nearer one by themselves.
+// Applied per request on a context derived from the caller's, rather than as
+// http.Client.Timeout, so the caller's own budget can still end the call
+// earlier - nested deadlines take the nearer one by themselves.
 const requestTimeout = 180 * time.Second
 
 // maxPoints bounds one fetch the way dataset.MaxRows bounds one upload.

@@ -27,19 +27,14 @@ import (
 )
 
 // Change of value publishing: a channel sends when its value moves and,
-// independently of that, at least once per heartbeat. Real metering hardware
-// works this way - an Eltako meter sends every ten minutes and additionally on
-// a step of 0.1 kWh - and a series simulated on a ticker alone is either far
-// finer than the hardware or misses every transient between two ticks.
+// independently of that, at least once per heartbeat - the way real metering
+// hardware behaves, and what a ticker-only simulation cannot reproduce.
 //
-// Three pieces make it up, and they are deliberately split by what they need:
-//
-//   - exceedsChange and covSends are pure, and the live path and the backfill
-//     share them. That sharing is the parity guarantee: a reconstructed window
-//     and the live simulation apply the same rule to the same values.
-//   - covPublish is the gate, and it runs under the environment mutex.
-//   - runChangeChannel owns the two timers and is the only goroutine touching
-//     them.
+// Three pieces split by what they need: exceedsChange and covSends are pure
+// and shared by the live path and the backfill, which is the parity
+// guarantee; covPublish is the gate and runs under the environment mutex;
+// runChangeChannel owns the two timers and is the only goroutine touching
+// them.
 
 // covSettings is a resolved change trigger: the thresholds plus the cadence the
 // value is computed and compared on.
@@ -117,19 +112,13 @@ func finite(value float64) bool {
 // exceedsChange is the threshold arithmetic: does current differ from the last
 // published value by more than one of the thresholds.
 //
-// Three properties are deliberate and each of them is pinned by a test:
-//
-//   - The thresholds are ORed. A meter usually carries an absolute step, a
-//     power reading a relative one, and a document may carry both.
-//   - The relative threshold multiplies rather than divides. At last == 0 the
-//     product is 0 and every deviation is a change, which is what a meter
-//     starting from zero has to report; dividing would be a division by zero.
-//   - A value that is not finite is not a change, in either role. NaN falls out
-//     of the comparisons on its own, but an infinity does not: |±Inf - last|
-//     exceeds every finite threshold, so a script sending 1/0 or a formula
-//     dividing by a zero input would publish on every single evaluation,
-//     forever, and no arithmetic further down would ever stop it. The heartbeat
-//     still gets such a value out, so nothing goes silent either.
+// Three properties are deliberate: the thresholds are ORed, since a document
+// may carry both an absolute and a relative one; the relative threshold
+// multiplies rather than divides, so at last == 0 every deviation counts as a
+// change instead of dividing by zero; and a value that is not finite is never
+// a change - NaN falls out of the comparison on its own, but an infinity does
+// not (|±Inf - last| exceeds every finite threshold), so this is checked
+// explicitly.
 func exceedsChange(cov covSettings, last float64, current float64) bool {
 	if !finite(current) || !finite(last) {
 		return false
@@ -144,19 +133,15 @@ func exceedsChange(cov covSettings, last float64, current float64) bool {
 	return false
 }
 
-// covSends is the whole "should the trigger send this" decision, and the live
-// gate and the backfill share it the way they share exceedsChange - the parity
-// is structural rather than a claim two code paths make separately.
+// covSends is the whole "should the trigger send this" decision, shared
+// structurally by the live gate and the backfill, the way exceedsChange is.
 //
-// base is nil when nothing has been published yet. The first value then goes out
-// without a comparison, because a fresh environment must not stay silent until
-// its value happens to move. That bypass is deliberately not extended to a value
-// that is not finite: it exists to get a channel started, not to let a division
-// by zero past the gate, and without the exception a channel whose very first
-// value is NaN would publish on every evaluation for as long as it kept
-// producing NaN - the one case exceedsChange cannot catch, because it is never
-// asked. Such a value waits for the heartbeat, which sends it exactly once per
-// gap.
+// base is nil when nothing has been published yet, and the first value then
+// goes out without a comparison so a fresh environment does not stay silent
+// until its value happens to move. That bypass does not extend to a
+// non-finite value: without the exception a channel whose first value is NaN
+// would publish on every evaluation forever, since exceedsChange is never
+// asked about it; such a value instead waits for the heartbeat.
 func covSends(cov covSettings, base *float64, current float64) bool {
 	if base == nil {
 		return finite(current)
@@ -164,16 +149,14 @@ func covSends(cov covSettings, base *float64, current float64) bool {
 	return exceedsChange(cov, *base, current)
 }
 
-// covLogGate throttles the failure output of one channel. A refused publish is
-// retried on the evaluation cadence, which is the right behaviour and is left
-// alone here; what is dropped is the log line of every attempt after the first.
-// At an evaluation every ten seconds and an hourly heartbeat one broken channel
-// would otherwise write 360 ERROR lines an hour instead of one, and a site of
-// them buries everything else in the service log.
+// covLogGate throttles the failure output of one channel: a refused publish is
+// still retried on the evaluation cadence, but only the first attempt's log
+// line is kept, so one broken channel does not bury the service log in
+// repeated ERROR lines.
 //
 // No lock, and none is needed: the only writer is runChangeChannel's own
-// goroutine. Its two branches are cases of one select, and dispatch runs the
-// source synchronously, so the send callback is on that goroutine too.
+// goroutine, since its two branches are cases of one select and dispatch runs
+// the source synchronously on that same goroutine.
 type covLogGate struct {
 	// failing is true while the last attempt did not reach the platform. The
 	// first failure after a success reports, the ones after it stay quiet, and a
@@ -192,19 +175,14 @@ func (this *Runtime) covSend(env *environment, binding channelBinding, value int
 // covPublish is the gate in front of publish. It reports whether something went
 // out, which is what restarts the heartbeat gap.
 //
-// It must be called with env.mux held. That is not an extra rule invented here:
-// every publish of every ticker path already happens under that mutex - a
-// script's send runs inside its run, and the declarative sources take it
-// themselves - and the gate needs exactly that, because reading the last
-// published value, sending, and writing the new one back have to be one
-// operation. Two evaluations of the same channel interleaving there would
-// compare against a value that was never published, or lose the one that was.
+// It must be called with env.mux held, like every other publish path: reading
+// the last published value, sending, and writing the new one back have to be
+// one operation, or two interleaved evaluations could compare against a value
+// that was never published, or lose one that was.
 //
-// forced is the heartbeat: it skips the threshold, not the bookkeeping.
-//
-// A failed publish never advances the bookkeeping. The next evaluation then
-// still sees the old comparison base and tries again, which is a retry falling
-// out of the arithmetic rather than a queue that has to be maintained.
+// forced is the heartbeat: it skips the threshold, not the bookkeeping. A
+// failed publish never advances the bookkeeping, so the next evaluation still
+// sees the old comparison base and retries without a queue to maintain.
 func (this *Runtime) covPublish(env *environment, binding channelBinding, value interface{}, forced bool, logs *covLogGate) bool {
 	number, numeric := asFloat(value)
 	if !numeric {
@@ -278,13 +256,12 @@ func (this *Runtime) runChangeChannel(ctx context.Context, env *environment, gen
 				heartbeat.Reset(heartbeatEvery)
 			}
 		case <-heartbeat.C:
-			//an evaluation that is due at this very instant is served first. A
+			//an evaluation that is due at this very instant is served first: a
 			//select picks at random between two ready cases, and a heartbeat
 			//interval that is a whole multiple of the evaluation cadence - the
-			//shape every document has - makes both due at the same moment on
-			//every single heartbeat. Taking the heartbeat first would send the
-			//reading of the previous evaluation, so the same document would
-			//publish the current or the previous value on a coin toss.
+			//shape every document has - makes both due at the same moment on every
+			//heartbeat. Taking the heartbeat first would publish the current or the
+			//previous value on a coin toss.
 			if this.dueEvaluation(evaluate, env, gen, binding, pending, logs) {
 				//that evaluation published, so the gap starts again and this
 				//heartbeat is not owed any more: sending the same value a second
@@ -349,11 +326,10 @@ func (this *Runtime) dueEvaluation(evaluate *time.Ticker, env *environment, gen 
 // restart is not the start of the gap: what was published before the restart
 // still stands, so only the rest of that gap is owed.
 //
-// Clamped on both sides. Below by one evaluation, so that a gap which has long
-// run out - a service that was down for hours - does not fire a heartbeat before
-// anything has been computed. Above by the full gap, which is what a clock that
-// jumped backwards, or a stored timestamp from the future, would otherwise
-// exceed.
+// Clamped on both sides: below by one evaluation, so a gap that has long run
+// out does not fire before anything has been computed; above by the full gap,
+// against a clock that jumped backwards or a stored timestamp from the
+// future.
 func (this *Runtime) firstHeartbeatDelay(env *environment, binding channelBinding, heartbeatEvery time.Duration, evalEvery time.Duration) time.Duration {
 	env.mux.Lock()
 	last, known := env.state.LastPublished[binding.channel.Id]

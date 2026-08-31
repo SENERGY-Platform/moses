@@ -31,14 +31,12 @@ import (
 )
 
 // A backfill computes an environment over a window that has already passed and
-// publishes the readings with the timestamps they would have had, so that a
-// model can be trained on weeks of data the moment the environment is defined
-// instead of after weeks of waiting.
-//
-// It is the same arithmetic the live simulation runs, driven by a different
-// clock: profileValue and replayValue are functions of the instant alone, so
-// seed plus window determine the result. What it does not do is touch anything
-// the live simulation owns - see runBackfillChannel.
+// publishes the readings with the timestamps they would have had, so a model
+// can be trained on weeks of data as soon as the environment is defined. It
+// runs the same arithmetic as the live simulation, driven by a different
+// clock - profileValue and replayValue are functions of the instant alone, so
+// seed plus window determine the result - but touches nothing the live
+// simulation owns; see runBackfillChannel.
 
 // MaxBackfillSpan bounds one window. A year and a day, so that "the last twelve
 // months" is expressible without the caller having to reason about leap years.
@@ -317,18 +315,13 @@ func validateBackfillWindow(from time.Time, to time.Time, now time.Time) (time.T
 }
 
 // checkBackfillVolume refuses a job before it starts rather than after it has
-// been running for a day. The count is the upper bound: it assumes every
-// counted channel turns out to be backfillable, and the job can only publish
-// fewer.
-//
-// Only what the job could write is counted. The skip reasons that follow from
-// the definition alone are asked here, exactly as the job will ask them, because
-// a channel the job refuses must not spend the reading budget: a script channel
-// with a one second evaluation cadence comes to two and a half million steps
-// over a month and would take the whole job down with it, for a channel the
-// backfill never writes a single reading for. The remaining reasons need the
-// loaded series or a device type read and cannot be asked before the job exists;
-// they only ever remove channels, so leaving them out keeps this an upper bound.
+// been running for a day. The count is an upper bound, since it assumes every
+// counted channel is backfillable and the job can only publish fewer. Only the
+// skip reasons that follow from the definition alone are asked here, exactly as
+// the job will ask them, so a channel the job refuses does not spend the
+// reading budget; the remaining reasons need the loaded series or a device type
+// read and cannot be asked before the job exists, but they only ever remove
+// channels, so leaving them out keeps this an upper bound.
 func checkBackfillVolume(channels []backfillChannel, from time.Time, to time.Time) error {
 	total := int64(0)
 	for _, channel := range channels {
@@ -346,12 +339,10 @@ func checkBackfillVolume(channels []backfillChannel, from time.Time, to time.Tim
 }
 
 // backfillStepSeconds is the grid one channel is reconstructed on: its publish
-// interval, or the evaluation interval of a usable change trigger.
-//
-// The volume check counts on this grid too, which is the honest number: a
-// channel publishing on change can, in the worst case, publish on every
-// evaluation, and a check counting heartbeats would wave through a job that then
-// publishes a hundred times as much as it promised.
+// interval, or the evaluation interval of a usable change trigger. The volume
+// check counts on this grid too, since a channel publishing on change can, in
+// the worst case, publish on every evaluation, and counting only heartbeats
+// would wave through a job that publishes far more than it promised.
 func backfillStepSeconds(channel domain.Channel) int64 {
 	if cov, usable, _ := covOf(channel); usable {
 		return cov.evalSeconds
@@ -555,13 +546,12 @@ func (this *Runtime) runBackfill(ctx context.Context, job *backfillJob, gen *gen
 		"published", published, "duration", elapsed, "events_per_second", rate)
 }
 
-// runBackfillChannel replays one channel over the window.
-//
-// Nothing here touches the environment: not its state, not its replay anchors,
-// not its last values. That is the point of the local counter and the local
-// anchor below. The live simulation of this environment keeps running while the
-// job does, and a job that moved the persisted loop anchor backwards by weeks
-// would make the live channel jump to a different point in its data.
+// runBackfillChannel replays one channel over the window. Nothing here touches
+// the environment - not its state, not its replay anchors, not its last values
+// - which is the point of the local counter and anchor below: the live
+// simulation keeps running while the job does, and moving the persisted loop
+// anchor backwards would make the live channel jump to a different point in
+// its data.
 func (this *Runtime) runBackfillChannel(ctx context.Context, job *backfillJob, gen *generation, channel backfillChannel, points []dataset.Point, from time.Time, to time.Time, status *BackfillChannelStatus) {
 	interval := channel.channel.IntervalSeconds
 	//with a change trigger the value is computed on the evaluation grid and the
@@ -573,10 +563,11 @@ func (this *Runtime) runBackfillChannel(ctx context.Context, job *backfillJob, g
 	}
 	steps := backfillTicks(step, from, to)
 
-	//a looping replay plays relative to an anchor. The live anchor is the moment
+	//a looping replay plays relative to an anchor: the live anchor is the moment
 	//the simulation started, which lies after this window, so replayValue would
-	//report every instant of it as "not yet started". The window's own start is
-	//both usable and reproducible: the same window replays the same data.
+	//report every instant as "not yet started". The window's own start is used
+	//instead, since it is both usable and reproducible - the same window
+	//replays the same data.
 	anchor := from.Unix()
 
 	//a cumulative profile publishes a meter reading, not a rate. The live path
@@ -585,18 +576,16 @@ func (this *Runtime) runBackfillChannel(ctx context.Context, job *backfillJob, g
 	counter := float64(0)
 	cumulative := channel.channel.Source.Kind == domain.SourceProfile && channel.channel.Source.Profile.Cumulative
 
-	//the change trigger is reproduced the same way: local bookkeeping, from
-	//nothing, so the window decides the result and not whatever the live channel
-	//published last. It is the same pure covSends the live gate uses, which is
-	//what makes a reconstructed series and a live one agree.
+	//the change trigger is reproduced the same way as the value: local
+	//bookkeeping, from nothing, using the same pure covSends the live gate uses,
+	//so a reconstructed series and a live one agree.
 	//
-	//Two pieces, because the live gate keeps two: the comparison base, which only
-	//a finite published value becomes, and the moment of the last publish, which
-	//every publish restarts. Live those are the stored last_published entry and
-	//the heartbeat timer, and the timer starts with the channel - which is why
-	//this one starts at the window start rather than at zero. A channel whose
-	//first samples are not numbers then waits one heartbeat here as it does live,
-	//instead of having every instant count as overdue.
+	//Two pieces, mirroring the live gate: the comparison base, set only by a
+	//finite published value, and the moment of the last publish, reset by every
+	//publish. lastPublishedAt starts at the window start rather than zero
+	//because the live heartbeat timer starts with the channel, so a channel
+	//whose first samples are not numbers waits one heartbeat here too, instead
+	//of every instant counting as overdue.
 	var lastPublished *float64
 	lastPublishedAt := from.Unix()
 
@@ -633,12 +622,11 @@ func (this *Runtime) runBackfillChannel(ctx context.Context, job *backfillJob, g
 					"environment", gen.def.Id, "channel", channel.channel.Id, "at", at)
 			}
 			//the attempt restarts the heartbeat gap whether or not the reading
-			//went out, because that is what the live runner does: it resets the
-			//timer right after covPublish, unconditionally. Keeping the old
-			//moment here would make every following instant overdue and shift
-			//the rest of the reconstructed grid off the live cadence over one
-			//refused reading. The comparison base stays as it was, exactly as
-			//covPublish leaves the stored entry alone on a failure.
+			//went out, mirroring the live runner, which resets the timer right
+			//after covPublish unconditionally; keeping the old moment would make
+			//every following instant overdue and shift the reconstructed grid
+			//off the live cadence. The comparison base stays as it was, exactly
+			//as covPublish leaves the stored entry alone on a failure.
 			if hasCov {
 				lastPublishedAt = at.Unix()
 			}
@@ -654,11 +642,9 @@ func (this *Runtime) runBackfillChannel(ctx context.Context, job *backfillJob, g
 			}
 			//a value that is not finite went out but must not become the
 			//comparison base, exactly as covPublish refuses to store one: every
-			//later comparison against it would be false, so a single NaN sample
-			//in the middle of a dataset would suppress every movement until the
-			//next heartbeat here while the live channel published it - the two
-			//series would then disagree over a bad sample, which is precisely
-			//what the parity is bought for.
+			//later comparison against it would be false, so a NaN sample would
+			//suppress movement here while the live channel kept publishing it -
+			//breaking the parity the bookkeeping exists for.
 		}
 		status.Published++
 		if status.Published%backfillLogEvery == 0 {

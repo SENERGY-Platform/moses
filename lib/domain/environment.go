@@ -78,25 +78,20 @@ type Environment struct {
 	Owner string `json:"-" bson:"owner"`
 
 	// Version is counted by the server: every successful write increments it,
-	// and a client sends back the version of the document it read. The write is
-	// then refused unless the stored document is still that one, which is what
-	// keeps two editors from overwriting each other - and, with them, from
-	// deleting a device the winning document still publishes through.
-	//
-	// Zero means the client does not take part: the write goes through
-	// unchecked, and the version is still incremented. A document written before
-	// this field existed reads as zero too, so zero is never a version anybody
-	// has to defend.
+	// and a write is refused unless the client's version still matches the
+	// stored one - this is what keeps two editors from overwriting each other's
+	// devices. Zero means the client does not take part; a document written
+	// before this field existed reads as zero too.
 	Version int64 `json:"version" bson:"version"`
 
 	// ExternalGraphRef is the id of the graph this environment is mirrored as in
 	// the device-repository, so other applications can consume a simulated site
 	// like a real one.
 	//
-	// The server decides this and enforces it, a value sent by a client does not
-	// count: the whole document is sent on every update, so an echoed or invented
-	// ref would let one environment overwrite the graph of another - which is
-	// exactly what a copy of an export would do. See reconcileGraphRef in lib/api.
+	// The server decides and enforces this value; a client-sent value is
+	// ignored, since the whole document is sent on every update and an echoed or
+	// invented ref would let one environment overwrite another's graph. See
+	// reconcileGraphRef in lib/api.
 	ExternalGraphRef string `json:"external_graph_ref" bson:"external_graph_ref"`
 
 	// Every stochastic source derives from Seed, so the same environment and
@@ -128,9 +123,8 @@ type Zone struct {
 	Tags []string `json:"tags" bson:"tags"`
 
 	// TimeConstants makes a state value follow a set point instead of jumping to
-	// it, in seconds per state key. This is the thermal inertia of a space: a
-	// hall does not have a new temperature the moment one is set. A key with no
-	// time constant is set at once, which is what every stored document does.
+	// it, in seconds per state key - the thermal inertia of a space. A key with
+	// no time constant is set at once, which is what every stored document does.
 	TimeConstants map[string]int64 `json:"time_constants,omitempty" bson:"time_constants,omitempty"`
 
 	// InitialStates seeds the runtime state at start. Live values are not here.
@@ -152,26 +146,24 @@ type Asset struct {
 	ExternalTypeId string `json:"external_type_id" bson:"external_type_id"`
 
 	// ExternalManaged tells a device moses created for this asset apart from one
-	// the user picked in an editor and attached to it. Only a managed device is
-	// deleted again when the asset or the whole environment disappears - a picked
-	// device is inventory of the platform and outlives the simulation that used
-	// it, along with its timeseries.
+	// the user picked and attached to it. Only a managed device is deleted again
+	// when the asset or environment disappears; a picked device is platform
+	// inventory and outlives the simulation.
 	//
-	// The server decides this, never the client: the whole document is sent on
-	// every update, so a stale or invented flag would otherwise decide whether a
-	// real device is deleted. See reconcileManagedFlags in lib/api.
+	// The server decides this, never the client, since the whole document is
+	// sent on every update and a stale or invented flag would otherwise decide
+	// whether a real device is deleted. See reconcileManagedFlags in lib/api.
 	ExternalManaged bool `json:"external_managed" bson:"external_managed"`
 
 	// SubmeteredBy names, by asset id, the asset whose device meters this one
 	// too: what that asset reads already contains what this one draws or
-	// produces on its own. Empty is the ordinary case and means this asset
-	// attaches to its zone in the mirrored graph - the behavior of every
-	// document stored before this field existed.
+	// produces. Empty is the ordinary case and means this asset attaches to its
+	// zone in the mirrored graph, the behavior of every document stored before
+	// this field existed.
 	//
 	// Unlike ExternalManaged and ExternalRef, this is authoring, not
 	// reconciliation: nothing on the platform is read back to correct a wrong
-	// value. It only misrepresents this simulation's own meter tree, never a
-	// resource outside it.
+	// value, so a bad value only misrepresents this simulation's own meter tree.
 	SubmeteredBy string `json:"submetered_by,omitempty" bson:"submetered_by,omitempty"`
 
 	InitialStates map[string]interface{} `json:"initial_states" bson:"initial_states"`
@@ -201,15 +193,11 @@ type Channel struct {
 	// the channel allows, counted from the last publish whatever its reason was.
 	IntervalSeconds int64 `json:"interval_seconds" bson:"interval_seconds"`
 
-	// PublishOnChange makes the channel send when its value moves rather than
-	// only when the clock says so. That is what real metering hardware does: an
-	// Eltako meter sends every ten minutes and additionally on a step of
-	// 0.1 kWh, so a series simulated on a ticker alone is either far finer than
-	// the hardware or misses every transient.
-	//
-	// Nil is the ordinary case and means the channel publishes on
-	// IntervalSeconds alone, which is what every document stored before this
-	// field existed does.
+	// PublishOnChange makes the channel send when its value moves, independently
+	// of the clock - the way real metering hardware behaves, and what a
+	// ticker-only simulation cannot reproduce. Nil is the ordinary case and means
+	// the channel publishes on IntervalSeconds alone, which is what every
+	// document stored before this field existed does.
 	PublishOnChange *ChangeTrigger `json:"publish_on_change,omitempty" bson:"publish_on_change,omitempty"`
 
 	Source Source `json:"source" bson:"source"`
@@ -227,20 +215,16 @@ type ChangeTrigger struct {
 	Absolute float64 `json:"absolute,omitempty" bson:"absolute,omitempty"`
 
 	// Relative is a fraction of the last published value: 0.05 is five percent.
-	// It is compared by multiplying the threshold with that value rather than
-	// by dividing the deviation through it, which is what makes a last
-	// published value of 0 a base every deviation exceeds - the reading a meter
-	// starting from zero has to produce, instead of a division by zero.
+	// It is compared by multiplying the threshold rather than dividing the
+	// deviation through it, so a last published value of 0 is a base every
+	// deviation exceeds instead of a division by zero.
 	Relative float64 `json:"relative,omitempty" bson:"relative,omitempty"`
 
 	// EvaluateIntervalSeconds is how often the value is computed and compared.
-	// It sits in the trigger and not on the channel because a third interval on
-	// the channel would be representable without a trigger and would mean
-	// nothing there.
-	//
-	// A channel whose source carries its own interval is evaluated on that one
-	// and must leave this at zero: one channel has exactly one evaluation
-	// cadence, and two of them would be a contradiction nobody could resolve.
+	// It sits in the trigger and not on the channel because a third interval
+	// there would be representable without a trigger and mean nothing. A
+	// channel whose source carries its own interval must leave this at zero:
+	// one channel has exactly one evaluation cadence.
 	EvaluateIntervalSeconds int64 `json:"evaluate_interval_seconds,omitempty" bson:"evaluate_interval_seconds,omitempty,truncate"`
 }
 
@@ -376,20 +360,13 @@ type FormulaSource struct {
 }
 
 // ScheduleSource is a machine programme declared as data: a cycle of named
-// states, each held for a duration and publishing a value of its own.
+// states, each held for a duration and publishing a value of its own, with the
+// name of the current state written into the asset state so a formula, the
+// live state endpoint and a dashboard can all read what the plant is doing.
 //
-// It exists because the alternative for "idle, then set up, then running" was a
-// script - unvalidatable, not editable in a form, and its running state an
-// anonymous number in a timeseries. Here the states are a list an editor can
-// show, the value of each one is a field, and the name of the state the machine
-// is in right now is written into the asset state, so that a formula, the live
-// state endpoint and a dashboard can all read what the plant is doing rather
-// than guessing it from the load.
-//
-// What it deliberately cannot do is react. There are no transitions and no
-// conditions per state: a programme that depends on a measurement is a script,
-// and pretending otherwise would turn this into a state machine language nobody
-// asked for. The one thing the outside world can do is start it, through Gate.
+// It deliberately cannot react: there are no transitions or conditions per
+// state, since a programme that depends on a measurement is a script. The one
+// thing the outside world can do is start it, through Gate.
 type ScheduleSource struct {
 	// States are run in the order they are written, and the last one is followed
 	// by the first again unless RunOnce says otherwise.
@@ -419,9 +396,9 @@ type ScheduleState struct {
 	Name string `json:"name" bson:"name"`
 
 	// DurationSeconds is how long the step is held. DurationSpreadPercent varies
-	// it per cycle, drawn from the environment seed, so that a plant does not
-	// need exactly 412 seconds to set up every single time; it is a percentage
-	// below 100, because a step of no length is not a step.
+	// it per cycle, drawn from the environment seed, so a plant does not take
+	// the same exact time to set up every cycle; it stays below 100 percent,
+	// since a step of no length is not a step.
 	DurationSeconds       int64   `json:"duration_seconds" bson:"duration_seconds"`
 	DurationSpreadPercent float64 `json:"duration_spread_percent,omitempty" bson:"duration_spread_percent,omitempty"`
 
@@ -432,15 +409,14 @@ type ScheduleState struct {
 	Value         float64 `json:"value" bson:"value"`
 	SpreadPercent float64 `json:"spread_percent,omitempty" bson:"spread_percent,omitempty"`
 
-	// StateWrites are further asset state values this step declares: the air
-	// demand of a machine that is running, the setpoint it asks of the hall.
-	// They are read by formulas and by whoever reads the live state.
+	// StateWrites are further asset state values this step declares - the air
+	// demand of a machine that is running, the setpoint it asks of the hall -
+	// read by formulas and by whoever reads the live state.
 	//
 	// The keys of every state of the schedule are written on every evaluation,
-	// not only the ones of the current state: a key another state declares is
-	// written as 0 here. Without that union an air demand set while running
-	// would still stand while the machine is idle, and nothing in the document
-	// would say so.
+	// not only the current state's: a key another state declares is written as 0
+	// here, so an air demand set while running does not still stand once the
+	// machine is idle.
 	StateWrites map[string]float64 `json:"state_writes,omitempty" bson:"state_writes,omitempty"`
 }
 

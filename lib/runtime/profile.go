@@ -26,10 +26,9 @@ import (
 // profileValue is the value a profile channel publishes at t.
 //
 // The spread is a hash of (seed, channelId, time slot), not a running RNG
-// stream: a stream's position would depend on how many ticks happened before,
-// so a restart would replay different values. A pure function of the clock is
-// what makes "same seed, same clock, same values" hold. The slot is the
-// publish interval, so the value is stable within one tick window.
+// stream, since a stream's position would depend on how many ticks happened
+// before and a restart would replay different values. The slot is the publish
+// interval, so the value is stable within one tick window.
 func profileValue(p domain.ProfileSource, seed int64, channelId string, intervalSeconds int64, t time.Time) float64 {
 	value := p.Base * factorOf(p.HourFactors, t.Hour()) * factorOf(p.WeekdayFactors, mondayBased(t.Weekday()))
 	if p.SpreadPercent > 0 {

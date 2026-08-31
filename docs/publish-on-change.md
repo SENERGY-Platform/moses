@@ -48,18 +48,16 @@ The relative threshold **multiplies rather than divides**: the deviation is
 compared against `relative × |last published|`. At a last published value of 0
 that product is 0, so **every deviation from zero is a change** - which is the
 reading a meter starting from zero has to produce, and it falls out of the
-arithmetic instead of being a special case. Dividing would have been a division
-by zero at exactly that point.
+arithmetic instead of being a special case.
 
 A value that is not a **finite** number never counts as a change - **NaN and
 both infinities**, which is what a script sending `1/0` or a formula dividing by
-a zero input produces. That is a rule and not an accident of the arithmetic: NaN
-falls out of the comparisons on its own, but `|±Inf - last|` is over every
-finite threshold, so an infinity would otherwise publish on *every* evaluation
-for as long as the source stayed broken. The rule holds with and without a
-comparison base: a channel whose very first value is not finite would have no
-comparison to fail, so the "the first value is always published" bypass below
-does not extend to one.
+a zero input produces. This is an explicit rule: NaN falls out of the
+comparisons on its own, but `|±Inf - last|` exceeds every finite threshold, so
+an infinity would otherwise publish on *every* evaluation for as long as the
+source stayed broken. It holds even for a channel whose very first value is not
+finite - there is no comparison to fail, so the "first value is always
+published" bypass below does not extend to one.
 
 Such a value still goes out on the heartbeat, so a channel doing arithmetic on a
 missing input is not silent - it just sends at the rate its `interval_seconds`
@@ -69,18 +67,16 @@ forever.
 
 ### The comparison is strictly greater than
 
-A deviation has to **exceed** the threshold; hitting it exactly is not a change.
-That matters for the shape this feature was built for. An Eltako meter stepping
-by exactly 0.1 kWh against `absolute: 0.1` does *not* fire reliably: neither 0.1
+A deviation has to **exceed** the threshold; hitting it exactly is not a
+change. An Eltako meter stepping by exactly 0.1 kWh against `absolute: 0.1`
+does *not* fire reliably: neither 0.1
 nor the accumulated reading is representable in binary floating point, so the
 computed deviation lands a hair above the threshold about two thirds of the time
 and a hair below it the rest - measured over a hundred increments, roughly 63 of
 them published.
 
 Put the threshold **just under** the increment you expect - `0.09` for a 0.1 kWh
-step - and every increment fires. Rounding the values or comparing with a
-tolerance instead would make the threshold mean something different from what it
-says, and would still leave the same question one decimal place further down.
+step - and every increment fires.
 
 ## The heartbeat
 
@@ -90,8 +86,7 @@ because it moved therefore does not produce a second, nearly identical reading a
 moment later.
 
 When the heartbeat comes, the channel sends the value it last computed rather
-than recomputing it - the heartbeat means "this is still the reading", the same
-way the split channel repeats a value the source has not refreshed.
+than recomputing it - the heartbeat means "this is still the reading".
 
 ## One evaluation cadence, and it has to be the faster one
 
@@ -115,9 +110,8 @@ shape and is allowed.
 The evaluation cadence is also the span one computed value covers, and three
 things are cut by it (`channelBinding.stepSeconds`):
 
-- a **cumulative profile** adds the share of its hourly rate that one evaluation
-  is worth. A channel evaluating ten times per heartbeat that added a whole
-  heartbeat each time would count ten times the energy that flowed.
+- a **cumulative profile** adds the share of its hourly rate that one
+  evaluation is worth, not a whole heartbeat's worth each time.
 - the **spread slot** of a profile: the draw is stable within one evaluation.
 - a **distributing replay** hands out the share of a sample one evaluation is
   worth.
@@ -131,9 +125,9 @@ The last published value and the second it went out are persisted per channel
 (`RuntimeState.last_published`). Two things follow, and both are the reason it is
 stored rather than kept in memory:
 
-- **No burst after a deployment.** Without the stored value every channel of
-  every site would publish once on its first evaluation, which is a transient in
-  the data that nothing in the simulation produced.
+- **No burst after a deployment.** Without the stored value, every channel of
+  every site would publish once on its first evaluation - a transient nothing
+  in the simulation produced.
 - **The heartbeat gap is not restarted either.** What was published before the
   restart still stands, so only the rest of its gap is owed. The remainder is
   clamped into `[evaluation, heartbeat]`: never before the value has been
@@ -174,10 +168,10 @@ demonstration runs past the end of its data:
   what it is.
 
 Neither is wrong, and neither is a fallback for the other: a channel that stops
-sending is the honest report of a data source that ended, and a channel that
-keeps reporting its last reading is the honest report of a meter whose value has
-stopped moving. Which one a document wants is a modelling decision. `anchor:
-loop` sidesteps it entirely and is what a long running demonstration should use.
+sending reports a data source that ended, one that keeps repeating its last
+reading reports a meter whose value stopped moving. Which one a document wants
+is a modelling decision. `anchor: loop` sidesteps it entirely and is what a
+long running demonstration should use.
 
 ## A document that bypassed the api
 

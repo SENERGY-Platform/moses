@@ -61,20 +61,10 @@ const (
 const storeTimeout = 30 * time.Second
 
 // seriesLoadTimeout bounds the whole series loading phase of one environment
-// start: every gridfs read and every platform fetch of that definition
-// together.
-//
-// It is far larger than storeTimeout because the two are not the same kind of
-// call. A database read that takes half a minute is broken; a year of minute
-// resolution measurements off the timescale-wrapper is minutes of transfer by
-// design, and a definition may hold several such channels. Sharing one budget
-// is what used to make a slow fetch fail the state read that follows it, and a
-// failed state read does not start the environment at all.
-//
-// It is bounded rather than open ended because startEnvironment runs with
-// lifecycle held: a wrapper that never answers must not keep every other Start,
-// Stop, Reload and Remove waiting forever. The ceiling for one start is
-// therefore min(channels x timeseries.requestTimeout, this budget).
+// start (every gridfs read and platform fetch together). It is far larger than
+// storeTimeout because a fetch may legitimately take minutes, and it is bounded
+// rather than open ended because startEnvironment runs with lifecycle held, so
+// a stalled fetch must not block every other Start, Stop, Reload and Remove.
 const seriesLoadTimeout = 10 * time.Minute
 
 // Runtime runs every environment of the store.
@@ -103,14 +93,13 @@ type Runtime struct {
 	commands map[commandKey]*runningChannel
 	devices  map[string]*environment
 
-	// backfills holds one job per environment, guarded by backfillMux, and
+	// backfills holds one job per environment, guarded by backfillMux;
 	// backfillWorkers counts the goroutines running them so that Stop waits for
 	// the publish in flight instead of leaving it half sent.
 	//
-	// The registry is deliberately in memory only. A job is not resumable: it
-	// would have to know which readings already reached timescale, and timescale
-	// keeps a second one rather than replacing it. After a restart the honest
-	// answer is that nothing is known, which is what BackfillStatusOf gives.
+	// The registry is memory only and a job is not resumable: after a restart
+	// nothing is known about what already reached timescale, which is what
+	// BackfillStatusOf reports.
 	backfillMux      sync.Mutex
 	backfills        map[string]*backfillJob
 	backfillWorkers  sync.WaitGroup
@@ -275,11 +264,10 @@ func (this *Runtime) Reload(id string) {
 		return
 	}
 	this.stopRunners(id)
-	//deliberately not the ctx above: that one is the budget for the definition
-	//read and is partly spent by the time we get here, while startEnvironment
-	//needs a parent it can hang its own two budgets off. Background for the
-	//same reason the read uses it - a reload during shutdown should find a
-	//cancelled runtime, not a context error that reads like a database problem.
+	//deliberately not the ctx above: that budget is for the definition read and
+	//may already be spent by the time we get here. startEnvironment needs a
+	//fresh parent for its own two budgets, and Background for the same reason as
+	//the read above.
 	this.startEnvironment(context.Background(), def)
 	this.rebuildIndex()
 	util.Logger.Info("environment reloaded", "environment", id)
@@ -576,13 +564,13 @@ func (this *Runtime) snapshotEnvs() []*environment {
 	return result
 }
 
-// SetState merges values into the live state of one running environment. This is
-// how a boundary condition is turned from outside the simulation: an outdoor
-// temperature in the context, a hall temperature on a zone, a machine's speed on
-// an asset. The scripts read it on their next tick.
+// SetState merges values into the live state of one running environment - how
+// a boundary condition (an outdoor temperature, a zone's hall temperature, an
+// asset's machine speed) is turned from outside the simulation. Scripts read it
+// on their next tick.
 //
-// The change is applied to the in memory state and marked dirty, not written
-// through to the store: the flusher owns that write, and a direct one would be
+// The change is applied to the in-memory state and marked dirty rather than
+// written through: the flusher owns that write, and a direct one would be
 // overwritten by it anyway.
 func (this *Runtime) SetState(id string, change repo.StateChange) error {
 	//gen is guarded by the runtime mux, the same way rebuildIndex reads it
@@ -697,10 +685,8 @@ func (this *Runtime) runChannel(ctx context.Context, env *environment, gen *gene
 // pending; the publish ticker sends what is there.
 //
 // A channel with a source interval and no publish interval is legitimate: it
-// only evolves state that the other channels of the asset read. It then has no
-// publish ticker, and what its script sends is dropped rather than queued
-// forever - the legacy runtime had no way to express this at all, so there is no
-// behaviour to be faithful to.
+// only evolves state that other channels of the asset read, has no publish
+// ticker, and what its script sends is dropped rather than queued forever.
 func (this *Runtime) runSplitChannel(ctx context.Context, env *environment, gen *generation, binding channelBinding) {
 	pending := &latest{}
 	source := time.NewTicker(time.Duration(binding.sourceInterval) * time.Second)
@@ -793,25 +779,16 @@ func (this *Runtime) executeFormula(env *environment, binding channelBinding, se
 // the runner, so the list needs no lock; env.lastValues does, and it is the
 // same mutex every other source sends under - no second lock, no new order.
 //
-// Three deliberate decisions live in these few lines:
-//
-//   - A channel that has not produced a value yet counts as 0, the same way a
-//     formula's channel reference does. The alternative - waiting until every
-//     input has been seen once - would let one dead sub-meter silence the total
-//     of a whole site forever.
-//   - An aggregate over no inputs at all publishes 0 rather than nothing: a
-//     distribution meter without sub-meters reads zero, and zero is a reading.
-//   - lastValues is in memory only, so after a restart the sum is short until
-//     every sub-metered channel has ticked once - except for the cumulative
-//     ones, whose reading is persisted state and is restored into the cache at
-//     start (environment.carryLastValues). What is left is the offset of the
-//     non-cumulative children for at most one of their intervals. Persisting
-//     everything would make the restart correct and the values stale instead.
-//   - An input whose last value is not a finite number is left out of the sum
-//     rather than carried into it. checkStates refuses NaN and infinity for
-//     stored states, but nothing stops a script from sending 1/0 on a channel:
-//     one such child would otherwise turn the total of every level above it
-//     into NaN, which is a larger loss than one summand missing from one total.
+// A channel that has not produced a value yet counts as 0, the same way a
+// formula's channel reference does, so one dead sub-meter cannot silence the
+// whole total. An aggregate over no inputs publishes 0 rather than nothing.
+// lastValues is in memory only, so after a restart the sum is short until
+// every sub-metered channel has ticked once, except for cumulative channels,
+// whose reading is restored from persisted state at start
+// (environment.carryLastValues). An input whose last value is not a finite
+// number is left out of the sum rather than carried into it, since a script
+// can send NaN or infinity on a channel and one such child would otherwise
+// turn every total above it into NaN.
 func (this *Runtime) executeAggregate(env *environment, gen *generation, binding channelBinding, send func(value interface{})) {
 	inputs := gen.aggregateInputs[binding.channel.Id]
 	env.mux.Lock()
@@ -864,28 +841,15 @@ func numericOrZero(value interface{}) float64 {
 }
 
 // fileSeriesCache holds every uploaded dataset already fetched and parsed
-// during one loadSeries call, keyed by dataset id. Several channels - or a
-// channel and a context source - commonly replay the same upload, and
-// without it each one would pull the same file out of GridFS and parse every
-// column again; ten channels on one yearly file would otherwise mean ten
-// times 20 MB and ten full parses.
+// during one loadSeries call, keyed by dataset id, so that several channels -
+// or a channel and a context source - replaying the same upload share one
+// GridFS read and one parse instead of repeating it.
 //
-// It lives for exactly one loadSeries call and is discarded with it: caching
-// across reloads would let a reload after the dataset was replaced still
-// serve the old parse. That short lifetime is also why it needs no lock -
-// loadSeries and everything it calls run on the single goroutine that holds
-// this.lifecycle (see startEnvironment), never concurrently with another
-// load of the same or a different environment.
-//
-// The platform origin is deliberately not cached here: its result depends on
-// the window and the reference of the one channel or context source asking
-// for it, and the fetch time belongs to each of them freshly.
-//
-// The trade is memory against work: every column of every distinct dataset the
-// definition touches is held until the load ends, where before only one full
-// parse was alive at a time. Many channels on one file get cheaper, a
-// definition drawing on three wide files peaks at roughly three times what it
-// used to.
+// It lives for exactly one loadSeries call and needs no lock: loadSeries and
+// everything it calls run on the single goroutine that holds this.lifecycle
+// (see startEnvironment), never concurrently with another load. The platform
+// origin is deliberately not cached here, since its result depends on the
+// window and reference of the one caller asking for it.
 type fileSeriesCache map[string][]dataset.Series
 
 // loadSeries fetches and parses the uploaded datasets the definition's
@@ -956,10 +920,10 @@ func (this *Runtime) fetchSeries(ctx context.Context, owner string, source *doma
 			//parser changed incompatibly - worth a loud word
 			return nil, fmt.Errorf("the stored file no longer parses: %w", err)
 		}
-		//tolerated like a read from a nil map is: the platform branch above
-		//returns before ever touching the cache, so a call site that forgot it
-		//would look correct in a platform test and panic on the first uploaded
-		//dataset of a real start. Losing the sharing is the smaller failure.
+		//tolerated like a nil map read: the platform branch above returns before
+		//ever touching the cache, so a caller that forgot it would look correct
+		//in a platform test and panic on the first uploaded dataset of a real
+		//start. Losing the sharing is the smaller failure.
 		if cache != nil {
 			cache[source.Ref] = series
 		}
@@ -1026,9 +990,9 @@ func (this *Runtime) executeProfile(env *environment, gen *generation, binding c
 	defer env.mux.Unlock()
 	//stepSeconds is the span one computation stands for: the publish interval
 	//without a change trigger, the evaluation interval with one. It cuts the
-	//spread slot and, below, the share of the hourly rate a tick adds - a
-	//channel evaluating six times per publish interval must not add six full
-	//intervals to its meter.
+	//spread slot and, below, the share of the hourly rate a tick adds, so a
+	//channel evaluating more often than it publishes does not over-count its
+	//meter.
 	value := profileValue(p, gen.def.Seed, binding.channel.Id, binding.stepSeconds, time.Now())
 	if p.Cumulative {
 		states := env.assetStates(binding.asset.id)

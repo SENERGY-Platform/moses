@@ -69,10 +69,9 @@ func (this *Runtime) Snapshot(id string) (StateSnapshot, error) {
 	now := time.Now()
 	//a zone value with a time constant is on its way to a set point and is only
 	//written when it is read - exactly what jsZoneApi does before a script sees
-	//it. Reading it here without advancing would report the value from whenever
-	//a script last happened to look. Advancing marks the environment dirty, and
-	//so the flusher persists what was resolved, which is what a script read does
-	//as well.
+	//it, so reading it here without advancing would report a stale value.
+	//Advancing marks the environment dirty, so the flusher persists what was
+	//resolved, the same as a script read does.
 	//
 	//Ranging over the map that advanceZone deletes from is safe: deleting during
 	//a range is defined, and an entry deleted before it is reached was going to

@@ -32,17 +32,12 @@ import (
 // the same clock have to produce the same programme across restarts, and a walk
 // that depended on how many ticks had happened before could not.
 
-// maxScheduleCycleWalk bounds the walk from the anchor to now.
-//
-// It is not reachable in the shape this source is for. Every cycling schedule
-// rolls its anchor forward on every evaluation, gated or not, so the walk
-// covers the gap since the last one - a downtime, not a lifetime - and a
-// run_once one walks a single cycle by construction. What the bound rules out
-// is the pathological rest: an environment whose state was stored years ago and
-// started again now, or a clock that jumped forward by a decade. Beyond it the
-// remaining gap is folded into the cycle the walk stopped at, so the programme
-// keeps running with that cycle's drawn durations instead of the process
-// burning a core to catch up under the environment mutex.
+// maxScheduleCycleWalk bounds the walk from the anchor to now, guarding
+// against a pathological gap - state stored years ago and started again, or a
+// clock jump - rather than the normal case, where every evaluation only walks
+// the gap since the last one. Beyond the bound the remaining gap is folded
+// into the cycle the walk stopped at, so the programme keeps running instead
+// of burning a core to catch up under the environment mutex.
 const maxScheduleCycleWalk = 1 << 20
 
 // schedulePosition is where a programme stands at one instant.
@@ -67,22 +62,12 @@ type schedulePosition struct {
 	held bool
 }
 
-// scheduleAt walks the programme from its anchor to nowUnix.
-//
-// The draws are salted so that the two shapes get the variation each of them
-// needs, and neither salt is the anchor the walk starts at:
-//
-//   - A gated schedule draws on run.PassUnix, the instant its pass began, so
-//     every shift gets its own sequence of durations - two mornings do not set
-//     up in exactly the same number of seconds. PassUnix is written once per
-//     pass and never moved, which is what lets StartUnix roll forward without
-//     redrawing the shift that is running.
-//   - A gate-less schedule draws on a constant salt.
-//
-// Both draw on the absolute cycle number, which is the other half of what makes
-// the anchor movable: rolling StartUnix forward by whole cycles and counting
-// those cycles in CycleOffset leaves every draw of every later cycle exactly
-// where it was.
+// scheduleAt walks the programme from its anchor to nowUnix. Draws are salted
+// so a gated schedule varies by run.PassUnix (fixed once per pass, so shifts
+// differ but a running pass is not redrawn as StartUnix rolls forward), while
+// a gate-less schedule uses a constant salt. Both also draw on the absolute
+// cycle number, which is what lets StartUnix roll forward by whole cycles
+// without moving any later draw.
 func scheduleAt(source domain.ScheduleSource, seed int64, channelId string, run repo.ScheduleRun, nowUnix int64) schedulePosition {
 	if len(source.States) == 0 {
 		//the generation refuses such a channel, so this is defensive only
@@ -160,16 +145,12 @@ func scheduleSalt(source domain.ScheduleSource, run repo.ScheduleRun) int64 {
 }
 
 // scheduleRollsForward says whether the anchor of a run may be advanced by the
-// cycles it has consumed. Every cycling programme may, gated or not: the draws
-// hang on PassUnix and on the absolute cycle number, neither of which the
-// roll-forward touches. Only a run_once one may not, and only because it has no
-// second cycle to advance into.
-//
-// It is one function rather than a condition spelled out at the call site
-// because the cost of not rolling is invisible: a gated schedule whose gate
-// stays open - a 24/7 line is a gate at a constant 1 - keeps producing correct
-// values while its walk from the rising edge grows without bound, under the
-// environment mutex every other source of the environment shares.
+// cycles it has consumed. Every cycling programme may, since its draws hang on
+// PassUnix and the absolute cycle number, neither of which the roll-forward
+// touches; only a run_once one may not, since it has no second cycle to
+// advance into. Skipping this would leave a schedule whose gate never closes
+// walking from its rising edge without bound, under the environment mutex
+// every other source shares.
 func scheduleRollsForward(source domain.ScheduleSource) bool {
 	return !source.RunOnce
 }
@@ -196,22 +177,14 @@ func scheduleCycle(source domain.ScheduleSource, seed int64, keys []string, cycl
 	return total
 }
 
-// scheduleStateDuration is how long one state lasts in one cycle.
-//
-// The draw is the profile's spreadDraw, on the absolute cycle number rather
-// than on a time slot: a duration has to be decided once for the whole step, or
-// the step's own end would move while it is running.
-//
-// The floor of one second is not cosmetic. A drawn duration of zero would be a
-// state the programme passes through without ever being in, and a cycle of them
-// would be a cycle of length zero - which the walk above divides by.
-//
-// The ceiling is the same defence at the other end, against a document that
-// bypassed validation: converting a float that does not fit into an int64 is
-// implementation defined and lands on the most negative one, so an absurd
-// duration or an infinite spread would produce a negative cycle length rather
-// than an absurd machine. Both clamps are unreachable through the api, where
-// validation demands a duration between one second and a year.
+// scheduleStateDuration is how long one state lasts in one cycle, drawn with
+// spreadDraw on the absolute cycle number rather than a time slot, so the
+// duration is decided once for the whole step. The floor of one second keeps a
+// cycle from ever having zero length, which the walk above divides by; the
+// ceiling guards against a float that does not fit an int64, which is
+// implementation defined and can land on the most negative value. Both clamps
+// are unreachable through the api, where validation demands a duration
+// between one second and a year.
 func scheduleStateDuration(state domain.ScheduleState, seed int64, key string, cycle int64) int64 {
 	seconds := float64(state.DurationSeconds)
 	if state.DurationSpreadPercent > 0 {
@@ -304,13 +277,12 @@ func (this *Runtime) executeSchedule(env *environment, gen *generation, binding 
 
 	position := scheduleAt(source, gen.def.Seed, binding.channel.Id, run, now.Unix())
 	if scheduleRollsForward(source) && position.consumedCycles > 0 {
-		//the anchor moves to the start of the cycle that is running now, and the
-		//cycles it skipped keep being counted. Position, value and every future
-		//duration draw are unchanged by this - see scheduleAt - so it is
-		//bookkeeping and not a state change of the simulation. A gated run rolls
-		//too: its draws hang on PassUnix, which stays where the rising edge put
-		//it, and a gate that never closes would otherwise walk from that edge
-		//again on every single evaluation.
+		//the anchor moves to the start of the cycle that is running now; the
+		//cycles it skipped keep being counted, but position, value and every
+		//future duration draw are unchanged (see scheduleAt), so this is
+		//bookkeeping, not a state change. A gated run rolls too, since its draws
+		//hang on PassUnix rather than StartUnix - otherwise a gate that never
+		//closes would walk from its rising edge again on every evaluation.
 		run.StartUnix += position.consumedSeconds
 		run.CycleOffset += position.consumedCycles
 		this.storeScheduleRun(env, binding.channel.Id, run)
@@ -325,11 +297,9 @@ func (this *Runtime) executeSchedule(env *environment, gen *generation, binding 
 // creating and restarting it as the gate demands. It must be called with
 // env.mux held.
 //
-// The rising edge is the whole point of the gate: a schedule that merely paused
-// while its gate was closed would resume in the middle of whatever it was
-// doing, and the morning after a shift break would look like the middle of the
-// previous afternoon. Starting over at the first state is what makes the
-// morning peak a consequence of the programme.
+// The rising edge is the point of the gate: a schedule that merely paused
+// while closed would resume mid-state, so a shift break would just continue
+// the previous shift instead of starting the morning peak fresh.
 func (this *Runtime) scheduleRun(env *environment, binding channelBinding, source domain.ScheduleSource, now time.Time) (repo.ScheduleRun, bool) {
 	id := binding.channel.Id
 	run, known := env.state.ScheduleRuns[id]
@@ -341,12 +311,11 @@ func (this *Runtime) scheduleRun(env *environment, binding channelBinding, sourc
 		if !known {
 			run = repo.ScheduleRun{StartUnix: now.Unix(), PassUnix: now.Unix()}
 		}
-		//a run left behind by a gated version of this channel keeps its anchor,
-		//so the programme carries on from where it stood instead of setting
-		//itself up again. Its durations do change: a gate-less run draws on a
-		//constant salt rather than on the instant its pass began, so PassUnix
-		//stops being read here. That is the document having been changed, not a
-		//drift - and the position, which is what a reader sees, is kept.
+		//a run left behind by a gated version of this channel keeps its anchor, so
+		//the programme carries on from where it stood rather than restarting. Its
+		//durations do change, since a gate-less run draws on a constant salt
+		//instead of PassUnix - that is the document having changed, not drift, and
+		//the position a reader sees is kept.
 		run.Open = true
 		this.storeScheduleRun(env, id, run)
 		return run, true
@@ -371,12 +340,11 @@ func (this *Runtime) scheduleRun(env *environment, binding channelBinding, sourc
 		run.Open = false
 		this.storeScheduleRun(env, id, run)
 	case open && run.PassUnix == 0:
-		//an open run stored before the salt was split off the anchor. Its
-		//StartUnix is still the instant its pass began, so adopting that is the
-		//sequence of durations the shift has been running with. It is healed
-		//here rather than read as a fallback in scheduleSalt, because from the
-		//next evaluation on StartUnix rolls forward and a fallback would follow
-		//it - which is exactly the drift PassUnix exists to prevent.
+		//an open run stored before the salt was split off the anchor: StartUnix
+		//is still the instant its pass began, so adopting it as PassUnix keeps
+		//the shift's duration sequence. Healed here rather than as a fallback in
+		//scheduleSalt, since StartUnix rolls forward from the next evaluation on
+		//and a fallback would follow it - the drift PassUnix exists to prevent.
 		run.PassUnix = run.StartUnix
 		this.storeScheduleRun(env, id, run)
 	}

@@ -53,22 +53,7 @@ silent.
 The attribute names a content variable, and that variable's characteristic says
 how its value is to be read. Four exist, and **all four are backfillable since
 `platform-connector-lib` `c8133d0`** (module version
-`v0.0.0-20260827082232-c8133d0f997d`, 2026-08-27). Two of them were refused here
-before that, and the reasons are worth keeping, because they say what a
-regression would look like:
-
-- **Unix nanoseconds used to crash the connector process.** The ingestion casts
-  the value to `UnixNanoSeconds` and then wrote `timeVal.(int64)`. For a value
-  that is already in nanoseconds the converter short-circuits on `from == to`
-  and returns what the json decoder produced, which is a `float64` — so the
-  assertion panicked, in a goroutine of `sendEventEnvelope` that has no recover.
-  It now goes through `toNanoseconds`, a type switch over `int64`, `int`,
-  `int32`, `float64`, `float32`, `json.Number` and `string`.
-- **An iso timestamp used never to be read.** The ingestion flattened the
-  message before it looked the time up, and `flatten` wrapped every string in
-  the single quotes it needs for the SQL literal, so what reached `time.Parse`
-  was `'2026-01-01T00:00:00Z'`. `flatten` now leaves values as they were
-  decoded and the quoting happens in `formatValue`, after the time has been read.
+`v0.0.0-20260827082232-c8133d0f997d`, 2026-08-27).
 
 What is left is a **declaration check**: the ingestion reads a unix time out of a
 number and an iso timestamp out of a string, so a time variable typed as the
@@ -93,10 +78,9 @@ timestamp is therefore rounded to the nearest multiple of 256 ns: what timescale
 stores is exactly `int64(float64(at.UnixNano()))`, **off by at most 128 ns**, and
 by at most 256 ns after 2043, when the step doubles again.
 
-That is accepted rather than refused. These rows are training data for operator
+That is accepted rather than refused: these rows are training data for operator
 models sampled at seconds or minutes, so 128 ns sits far below the resolution of
-anything that reads them, and refusing the unit would make a device type
-unbackfillable over a rounding no consumer can observe. A device type that wants
+anything that reads them. A device type that wants
 the exact value declares its nanosecond time **as a string**: those digits are
 parsed with `strconv.ParseInt` and never touch a float64. An iso timestamp is
 exact for the same reason.
@@ -122,9 +106,6 @@ at all. The three candidates were measured against the platform's own code
 | the bare value, as before | the message cleaning rejects it — the root of such a service is a record and the value is a number — on **every** event, and each rejection notifies the device's owners |
 | the object, time omitted | the cleaning defaults the time member to `null`, and the ingestion cannot read a time out of that: the row is dropped and the device's owners are notified, once per reading. Before `c8133d0` it asserted the `null` to an `int64` and **panicked**, in a goroutine of `sendEventEnvelope` that has no recover |
 | the object, time filled in | the row is written under that time |
-
-So a channel on a time-path service never worked on the live path before this,
-and the fix for it is the same shaping the backfill needs.
 
 For every service **without** a time path nothing changed: the bytes are the
 bare value, exactly as before, which is what keeps a migrated channel producing
@@ -158,26 +139,22 @@ A change trigger changes nothing about *what* is backfillable — it is a proper
 of the source, and `profile` and `dataset` stay the two that are — only about
 *how*, see the section above.
 
-A `schedule` channel is the one whose refusal is not structural. A free running
-schedule is a pure function of the seed and its anchor, so a window could be
-reconstructed — but the anchor is runtime state and does not exist before the
-programme first ran, and a gated schedule additionally follows a context key
-whose past values nothing keeps. Reconstructing it would mean inventing both, so
-the window would carry a different programme than the one that ran. See
-`docs/schedule.md`.
+A `schedule` channel is the one whose refusal is not structural: a free running
+schedule is a pure function of the seed and its anchor, so a window could in
+principle be reconstructed - but the anchor is runtime state that does not
+exist before the programme first ran, and a gated schedule also follows a
+context key whose past values nothing keeps. See `docs/schedule.md`.
 
 Also skipped, each with its own reason in the status: a channel that does not
 publish on a schedule, an asset without a platform device, a channel without a
 platform service, a dataset that is not loaded or covers no time span, and every
 service whose time path is missing or unusable.
 
-A formula channel is the one worth a second look. Reconstructing it would mean
-reconstructing its inputs at every instant, which is exactly what the backfill
-of those inputs already writes — so the honest place to derive it is downstream,
-from the backfilled inputs, not here. An `aggregate` channel is the same
-argument in structural form: its inputs are the channels of the sub-metered
-assets (`docs/submetering.md`), the backfill writes those, and a total over them
-is a sum a consumer can take at any moment it likes.
+A `formula` or `aggregate` channel is derived rather than backfilled directly:
+reconstructing it would mean reconstructing its inputs at every instant, which
+is exactly what the backfill of those inputs already writes, so a consumer
+takes the total from the backfilled inputs (`docs/submetering.md` for the
+aggregate's tree) at any moment it likes.
 
 ## A channel publishing on change is reconstructed with its trigger
 
@@ -213,8 +190,8 @@ it carries*. The live path hands `profileValue` a local `time.Now()`; a window
 arrives over the api as RFC3339 and is usually UTC. The job therefore converts
 each instant to `time.Local` before computing, so both paths mean the same
 clock. Without that conversion every backfilled day profile would sit at the
-server's zone offset away from the live one — a silent, entirely plausible-looking
-error in the data a model is trained on. `lib/runtime/backfill_test.go` pins it.
+server's zone offset away from the live one - a silent error in the training
+data. `lib/runtime/backfill_test.go` pins it.
 
 ## What the job does not touch
 
@@ -231,9 +208,7 @@ the job holds no part of its state:
 The consequence of the second one is visible in the data and is worth knowing:
 **the backfilled meter reading is a ramp of its own** and does not join up with
 the live one at the end of the window. A consumer that needs one continuous
-meter has to offset the backfilled segment itself. Starting the job's counter
-from the live value instead would make the result depend on when the job ran,
-which would cost the reproducibility the whole feature is for.
+meter has to offset the backfilled segment itself.
 
 ## Limits
 
