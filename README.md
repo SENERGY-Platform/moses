@@ -80,6 +80,9 @@ A script source runs with `moses` bound in the VM:
 - An environment can be reconstructed over a past window and published with
   historical timestamps, so a model has training data at once — conditions and
   limits in `docs/backfill.md`.
+- An environment can also be *given* a past: simulated from an instant in the
+  past up to now, with state, so the reconstructed meter and the live one are one
+  ramp and the end state becomes the live state — `docs/history-run.md`.
 - Users see their own environments; the platform `admin` role sees all.
   Ownership never transfers.
 

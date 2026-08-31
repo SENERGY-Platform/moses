@@ -194,6 +194,7 @@ func testRouterWith(store repo.Environments, catalog DeviceCatalog, mirror Graph
 	EnvironmentEndpoints(config.Config{}, store, catalog, mirror, notifier, router)
 	EnvironmentStateEndpoints(config.Config{}, store, catalog, mirror, notifier, router)
 	BackfillEndpoints(config.Config{}, store, catalog, mirror, notifier, router)
+	HistoryEndpoints(config.Config{}, store, catalog, mirror, notifier, router)
 	return router
 }
 
@@ -214,6 +215,17 @@ type recordingNotifier struct {
 	status     moses_runtime.BackfillStatus
 	statusErr  error
 	statusCall int
+
+	// histories records the windows StartHistory was asked for, and the four
+	// history fields are what the three run calls answer with, so a test can pin
+	// every status code the handlers map.
+	historyStartErr   error
+	histories         []moses_runtime.HistoryStatus
+	historyStatus     moses_runtime.HistoryStatus
+	historyStatusErr  error
+	historyStatusCall int
+	historyCancels    []string
+	historyCancelErr  error
 
 	// snapshot and snapshotErr are what the reading direction of the state
 	// answers with, and snapshotCalls counts the reads, so a test can pin that a
@@ -259,6 +271,33 @@ func (this *recordingNotifier) BackfillStatusOf(id string) (moses_runtime.Backfi
 		return moses_runtime.BackfillStatus{}, this.statusErr
 	}
 	return this.status, nil
+}
+
+func (this *recordingNotifier) StartHistory(id string, from time.Time) (moses_runtime.HistoryStatus, error) {
+	if this.historyStartErr != nil {
+		return moses_runtime.HistoryStatus{}, this.historyStartErr
+	}
+	status := moses_runtime.HistoryStatus{
+		EnvironmentId: id, State: moses_runtime.HistoryRunning, From: from, To: time.Now(),
+	}
+	this.histories = append(this.histories, status)
+	return status, nil
+}
+
+func (this *recordingNotifier) HistoryStatusOf(id string) (moses_runtime.HistoryStatus, error) {
+	this.historyStatusCall++
+	if this.historyStatusErr != nil {
+		return moses_runtime.HistoryStatus{}, this.historyStatusErr
+	}
+	return this.historyStatus, nil
+}
+
+func (this *recordingNotifier) CancelHistory(id string) (moses_runtime.HistoryStatus, error) {
+	this.historyCancels = append(this.historyCancels, id)
+	if this.historyCancelErr != nil {
+		return moses_runtime.HistoryStatus{}, this.historyCancelErr
+	}
+	return this.historyStatus, nil
 }
 
 func TestTheRuntimeIsToldAboutExactlyTheChangedEnvironment(t *testing.T) {

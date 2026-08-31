@@ -85,6 +85,22 @@ type RuntimeNotifier interface {
 	// BackfillStatusOf follows a job. It reports runtime.ErrNoBackfill when
 	// nothing is known, which is also the answer after a restart.
 	BackfillStatusOf(id string) (moses_runtime.BackfillStatus, error)
+
+	// StartHistory runs one environment from a past instant up to now and makes
+	// the state it arrives at the live one. It reports a
+	// *runtime.HistoryRangeError for a window it will not serve,
+	// runtime.ErrHistoryRunning or runtime.ErrBackfillRunning when one of the two
+	// is already running, and repo.ErrNotRunning for an environment it does not
+	// hold.
+	StartHistory(id string, from time.Time) (moses_runtime.HistoryStatus, error)
+
+	// HistoryStatusOf follows a run. It reports runtime.ErrNoHistory when nothing
+	// is known, which is also the answer after a restart.
+	HistoryStatusOf(id string) (moses_runtime.HistoryStatus, error)
+
+	// CancelHistory aborts a run and returns where it stood. It reports
+	// runtime.ErrNoHistory when nothing is known.
+	CancelHistory(id string) (moses_runtime.HistoryStatus, error)
 }
 
 // A nil notifier means the api runs as a store only, valid in a test, so this
@@ -122,6 +138,29 @@ func snapshotState(notifier RuntimeNotifier, id string) (moses_runtime.StateSnap
 		return moses_runtime.StateSnapshot{}, ErrNoRuntime
 	}
 	return notifier.Snapshot(id)
+}
+
+// The history endpoints answer rather than panic on a store only deployment, the
+// same way the backfill ones do.
+func startHistory(notifier RuntimeNotifier, id string, from time.Time) (moses_runtime.HistoryStatus, error) {
+	if notifier == nil {
+		return moses_runtime.HistoryStatus{}, ErrNoRuntime
+	}
+	return notifier.StartHistory(id, from)
+}
+
+func historyStatusOf(notifier RuntimeNotifier, id string) (moses_runtime.HistoryStatus, error) {
+	if notifier == nil {
+		return moses_runtime.HistoryStatus{}, ErrNoRuntime
+	}
+	return notifier.HistoryStatusOf(id)
+}
+
+func cancelHistory(notifier RuntimeNotifier, id string) (moses_runtime.HistoryStatus, error) {
+	if notifier == nil {
+		return moses_runtime.HistoryStatus{}, ErrNoRuntime
+	}
+	return notifier.CancelHistory(id)
 }
 
 func Start(ctx context.Context, config config.Config, staterepo *state.StateRepo, environments repo.Environments, datasets repo.Datasets, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier) {

@@ -63,6 +63,12 @@ func (this *Runtime) Snapshot(id string) (StateSnapshot, error) {
 	if env.removed {
 		return StateSnapshot{}, repo.ErrNotRunning
 	}
+	//refused rather than served: advanceZone below moves the approaching values
+	//to the wall clock, which for an environment standing at a past instant would
+	//corrupt the run rather than report it
+	if env.underHistory {
+		return StateSnapshot{}, ErrHistoryRunning
+	}
 
 	//one instant for the whole snapshot: two zones resolved against two
 	//different clocks would be a state the environment never had

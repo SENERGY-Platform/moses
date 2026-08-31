@@ -26,6 +26,7 @@ import (
 	"github.com/SENERGY-Platform/moses/lib/config"
 	"github.com/SENERGY-Platform/moses/lib/domain"
 	"github.com/SENERGY-Platform/moses/lib/repo"
+	moses_runtime "github.com/SENERGY-Platform/moses/lib/runtime"
 	"github.com/SENERGY-Platform/moses/lib/util"
 	sc_jwt "github.com/SENERGY-Platform/service-commons/pkg/jwt"
 	"github.com/gin-gonic/gin"
@@ -411,6 +412,7 @@ func deleteEnvironmentH(environments repo.Environments, catalog DeviceCatalog, m
 // @Failure 400 {string} string "the body is unreadable, empty, or names a zone or asset the definition does not have"
 // @Failure 401 {string} string "the token carries no subject"
 // @Failure 404 {string} string "no such environment, no access to it, or it is not running here"
+// @Failure 409 {string} string "a history run of this environment is in progress, so it stands at a past instant"
 // @Failure 500 {string} string "error message"
 // @Router /environments/{id}/state [patch]
 func patchEnvironmentStateH(environments repo.Environments, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
@@ -453,6 +455,11 @@ func patchEnvironmentStateH(environments repo.Environments, catalog DeviceCatalo
 			gc.Status(http.StatusNoContent)
 		case errors.As(err, &unknownIds):
 			gc.String(http.StatusBadRequest, "%s", unknownIds.Error())
+		case errors.Is(err, moses_runtime.ErrHistoryRunning):
+			//409 and not 404: the environment is here and known, it just stands at
+			//a past instant, and the change would be thrown away with the state the
+			//run replaces
+			gc.String(http.StatusConflict, "%s", err.Error())
 		case errors.Is(err, repo.ErrNotRunning), errors.Is(err, ErrNoRuntime):
 			//404 and not 409: from outside, an environment this instance does not
 			//run is indistinguishable from one that does not exist here

@@ -19,6 +19,7 @@ package runtime
 import (
 	"errors"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -145,8 +146,9 @@ func TestPublishAtCarriesTheInstantItWasGiven(t *testing.T) {
 	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, publisher)
 	_, env, binding := bindingFor(t, def, nil)
 
-	if !rt.publishAt(env, binding, 230.0, true, clockT) {
-		t.Fatal("expected the reading to be published")
+	sent, err := rt.publishAt(env, binding, 230.0, true, clockT)
+	if !sent || err != nil {
+		t.Fatalf("expected the reading to be published, got %v (%v)", sent, err)
 	}
 	events := publisher.all()
 	if len(events) != 1 {
@@ -166,16 +168,26 @@ func TestPublishAtCarriesTheInstantItWasGiven(t *testing.T) {
 	//nowhere to publish to sends nothing and says so
 	nowhere := binding
 	nowhere.channel.ExternalRef = ""
-	if rt.publishAt(env, nowhere, 230.0, true, clockT) {
+	sent, err = rt.publishAt(env, nowhere, 230.0, true, clockT)
+	if sent {
 		t.Error("a channel without a platform service must not report a publish")
+	}
+	if err != nil {
+		t.Errorf("a channel with nowhere to publish to is not a platform refusal, got %v", err)
 	}
 	if publisher.count() != 1 {
 		t.Errorf("expected no further event, got %d", publisher.count())
 	}
 
-	//and a refused publish is a false, whether or not it is reported
+	//and a refused publish is a false, whether or not it is reported. The message
+	//comes back with it, because the history run puts it into the status a caller
+	//polls.
 	publisher.failWith(errors.New("refused"))
-	if rt.publishAt(env, binding, 230.0, false, clockT) {
+	sent, err = rt.publishAt(env, binding, 230.0, false, clockT)
+	if sent {
 		t.Error("a refused publish must not report success")
+	}
+	if err == nil || !strings.Contains(err.Error(), "refused") {
+		t.Errorf("expected the platform's refusal to be handed back, got %v", err)
 	}
 }

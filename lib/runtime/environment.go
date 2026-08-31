@@ -44,10 +44,16 @@ type environment struct {
 	// inside a run, or by a caller that holds mux itself (the flusher).
 	mux sync.Mutex
 
-	// state, dirty and removed are guarded by mux.
+	// state, dirty, removed and underHistory are guarded by mux.
 	state   repo.RuntimeState
 	dirty   bool
 	removed bool
+
+	// underHistory is true while a history run drives this environment on a
+	// virtual clock. It is read under the same mutex the run replaces the state
+	// with, so a state change either happens before the replacement or is
+	// refused - never in between.
+	underHistory bool
 
 	// lastValues is the most recent numeric value each channel produced,
 	// guarded by mux. This is what a formula's channel reference reads: a
@@ -59,6 +65,19 @@ type environment struct {
 	// Remove waits for it before deleting the stored state, so that a flush in
 	// flight cannot resurrect the document of a deleted environment.
 	saves sync.WaitGroup
+
+	// saveMux serialises the flushes of this environment, snapshot included.
+	// Without it two flushes - the flusher's and the one of a handover - can read
+	// two states and write them to the store in the opposite order, which leaves
+	// the older one standing.
+	saveMux sync.Mutex
+
+	// commands counts the command dispatches in flight. A command does not run on
+	// the environment context, so cancelling the runners does not stop it; a
+	// caller that is about to replace the state waits for this instead. The
+	// counter is only ever raised under mux and only while the environment takes
+	// commands, so a wait that starts after the gate closed cannot race an Add.
+	commands sync.WaitGroup
 
 	// gen, cancel and runners are only written while the runtime's lifecycle
 	// mutex is held; gen is additionally guarded by the runtime's mux, because
@@ -519,6 +538,74 @@ func (this *environment) seed(gen *generation) {
 			this.dirty = true
 		}
 	}
+}
+
+// markUnderHistory closes the environment to everything that would mix the
+// present into a run. It happens before the runners and the commands in flight
+// are waited for, so that nothing new can enter behind the wait.
+func (this *environment) markUnderHistory() {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	this.underHistory = true
+}
+
+// enterCommand reserves a slot for one command dispatch, or refuses it and says
+// why. The check and the Add are one operation under mux, which is what makes
+// the wait in StartHistory complete: a dispatch that passed the check is counted
+// before the gate can close behind it.
+//
+// Every caller that gets true must call leaveCommand when the dispatch is over.
+func (this *environment) enterCommand() (bool, string) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	switch {
+	case this.removed:
+		return false, "the environment was removed while the command was in flight"
+	case this.underHistory:
+		return false, "a history run owns this environment"
+	}
+	this.commands.Add(1)
+	return true, ""
+}
+
+func (this *environment) leaveCommand() { this.commands.Done() }
+
+// markDirty forces the next flush to write, whatever the state looks like. The
+// handover of a history run uses it: the state it hands over has to reach the
+// store even when a flush that was already in flight cleared the flag.
+func (this *environment) markDirty() {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	this.dirty = true
+}
+
+// resetForHistory throws the live state away. Discarding it is the point of the
+// mode: the run recomputes the environment from the virtual start, and a value
+// left over from the live simulation would be a value from the future.
+//
+// The caller seeds the definition's initial states afterwards; the value cache
+// is deliberately not carried, since the run fills it from its own first ticks.
+func (this *environment) resetForHistory() {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	this.underHistory = true
+	this.state = repo.RuntimeState{
+		EnvironmentId: this.id,
+		Context:       map[string]interface{}{},
+		Zones:         map[string]map[string]interface{}{},
+		Assets:        map[string]map[string]interface{}{},
+	}
+	this.lastValues = nil
+	this.dirty = true
+}
+
+// endHistory releases the environment again. It runs whatever became of the run,
+// so that a failed or cancelled one cannot leave the environment refusing every
+// state change forever.
+func (this *environment) endHistory() {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	this.underHistory = false
 }
 
 // seedInto copies the keys of initial that target does not have. An existing

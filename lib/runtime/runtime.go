@@ -105,6 +105,23 @@ type Runtime struct {
 	backfillWorkers  sync.WaitGroup
 	backfillsStopped bool
 
+	// histories holds one history run per environment, guarded by historyMux, and
+	// historyWorkers counts the engine phase of the running ones so that Stop
+	// waits for it. The registry is memory only and a run is not resumable, the
+	// same way a backfill is not.
+	//
+	// A run and a backfill of the same environment exclude each other, and both
+	// registries are consulted for that: historyMux is always taken before
+	// backfillMux, never the other way round.
+	historyMux       sync.Mutex
+	histories        map[string]*historyJob
+	historyWorkers   sync.WaitGroup
+	historiesStopped bool
+
+	// historyEngine is what a run executes. It is a field so a test of the
+	// lifecycle can inject an engine of its own instead of simulating a window.
+	historyEngine historyEngineFunc
+
 	ctx     context.Context
 	cancel  context.CancelFunc
 	flusher sync.WaitGroup
@@ -157,7 +174,7 @@ func newRuntime(config config.Config, environments repo.Environments, states rep
 		util.Logger.Warn("no state flush interval configured, using the default", "default", defaultStateFlushInterval)
 		flushInterval = defaultStateFlushInterval
 	}
-	return &Runtime{
+	result := &Runtime{
 		config:        config,
 		environments:  environments,
 		states:        states,
@@ -169,7 +186,10 @@ func newRuntime(config config.Config, environments repo.Environments, states rep
 		commands:      map[commandKey]*runningChannel{},
 		devices:       map[string]*environment{},
 		backfills:     map[string]*backfillJob{},
+		histories:     map[string]*historyJob{},
 	}
+	result.historyEngine = result.runHistory
+	return result
 }
 
 // Start loads every environment and starts its channels. ctx bounds the whole
@@ -193,6 +213,19 @@ func (this *Runtime) Start(ctx context.Context) error {
 	this.commands = map[commandKey]*runningChannel{}
 	this.devices = map[string]*environment{}
 	this.mux.Unlock()
+
+	//the two job registries belong to the incarnation that is starting: without
+	//this a restarted runtime would keep refusing every run and every backfill,
+	//because the stop flags of the previous one are still set, and would answer
+	//status calls out of a registry describing a runtime that no longer exists
+	this.historyMux.Lock()
+	this.histories = map[string]*historyJob{}
+	this.historiesStopped = false
+	this.historyMux.Unlock()
+	this.backfillMux.Lock()
+	this.backfills = map[string]*backfillJob{}
+	this.backfillsStopped = false
+	this.backfillMux.Unlock()
 
 	started := 0
 	for _, def := range defs {
@@ -226,6 +259,11 @@ func (this *Runtime) Stop() {
 	for _, env := range envs {
 		env.runners.Wait()
 	}
+	//the history runs first, and only their engine phase is waited for: the phase
+	//after it needs the lifecycle mutex this call holds, so counting it here
+	//would deadlock. It flushes and reports on its own once Stop has returned.
+	this.stopHistories()
+	this.historyWorkers.Wait()
 	//no further job is accepted and the running ones end; waited for so that a
 	//publish in flight finishes rather than being torn out of the connector
 	this.stopBackfills()
@@ -246,6 +284,12 @@ func (this *Runtime) Reload(id string) {
 	defer this.lifecycle.Unlock()
 	if !this.running {
 		util.Logger.Warn("the runtime is not running, ignoring the reload", "environment", id)
+		return
+	}
+	if this.historyRunning(id) {
+		//restarting the channels now would tear the virtual clock out of the run.
+		//Nothing is lost: the run reads the definition again when it ends.
+		util.Logger.Info("a history run owns this environment, the reload takes effect when it ends", "environment", id)
 		return
 	}
 	//deliberately not derived from this.ctx: a reload arriving while the service
@@ -308,14 +352,15 @@ func (this *Runtime) HandleCommand(externalDeviceRef string, externalServiceRef 
 		return true
 	}
 	env := channel.env
-	env.mux.Lock()
-	removed := env.removed
-	env.mux.Unlock()
-	if removed {
-		util.Logger.Warn("the environment was removed while the command was in flight, the command is dropped",
+	//the dispatch is counted before it starts, so that a caller replacing the
+	//state waits for it: the command does not run on the environment context, so
+	//cancelling the runners leaves it in flight
+	if accepted, reason := env.enterCommand(); !accepted {
+		util.Logger.Warn("the command is dropped", "reason", reason,
 			"environment", env.id, "device_ref", externalDeviceRef)
 		return true
 	}
+	defer env.leaveCommand()
 	this.dispatch(env, channel.gen, channel.binding, cmdMsg, responder, false, time.Now())
 	return true
 }
@@ -445,8 +490,9 @@ func (this *Runtime) stopRunners(id string) {
 // runners and the flush in flight are waited for. Only after that is it safe to
 // look at the stored state.
 func (this *Runtime) removeEnvironment(id string) {
-	//before anything else: a backfill of a deleted environment publishes to
-	//devices that are being deleted with it
+	//before anything else: a backfill or a history run of a deleted environment
+	//publishes to devices that are being deleted with it
+	this.cancelHistory(id)
 	this.cancelBackfill(id)
 
 	this.mux.Lock()
@@ -466,6 +512,9 @@ func (this *Runtime) removeEnvironment(id string) {
 		env.cancel()
 	}
 	env.runners.Wait()
+	//a command runs off the runner context, so it is waited for separately; the
+	//removed flag above is what keeps a new one from being counted after this
+	env.commands.Wait()
 	env.saves.Wait()
 
 	this.deleteStateIfDefinitionIsGone(id)
@@ -592,6 +641,11 @@ func (this *Runtime) SetState(id string, change repo.StateChange) error {
 	defer env.mux.Unlock()
 	if env.removed {
 		return repo.ErrNotRunning
+	}
+	//read under the same mutex the run replaces the state with, so a change can
+	//never land in a state that is about to be thrown away
+	if env.underHistory {
+		return ErrHistoryRunning
 	}
 	now := time.Now()
 	mergeInto(env.state.Context, change.Context)
@@ -1046,7 +1100,11 @@ func (this *Runtime) publish(env *environment, binding channelBinding, value int
 // a line per failure is a line per interval. The debug line is not throttled: it
 // is off unless debug is configured, and whoever turned it on asked for every
 // send.
-func (this *Runtime) publishVia(env *environment, binding channelBinding, value interface{}, report bool, publish func() error) bool {
+//
+// The error is the platform's refusal; it is nil both when the reading went out
+// and when it had nowhere to go. Only the history run reads it, because it puts
+// the message into the status a caller polls.
+func (this *Runtime) publishVia(env *environment, binding channelBinding, value interface{}, report bool, publish func() error) (bool, error) {
 	if this.config.Debug {
 		util.Logger.Debug("send channel data", "environment", env.id, "asset", binding.asset.id,
 			"channel", binding.channel.Id, "value", value)
@@ -1055,13 +1113,13 @@ func (this *Runtime) publishVia(env *environment, binding channelBinding, value 
 		if report {
 			util.Logger.Warn("no external ref for asset, nothing was sent", "environment", env.id, "asset", binding.asset.id)
 		}
-		return false
+		return false, nil
 	}
 	if binding.channel.ExternalRef == "" {
 		if report {
 			util.Logger.Warn("no external ref for channel, nothing was sent", "environment", env.id, "channel", binding.channel.Id)
 		}
-		return false
+		return false, nil
 	}
 	err := publish()
 	if err != nil {
@@ -1069,23 +1127,24 @@ func (this *Runtime) publishVia(env *environment, binding channelBinding, value 
 			util.Logger.Error("unable to send channel data", attributes.ErrorKey, err,
 				"device_ref", binding.asset.externalRef, "service_ref", binding.channel.ExternalRef)
 		}
-		return false
+		return false, err
 	}
-	return true
+	return true, nil
 }
 
 // publishReporting is the live publish: the platform stamps the reading with its
 // arrival time.
 func (this *Runtime) publishReporting(env *environment, binding channelBinding, value interface{}, report bool) bool {
-	return this.publishVia(env, binding, value, report, func() error {
+	sent, _ := this.publishVia(env, binding, value, report, func() error {
 		return this.publisher.PublishEvent(binding.asset.externalRef, binding.channel.ExternalRef, value)
 	})
+	return sent
 }
 
 // publishAt publishes a reading that was taken at a past instant. It reaches
 // timescale under that instant only for a service whose time path resolves; for
 // every other one the platform stamps the arrival time instead.
-func (this *Runtime) publishAt(env *environment, binding channelBinding, value interface{}, report bool, at time.Time) bool {
+func (this *Runtime) publishAt(env *environment, binding channelBinding, value interface{}, report bool, at time.Time) (bool, error) {
 	return this.publishVia(env, binding, value, report, func() error {
 		return this.publisher.PublishEventAt(binding.asset.externalRef, binding.channel.ExternalRef, value, at)
 	})
@@ -1116,7 +1175,14 @@ func (this *Runtime) flushLoop() {
 // failed write is an ERROR - it is data loss waiting to happen - and puts the
 // dirty flag back, so the next round tries again instead of dropping what the
 // simulation produced.
+//
+// saveMux covers the copy as well as the write, so that two flushes of one
+// environment cannot read two states and store them in the opposite order,
+// which would leave the older one standing.
 func (this *Runtime) flush(env *environment) {
+	env.saveMux.Lock()
+	defer env.saveMux.Unlock()
+
 	env.mux.Lock()
 	if env.removed || !env.dirty {
 		env.mux.Unlock()

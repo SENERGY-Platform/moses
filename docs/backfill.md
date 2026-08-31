@@ -210,6 +210,18 @@ The consequence of the second one is visible in the data and is worth knowing:
 the live one at the end of the window. A consumer that needs one continuous
 meter has to offset the backfilled segment itself.
 
+## The history run inverts this
+
+The two ramps are the price of not touching the live simulation. Where one
+continuous meter is what is wanted, the other mode is the history run
+(`docs/history-run.md`): it simulates the same window **with** state, so the
+meter, the replay position, the schedule anchor and the change trigger's
+comparison base carry across the seam, and the state it arrives at becomes the
+live state. It also runs every source kind, including the four this page lists
+as not backfillable. What it costs is exactly what a backfill protects: the live
+simulation is suspended for the duration and its current state is discarded.
+A backfill and a history run of the same environment exclude each other.
+
 ## Limits
 
 - **366 days** per window, so that "the last twelve months" needs no reasoning

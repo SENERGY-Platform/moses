@@ -271,6 +271,18 @@ func (this *environmentNotifier) BackfillStatusOf(id string) (runtime.BackfillSt
 	return this.runtime.BackfillStatusOf(id)
 }
 
+func (this *environmentNotifier) StartHistory(id string, from time.Time) (runtime.HistoryStatus, error) {
+	return this.runtime.StartHistory(id, from)
+}
+
+func (this *environmentNotifier) HistoryStatusOf(id string) (runtime.HistoryStatus, error) {
+	return this.runtime.HistoryStatusOf(id)
+}
+
+func (this *environmentNotifier) CancelHistory(id string) (runtime.HistoryStatus, error) {
+	return this.runtime.CancelHistory(id)
+}
+
 // warn reports the two double runs the per world cutover cannot prevent: an
 // environment referencing the devices of a world it was not converted from, and
 // an environment created after startup whose id is a world id (the skip set is

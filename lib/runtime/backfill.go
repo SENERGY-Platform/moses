@@ -205,6 +205,18 @@ func (this *Runtime) StartBackfill(id string, from time.Time, to time.Time) (Bac
 		return BackfillStatus{}, err
 	}
 
+	//both registries under one nesting, history first, so that a run and a job
+	//starting at the same moment cannot both see the other as absent. Every
+	//other place that holds both takes them in this order.
+	this.historyMux.Lock()
+	defer this.historyMux.Unlock()
+	if previous, known := this.histories[id]; known && previous.snapshot().State == HistoryRunning {
+		//the environment stands at a past instant and its readings are being
+		//written for that window; a job publishing into the same window on top of
+		//it would leave two rows per instant
+		return BackfillStatus{}, ErrHistoryRunning
+	}
+
 	this.backfillMux.Lock()
 	//the stop flag and the worker count are taken under one mutex on purpose:
 	//Stop sets the flag before it waits, so a job can never be registered after

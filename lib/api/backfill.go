@@ -67,7 +67,7 @@ type BackfillRequest struct {
 // @Failure 400 {string} string "the body is unreadable, or the window is empty, in the future, too long or too dense"
 // @Failure 401 {string} string "the token carries no subject"
 // @Failure 404 {string} string "no such environment, no access to it, or it is not running here"
-// @Failure 409 {string} string "a backfill of this environment is already running"
+// @Failure 409 {string} string "a backfill or a history run of this environment is already running"
 // @Failure 500 {string} string "error message"
 // @Router /environments/{id}/backfill [post]
 func postBackfillH(environments repo.Environments, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
@@ -98,7 +98,7 @@ func postBackfillH(environments repo.Environments, notifier RuntimeNotifier) (st
 			gc.JSON(http.StatusAccepted, status)
 		case errors.As(err, &rangeError):
 			gc.String(http.StatusBadRequest, "%s", rangeError.Error())
-		case errors.Is(err, moses_runtime.ErrBackfillRunning):
+		case errors.Is(err, moses_runtime.ErrBackfillRunning), errors.Is(err, moses_runtime.ErrHistoryRunning):
 			gc.String(http.StatusConflict, "%s", err.Error())
 		case errors.Is(err, repo.ErrNotRunning), errors.Is(err, ErrNoRuntime):
 			//404 and not 409, as the state endpoint does: from outside, an

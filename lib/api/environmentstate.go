@@ -24,6 +24,7 @@ import (
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/config"
 	"github.com/SENERGY-Platform/moses/lib/repo"
+	moses_runtime "github.com/SENERGY-Platform/moses/lib/runtime"
 	"github.com/SENERGY-Platform/moses/lib/util"
 	"github.com/gin-gonic/gin"
 )
@@ -60,6 +61,12 @@ type EnvironmentState struct {
 	// into its empty state.
 	Running bool `json:"running" example:"true"`
 
+	// HistoryRunning says that the environment stands at a past instant while a
+	// history run rebuilds it. It carries no state then and is not running in the
+	// live sense, which is why it is a flag of its own rather than a state an
+	// editor would show as current.
+	HistoryRunning bool `json:"history_running,omitempty" example:"false"`
+
 	// AsOf is when the values were read, RFC3339. It is not decoration: a zone
 	// value with a time constant is on its way to a set point and is resolved to
 	// exactly this instant, so the number means nothing without it.
@@ -74,6 +81,8 @@ type EnvironmentState struct {
 // @Description These are live values, not the definition: they are not what GET /environments/{id} returns, and they are not stored by reading them.
 // @Description
 // @Description An environment that is stored but not simulated here answers 200 with `running: false` and no states. That is not an error: another instance may run it, or it may just have been written. Only an environment that does not exist, or one the caller may not see, is a 404.
+// @Description
+// @Description While a history run rebuilds the environment from a past instant the answer is 200 with `running: false` and `history_running: true`. There is no live state to read then: the environment stands in the past, and reading it would resolve its values against the wall clock and corrupt the run.
 // @Tags Environment
 // @Produce json
 // @Security Bearer
@@ -104,6 +113,10 @@ func getEnvironmentStateH(environments repo.Environments, notifier RuntimeNotifi
 				Running:     true,
 				AsOf:        snapshot.AsOf,
 			})
+		case errors.Is(err, moses_runtime.ErrHistoryRunning):
+			//an answer rather than a 409, for the same reason: a read has one, and
+			//naming the run is what lets an editor say why the values are gone
+			gc.JSON(http.StatusOK, EnvironmentState{Running: false, HistoryRunning: true, AsOf: time.Now()})
 		case errors.Is(err, repo.ErrNotRunning), errors.Is(err, ErrNoRuntime):
 			//200 and not 404, unlike the writing direction: a PATCH that cannot
 			//be applied has failed, while a read of an environment that produces
