@@ -19,6 +19,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -106,33 +107,112 @@ func TestReplayScales(t *testing.T) {
 
 // --- end to end over the runtime, with the store faked ---
 
+// fakeRuntimeDatasets fakes repo.Datasets for one primary dataset (meta,
+// content, set directly by a test) plus any number of others added through
+// add(). contentCalls counts Content() calls per dataset id, which is how the
+// series-cache tests pin down that a shared upload is fetched at most once
+// per load.
 type fakeRuntimeDatasets struct {
 	meta    repo.DatasetMeta
 	content []byte
+
+	mux          sync.Mutex
+	extra        map[string]fakeDataset
+	contentCalls map[string]int
+	// contentBudget is the context of the last Content call, which is how the
+	// context tests show that a gridfs read after a platform fetch still runs
+	// on a live budget rather than on one the fetch used up.
+	contentBudget ctxBudget
+}
+
+type fakeDataset struct {
+	meta    repo.DatasetMeta
+	content []byte
+}
+
+func (this *fakeRuntimeDatasets) add(meta repo.DatasetMeta, content []byte) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	if this.extra == nil {
+		this.extra = map[string]fakeDataset{}
+	}
+	this.extra[meta.Id] = fakeDataset{meta: meta, content: content}
+}
+
+// replaceContent swaps the content of the primary dataset while the runtime is
+// running. That is how a reload is shown to serve the file as it is now rather
+// than the parse the previous load left in the cache.
+func (this *fakeRuntimeDatasets) replaceContent(content []byte) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	this.content = content
+}
+
+// lookup reads the primary dataset under the mutex too, because replaceContent
+// writes it while the runtime is running.
+func (this *fakeRuntimeDatasets) lookup(id string) (fakeDataset, bool) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	if id == this.meta.Id {
+		return fakeDataset{meta: this.meta, content: this.content}, true
+	}
+	d, ok := this.extra[id]
+	return d, ok
 }
 
 func (this *fakeRuntimeDatasets) Create(ctx context.Context, meta repo.DatasetMeta, raw []byte) error {
 	return nil
 }
 func (this *fakeRuntimeDatasets) Get(ctx context.Context, id string) (repo.DatasetMeta, error) {
-	if id != this.meta.Id {
+	d, ok := this.lookup(id)
+	if !ok {
 		return repo.DatasetMeta{}, repo.ErrNotFound
 	}
-	return this.meta, nil
+	return d.meta, nil
 }
 func (this *fakeRuntimeDatasets) ListByOwner(ctx context.Context, owner string) ([]repo.DatasetMeta, error) {
 	return nil, nil
 }
 func (this *fakeRuntimeDatasets) All(ctx context.Context) ([]repo.DatasetMeta, error) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
 	return []repo.DatasetMeta{this.meta}, nil
 }
 
 func (this *fakeRuntimeDatasets) Content(ctx context.Context, id string) ([]byte, error) {
-	if id != this.meta.Id {
+	this.mux.Lock()
+	if this.contentCalls == nil {
+		this.contentCalls = map[string]int{}
+	}
+	this.contentCalls[id]++
+	this.contentBudget = budgetOf(ctx)
+	this.mux.Unlock()
+	//gridfs would fail on a spent context, and so does the fake: a channel
+	//silently dropped because the context died earlier in the same load is
+	//exactly what this has to be able to show
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	d, ok := this.lookup(id)
+	if !ok {
 		return nil, repo.ErrNotFound
 	}
-	return this.content, nil
+	return d.content, nil
 }
+
+// contentCallsFor is how the series-cache tests read back the counter.
+func (this *fakeRuntimeDatasets) contentCallsFor(id string) int {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	return this.contentCalls[id]
+}
+
+func (this *fakeRuntimeDatasets) lastContentBudget() ctxBudget {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	return this.contentBudget
+}
+
 func (this *fakeRuntimeDatasets) Delete(ctx context.Context, id string) error { return nil }
 
 func datasetChannel(envId string, source domain.DatasetSource) domain.Channel {

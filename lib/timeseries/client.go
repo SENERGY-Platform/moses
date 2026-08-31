@@ -20,6 +20,7 @@ package timeseries
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,7 +31,15 @@ import (
 	"github.com/SENERGY-Platform/moses/lib/dataset"
 )
 
-const requestTimeout = 30 * time.Second
+// requestTimeout allows for the largest replay window, a year at minute
+// resolution: ~525k points / ~20-30 MB of JSON. That fetch runs once, when
+// the environment starts, not on the publish tick, so a generous timeout
+// here does not cost anything while the environment is running.
+//
+// It is applied per request, on a context derived from the caller's, rather
+// than as http.Client.Timeout: the caller's own budget has to be able to end
+// the call earlier, and nested deadlines take the nearer one by themselves.
+const requestTimeout = 180 * time.Second
 
 // maxPoints bounds one fetch the way dataset.MaxRows bounds one upload.
 const maxPoints = dataset.MaxRows
@@ -41,7 +50,9 @@ type Client struct {
 }
 
 func New(baseUrl string) *Client {
-	return &Client{BaseUrl: baseUrl, client: &http.Client{Timeout: requestTimeout}}
+	//no http.Client.Timeout: the bound lives on the request context, so that a
+	//caller cancelling its load stops the fetch instead of waiting it out
+	return &Client{BaseUrl: baseUrl, client: &http.Client{}}
 }
 
 type queryTime struct {
@@ -64,7 +75,11 @@ type queryElement struct {
 // Fetch loads one column of one service's timeseries for [start, end). The
 // time_format parameter pins the wrapper's timestamp rendering to RFC3339, so
 // this client does not depend on the wrapper's default.
-func (this *Client) Fetch(token string, deviceId string, serviceId string, column string, start time.Time, end time.Time) ([]dataset.Point, error) {
+//
+// ctx ends the call from the caller's side - a cancelled load stops the fetch
+// and the reading of its body - and requestTimeout is nested inside it as this
+// client's own upper bound, so whichever runs out first ends the request.
+func (this *Client) Fetch(ctx context.Context, token string, deviceId string, serviceId string, column string, start time.Time, end time.Time) ([]dataset.Point, error) {
 	body, err := json.Marshal([]queryElement{{
 		DeviceId:  deviceId,
 		ServiceId: serviceId,
@@ -78,7 +93,11 @@ func (this *Client) Fetch(token string, deviceId string, serviceId string, colum
 	if err != nil {
 		return nil, err
 	}
-	request, err := http.NewRequest(http.MethodPost, this.BaseUrl+"/queries?format=per_query&time_format="+time.RFC3339, bytes.NewReader(body))
+	//cancelled only when Fetch returns: the deadline has to cover reading and
+	//decoding the body too, not just the round trip to the first byte
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, this.BaseUrl+"/queries?format=per_query&time_format="+time.RFC3339, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}

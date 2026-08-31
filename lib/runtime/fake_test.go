@@ -35,6 +35,25 @@ import (
 // The fakes below implement the real interfaces rather than mocking single
 // calls, so the assertions are about stored values and published events.
 
+// ctxBudget is what a fake recorded about the context it was called with: how
+// much time was left on it and whether it was already spent. It is how the
+// context tests tell the series budget of one start from the store budget of
+// the same start, which is a difference no return value shows.
+type ctxBudget struct {
+	remaining   time.Duration
+	hasDeadline bool
+	err         error
+}
+
+func budgetOf(ctx context.Context) ctxBudget {
+	result := ctxBudget{err: ctx.Err()}
+	if deadline, ok := ctx.Deadline(); ok {
+		result.hasDeadline = true
+		result.remaining = time.Until(deadline)
+	}
+	return result
+}
+
 type fakeEnvironments struct {
 	mux    sync.Mutex
 	stored map[string]domain.Environment
@@ -132,6 +151,10 @@ type fakeStates struct {
 	deleted []string
 	loadErr error
 	saveErr error
+	// loadBudgets records the context of the last Load per environment, which is
+	// what pins that the state read runs on a budget of its own rather than on
+	// what the series load left over.
+	loadBudgets map[string]ctxBudget
 	// ops records the writes in order, so that a test can tell "saved and then
 	// deleted" from "deleted and then saved again" - the second one leaves the
 	// state document of a deleted environment behind forever.
@@ -139,13 +162,21 @@ type fakeStates struct {
 }
 
 func newFakeStates() *fakeStates {
-	return &fakeStates{stored: map[string]repo.RuntimeState{}, loads: map[string]int{}}
+	return &fakeStates{stored: map[string]repo.RuntimeState{}, loads: map[string]int{},
+		loadBudgets: map[string]ctxBudget{}}
 }
 
 func (this *fakeStates) Load(ctx context.Context, environmentId string) (repo.RuntimeState, error) {
 	this.mux.Lock()
 	defer this.mux.Unlock()
 	this.loads[environmentId]++
+	this.loadBudgets[environmentId] = budgetOf(ctx)
+	//a real store fails on a spent context, and the fake has to as well: a
+	//state read handed a context the fetches before it used up is exactly the
+	//failure that leaves an environment unstarted
+	if err := ctx.Err(); err != nil {
+		return repo.RuntimeState{}, err
+	}
 	if this.loadErr != nil {
 		return repo.RuntimeState{}, this.loadErr
 	}
@@ -214,6 +245,12 @@ func (this *fakeStates) loadCount(environmentId string) int {
 	this.mux.Lock()
 	defer this.mux.Unlock()
 	return this.loads[environmentId]
+}
+
+func (this *fakeStates) loadBudgetFor(environmentId string) ctxBudget {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	return this.loadBudgets[environmentId]
 }
 
 func (this *fakeStates) deletedIds() []string {

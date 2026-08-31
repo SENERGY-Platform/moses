@@ -60,6 +60,23 @@ const (
 // storeTimeout bounds one database call made by the runtime itself.
 const storeTimeout = 30 * time.Second
 
+// seriesLoadTimeout bounds the whole series loading phase of one environment
+// start: every gridfs read and every platform fetch of that definition
+// together.
+//
+// It is far larger than storeTimeout because the two are not the same kind of
+// call. A database read that takes half a minute is broken; a year of minute
+// resolution measurements off the timescale-wrapper is minutes of transfer by
+// design, and a definition may hold several such channels. Sharing one budget
+// is what used to make a slow fetch fail the state read that follows it, and a
+// failed state read does not start the environment at all.
+//
+// It is bounded rather than open ended because startEnvironment runs with
+// lifecycle held: a wrapper that never answers must not keep every other Start,
+// Stop, Reload and Remove waiting forever. The ceiling for one start is
+// therefore min(channels x timeseries.requestTimeout, this budget).
+const seriesLoadTimeout = 10 * time.Minute
+
 // Runtime runs every environment of the store.
 type Runtime struct {
 	config        config.Config
@@ -132,8 +149,10 @@ func New(config config.Config, environments repo.Environments, states repo.State
 }
 
 // seriesFetcher is what the platform origin needs from the timescale-wrapper.
+// ctx is the load's budget: a fetch outlives neither the start nor the reload
+// that asked for it.
 type seriesFetcher interface {
-	Fetch(token string, deviceId string, serviceId string, column string, start time.Time, end time.Time) ([]dataset.Point, error)
+	Fetch(ctx context.Context, token string, deviceId string, serviceId string, column string, start time.Time, end time.Time) ([]dataset.Point, error)
 }
 
 // newRuntime is what the tests use: everything except the connector is already
@@ -256,7 +275,12 @@ func (this *Runtime) Reload(id string) {
 		return
 	}
 	this.stopRunners(id)
-	this.startEnvironment(ctx, def)
+	//deliberately not the ctx above: that one is the budget for the definition
+	//read and is partly spent by the time we get here, while startEnvironment
+	//needs a parent it can hang its own two budgets off. Background for the
+	//same reason the read uses it - a reload during shutdown should find a
+	//cancelled runtime, not a context error that reads like a database problem.
+	this.startEnvironment(context.Background(), def)
 	this.rebuildIndex()
 	util.Logger.Info("environment reloaded", "environment", id)
 }
@@ -326,19 +350,33 @@ func (this *Runtime) ExternalDeviceRefs() []string {
 // startEnvironment prepares one environment and starts its channel runners. It
 // must be called with lifecycle held, and it must not be called for an
 // environment whose runners are still running.
+//
+// ctx is the cancellation parent of the two phases below and must not carry a
+// deadline of its own: loading the series and reading the runtime state have
+// separate budgets, for the reason seriesLoadTimeout gives, and a deadline
+// handed in here would silently cap both.
 func (this *Runtime) startEnvironment(ctx context.Context, def domain.Environment) bool {
 	if def.Id == "" {
 		util.Logger.Warn("environment without an id is not started", "name", def.Name)
 		return false
 	}
-	gen := newGeneration(def, this.loadSeries(ctx, def))
+	seriesCtx, cancelSeries := context.WithTimeout(ctx, seriesLoadTimeout)
+	series := this.loadSeries(seriesCtx, def)
+	//released as soon as the phase ends rather than deferred, so nothing below
+	//can accidentally be written against a budget the fetches already spent
+	cancelSeries()
+	gen := newGeneration(def, series)
 
 	this.mux.RLock()
 	env, known := this.envs[def.Id]
 	this.mux.RUnlock()
 
 	if !known {
-		state, err := this.states.Load(ctx, def.Id)
+		//a fresh budget, taken after the series are in: whatever the fetches
+		//above needed is not deducted from this read
+		stateCtx, cancelState := context.WithTimeout(ctx, storeTimeout)
+		state, err := this.states.Load(stateCtx, def.Id)
+		cancelState()
 		if err != nil {
 			//NOT started on purpose. Seeding from the definition and then
 			//flushing would overwrite a stored state that is only temporarily
@@ -825,22 +863,48 @@ func numericOrZero(value interface{}) float64 {
 	return 0.0
 }
 
+// fileSeriesCache holds every uploaded dataset already fetched and parsed
+// during one loadSeries call, keyed by dataset id. Several channels - or a
+// channel and a context source - commonly replay the same upload, and
+// without it each one would pull the same file out of GridFS and parse every
+// column again; ten channels on one yearly file would otherwise mean ten
+// times 20 MB and ten full parses.
+//
+// It lives for exactly one loadSeries call and is discarded with it: caching
+// across reloads would let a reload after the dataset was replaced still
+// serve the old parse. That short lifetime is also why it needs no lock -
+// loadSeries and everything it calls run on the single goroutine that holds
+// this.lifecycle (see startEnvironment), never concurrently with another
+// load of the same or a different environment.
+//
+// The platform origin is deliberately not cached here: its result depends on
+// the window and the reference of the one channel or context source asking
+// for it, and the fetch time belongs to each of them freshly.
+//
+// The trade is memory against work: every column of every distinct dataset the
+// definition touches is held until the load ends, where before only one full
+// parse was alive at a time. Many channels on one file get cheaper, a
+// definition drawing on three wide files peaks at roughly three times what it
+// used to.
+type fileSeriesCache map[string][]dataset.Series
+
 // loadSeries fetches and parses the uploaded datasets the definition's
 // channels reference. A channel whose dataset cannot be loaded is reported and
 // skipped by newGeneration; the environment still starts, because one deleted
 // upload should not take a whole site down.
 func (this *Runtime) loadSeries(ctx context.Context, def domain.Environment) map[string][]dataset.Point {
 	result := map[string][]dataset.Point{}
+	cache := fileSeriesCache{}
 	for _, zone := range def.Zones {
-		this.loadZoneSeries(ctx, def.Id, def.Owner, zone, result)
+		this.loadZoneSeries(ctx, def.Id, def.Owner, zone, result, cache)
 	}
-	this.loadContextSeries(ctx, def, result)
+	this.loadContextSeries(ctx, def, result, cache)
 	return result
 }
 
-func (this *Runtime) loadZoneSeries(ctx context.Context, envId string, owner string, zone domain.Zone, result map[string][]dataset.Point) {
+func (this *Runtime) loadZoneSeries(ctx context.Context, envId string, owner string, zone domain.Zone, result map[string][]dataset.Point, cache fileSeriesCache) {
 	for _, nested := range zone.Zones {
-		this.loadZoneSeries(ctx, envId, owner, nested, result)
+		this.loadZoneSeries(ctx, envId, owner, nested, result, cache)
 	}
 	for _, asset := range zone.Assets {
 		for _, channel := range asset.Channels {
@@ -851,7 +915,7 @@ func (this *Runtime) loadZoneSeries(ctx context.Context, envId string, owner str
 			if source.Dataset.Origin != domain.OriginFile && source.Dataset.Origin != domain.OriginPlatform {
 				continue
 			}
-			points, err := this.fetchSeries(ctx, owner, source.Dataset)
+			points, err := this.fetchSeries(ctx, owner, source.Dataset, cache)
 			if err != nil {
 				util.Logger.Warn("unable to load the dataset of this channel, it does not play",
 					attributes.ErrorKey, err, "environment", envId, "channel", channel.Id, "dataset", source.Dataset.Ref)
@@ -862,30 +926,43 @@ func (this *Runtime) loadZoneSeries(ctx context.Context, envId string, owner str
 	}
 }
 
-func (this *Runtime) fetchSeries(ctx context.Context, owner string, source *domain.DatasetSource) ([]dataset.Point, error) {
+// fetchSeries resolves one dataset source into points. cache is the parsed
+// upload cache of the load in progress; it may be nil, which costs the sharing
+// and nothing else.
+func (this *Runtime) fetchSeries(ctx context.Context, owner string, source *domain.DatasetSource, cache fileSeriesCache) ([]dataset.Point, error) {
 	if source.Origin == domain.OriginPlatform {
-		return this.fetchPlatformSeries(owner, source)
+		return this.fetchPlatformSeries(ctx, owner, source)
 	}
-	if this.datasets == nil {
-		return nil, errors.New("no dataset store configured")
-	}
-	meta, err := this.datasets.Get(ctx, source.Ref)
-	if err != nil {
-		return nil, err
-	}
-	location, err := time.LoadLocation(meta.Timezone)
-	if err != nil {
-		return nil, fmt.Errorf("the dataset carries the unknown timezone %q: %w", meta.Timezone, err)
-	}
-	raw, err := this.datasets.Content(ctx, source.Ref)
-	if err != nil {
-		return nil, err
-	}
-	series, err := dataset.ParseCSV(raw, location)
-	if err != nil {
-		//the upload validated this file, so a parse failure here means the
-		//parser changed incompatibly - worth a loud word
-		return nil, fmt.Errorf("the stored file no longer parses: %w", err)
+	series, cached := cache[source.Ref]
+	if !cached {
+		if this.datasets == nil {
+			return nil, errors.New("no dataset store configured")
+		}
+		meta, err := this.datasets.Get(ctx, source.Ref)
+		if err != nil {
+			return nil, err
+		}
+		location, err := time.LoadLocation(meta.Timezone)
+		if err != nil {
+			return nil, fmt.Errorf("the dataset carries the unknown timezone %q: %w", meta.Timezone, err)
+		}
+		raw, err := this.datasets.Content(ctx, source.Ref)
+		if err != nil {
+			return nil, err
+		}
+		series, err = dataset.ParseCSV(raw, location)
+		if err != nil {
+			//the upload validated this file, so a parse failure here means the
+			//parser changed incompatibly - worth a loud word
+			return nil, fmt.Errorf("the stored file no longer parses: %w", err)
+		}
+		//tolerated like a read from a nil map is: the platform branch above
+		//returns before ever touching the cache, so a call site that forgot it
+		//would look correct in a platform test and panic on the first uploaded
+		//dataset of a real start. Losing the sharing is the smaller failure.
+		if cache != nil {
+			cache[source.Ref] = series
+		}
 	}
 	if source.Column == "" {
 		return series[0].Points, nil
@@ -901,7 +978,7 @@ func (this *Runtime) fetchSeries(ctx context.Context, owner string, source *doma
 // fetchPlatformSeries pulls a window of a real timeseries, backwards from now.
 // The window is frozen until the next reload, which is what makes the replay
 // deterministic between reloads.
-func (this *Runtime) fetchPlatformSeries(owner string, source *domain.DatasetSource) ([]dataset.Point, error) {
+func (this *Runtime) fetchPlatformSeries(ctx context.Context, owner string, source *domain.DatasetSource) ([]dataset.Point, error) {
 	if this.fetcher == nil {
 		return nil, errors.New("no timescale_wrapper_url configured, the platform origin is disabled")
 	}
@@ -917,7 +994,7 @@ func (this *Runtime) fetchPlatformSeries(owner string, source *domain.DatasetSou
 		return nil, fmt.Errorf("unable to obtain a token for the owner: %w", err)
 	}
 	end := time.Now()
-	return this.fetcher.Fetch(token, source.Ref, source.ServiceRef, source.Column, end.Add(-window), end)
+	return this.fetcher.Fetch(ctx, token, source.Ref, source.ServiceRef, source.Column, end.Add(-window), end)
 }
 
 // executeDataset publishes the replay value for now. The anchor of a looping

@@ -30,16 +30,41 @@ type fakeFetcher struct {
 	mux    sync.Mutex
 	points []dataset.Point
 	calls  []map[string]string
+	// budgets is the context each call was handed, in call order. A real fetch
+	// of a long window needs minutes, so what bounds it is worth an assertion.
+	budgets []ctxBudget
 }
 
-func (this *fakeFetcher) Fetch(token string, deviceId string, serviceId string, column string, start time.Time, end time.Time) ([]dataset.Point, error) {
+func (this *fakeFetcher) Fetch(ctx context.Context, token string, deviceId string, serviceId string, column string, start time.Time, end time.Time) ([]dataset.Point, error) {
 	this.mux.Lock()
 	defer this.mux.Unlock()
 	this.calls = append(this.calls, map[string]string{
 		"token": token, "device": deviceId, "service": serviceId, "column": column,
 		"window": end.Sub(start).String(),
 	})
+	this.budgets = append(this.budgets, budgetOf(ctx))
+	//the real client passes the context to the request; a fake that ignored it
+	//would let a broken budget look healthy
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return this.points, nil
+}
+
+// budgetAt returns the context of the nth fetch, counted from zero.
+func (this *fakeFetcher) budgetAt(index int) ctxBudget {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	if index >= len(this.budgets) {
+		return ctxBudget{}
+	}
+	return this.budgets[index]
+}
+
+func (this *fakeFetcher) callCount() int {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	return len(this.calls)
 }
 
 func platformChannel(envId string) domain.Channel {

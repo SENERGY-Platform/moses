@@ -23,6 +23,7 @@ package domain
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -352,9 +353,9 @@ type DatasetSource struct {
 	Column string `json:"column,omitempty" bson:"column,omitempty"`
 
 	// Window is how much of a platform timeseries is fetched, backwards from
-	// the moment the environment starts: a duration like "36h", "7d" or "4w".
-	// The fetched window is then replayed like an uploaded dataset and only
-	// changes on the next reload.
+	// the moment the environment starts: a duration like "36h", "7d", "4w" or
+	// "1y". The fetched window is then replayed like an uploaded dataset and
+	// only changes on the next reload.
 	Window string `json:"window,omitempty" bson:"window,omitempty"`
 
 	Resample ResampleMode `json:"resample" bson:"resample"`
@@ -463,8 +464,10 @@ type ScheduleGate struct {
 // machine is in a state its author called off" cannot look identical.
 const ScheduleClosedState = "off"
 
-// ParseWindow reads a replay window. time.ParseDuration covers h/m/s; days and
-// weeks are worth having because "7d" is how people think about load data.
+// ParseWindow reads a replay window. time.ParseDuration covers h/m/s; days,
+// weeks and years are worth having because "7d" or "1y" is how people think
+// about load data. There is no month suffix: time.ParseDuration already
+// claims 'm' for minutes, and a month is ambiguous in length anyway.
 func ParseWindow(window string) (time.Duration, error) {
 	trimmed := strings.TrimSpace(window)
 	if trimmed == "" {
@@ -476,17 +479,38 @@ func ParseWindow(window string) (time.Duration, error) {
 		multiplier = 24 * time.Hour
 	case 'w':
 		multiplier = 7 * 24 * time.Hour
+	case 'y':
+		multiplier = 365 * 24 * time.Hour
 	}
 	if multiplier > 0 {
 		count, err := strconv.ParseFloat(trimmed[:len(trimmed)-1], 64)
-		if err != nil || count <= 0 {
+		//written as "not greater than zero" rather than "<= 0": strconv reads
+		//"nan" as a float, and a NaN compares false against every bound below,
+		//so the negated form is what keeps it out
+		if err != nil || !(count > 0) {
 			return 0, fmt.Errorf("unreadable window %q", window)
 		}
-		return time.Duration(count * float64(multiplier)), nil
+		//float64 carries far more range than int64, and the conversion of an
+		//out of range float is undefined - "293y" lands on the most negative
+		//duration there is, which turns end.Add(-window) into a query that
+		//starts three centuries in the future. float64(math.MaxInt64) is
+		//exactly 2^63, one above the largest duration, so the comparison has
+		//to be inclusive to catch the value that sits on it.
+		nanoseconds := count * float64(multiplier)
+		if nanoseconds >= float64(math.MaxInt64) {
+			return 0, fmt.Errorf("the window %q is longer than the clock can hold, about 292 years is the most", window)
+		}
+		duration := time.Duration(nanoseconds)
+		//a count so small that it rounds away leaves no window at all; refused
+		//here for the same reason the h/m/s branch below refuses "0h"
+		if duration <= 0 {
+			return 0, fmt.Errorf("unreadable window %q", window)
+		}
+		return duration, nil
 	}
 	duration, err := time.ParseDuration(trimmed)
 	if err != nil || duration <= 0 {
-		return 0, fmt.Errorf("unreadable window %q, use a duration like \"36h\", \"7d\" or \"4w\"", window)
+		return 0, fmt.Errorf("unreadable window %q, use a duration like \"36h\", \"7d\", \"4w\" or \"1y\"", window)
 	}
 	return duration, nil
 }

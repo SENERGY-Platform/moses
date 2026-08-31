@@ -17,7 +17,9 @@
 package timeseries
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -50,7 +52,7 @@ func TestFetchPinsTheRequestContract(t *testing.T) {
 
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	end := start.Add(7 * 24 * time.Hour)
-	points, err := New(server.URL).Fetch("Bearer abc", "device-1", "service-1", "energy.value", start, end)
+	points, err := New(server.URL).Fetch(context.Background(), "Bearer abc", "device-1", "service-1", "energy.value", start, end)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +90,7 @@ func TestFetchSortsDeduplicatesAndSkipsGaps(t *testing.T) {
 	]]`, nil)
 	defer server.Close()
 
-	points, err := New(server.URL).Fetch("t", "d", "s", "value", time.Now().Add(-time.Hour), time.Now())
+	points, err := New(server.URL).Fetch(context.Background(), "t", "d", "s", "value", time.Now().Add(-time.Hour), time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,6 +104,70 @@ func TestFetchSortsDeduplicatesAndSkipsGaps(t *testing.T) {
 	}
 }
 
+// A fetch belongs to the load that asked for it. When that load is over -
+// cancelled, or out of time - the request has to end with it rather than run on
+// under the client's own timeout, which is minutes long.
+func TestFetchEndsWithTheContextItWasGiven(t *testing.T) {
+	server := wrapperAnswering(t, `[[["2026-01-05T00:00:00Z", 1.5],["2026-01-05T00:15:00Z", 2.5]]]`, nil)
+	defer server.Close()
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	//a deadline in the past rather than a short one: no clock has to elapse for
+	//this to be decided, so the test cannot be slow and cannot be flaky
+	expired, cancelExpired := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancelExpired()
+
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		want error
+	}{
+		{"cancelled", cancelled, context.Canceled},
+		{"deadline in the past", expired, context.DeadlineExceeded},
+	} {
+		_, err := New(server.URL).Fetch(tc.ctx, "t", "d", "s", "value", time.Now().Add(-time.Hour), time.Now())
+		if err == nil {
+			t.Errorf("%s: a spent context has to end the fetch", tc.name)
+			continue
+		}
+		if !errors.Is(err, tc.want) {
+			t.Errorf("%s: expected %v, got %v", tc.name, tc.want, err)
+		}
+	}
+}
+
+// The same for a wrapper that accepts the request and then says nothing: the
+// caller's deadline, not the client's, decides when to give up.
+func TestFetchGivesUpWhenTheCallersDeadlinePasses(t *testing.T) {
+	released := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-released
+	}))
+	//released first, then Close: httptest.Server.Close waits for the handlers
+	//still in flight, and this one only ends when it is let go
+	defer func() {
+		close(released)
+		server.Close()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := New(server.URL).Fetch(ctx, "t", "d", "s", "value", time.Now().Add(-time.Hour), time.Now())
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("expected the caller's deadline to end the fetch, got %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the fetch outlived the context it was given")
+	}
+}
+
 func TestFetchRefusals(t *testing.T) {
 	for _, tc := range []struct{ name, body, fragment string }{
 		{"empty window", `[[]]`, "at least 2"},
@@ -110,7 +176,7 @@ func TestFetchRefusals(t *testing.T) {
 		{"two series", `[[],[]]`, "expected one series"},
 	} {
 		server := wrapperAnswering(t, tc.body, nil)
-		_, err := New(server.URL).Fetch("t", "d", "s", "value", time.Now().Add(-time.Hour), time.Now())
+		_, err := New(server.URL).Fetch(context.Background(), "t", "d", "s", "value", time.Now().Add(-time.Hour), time.Now())
 		server.Close()
 		if err == nil || !strings.Contains(err.Error(), tc.fragment) {
 			t.Errorf("%s: expected %q, got %v", tc.name, tc.fragment, err)
@@ -120,7 +186,7 @@ func TestFetchRefusals(t *testing.T) {
 		http.Error(w, "no access", http.StatusNotFound)
 	}))
 	defer server.Close()
-	_, err := New(server.URL).Fetch("t", "d", "s", "value", time.Now().Add(-time.Hour), time.Now())
+	_, err := New(server.URL).Fetch(context.Background(), "t", "d", "s", "value", time.Now().Add(-time.Hour), time.Now())
 	if err == nil || !strings.Contains(err.Error(), "404") {
 		t.Errorf("a non-200 has to carry the status, got %v", err)
 	}

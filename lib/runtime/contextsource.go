@@ -103,8 +103,11 @@ func (this *Runtime) anchorFor(env *environment, id string, source *domain.Datas
 }
 
 // loadContextSeries fetches the datasets context sources replay, alongside the
-// channel series and into the same map, under the collision-safe id.
-func (this *Runtime) loadContextSeries(ctx context.Context, def domain.Environment, result map[string][]dataset.Point) {
+// channel series and into the same map, under the collision-safe id. cache is
+// the same fileSeriesCache loadSeries threads through the zone walk, so a
+// context source that shares an upload with a channel does not fetch it a
+// second time.
+func (this *Runtime) loadContextSeries(ctx context.Context, def domain.Environment, result map[string][]dataset.Point, cache fileSeriesCache) {
 	for key, source := range def.ContextSources {
 		if source.Kind != domain.SourceDataset || source.Dataset == nil {
 			continue
@@ -112,7 +115,7 @@ func (this *Runtime) loadContextSeries(ctx context.Context, def domain.Environme
 		if source.Dataset.Origin != domain.OriginFile && source.Dataset.Origin != domain.OriginPlatform {
 			continue
 		}
-		points, err := this.fetchSeries(ctx, def.Owner, source.Dataset)
+		points, err := this.fetchSeries(ctx, def.Owner, source.Dataset, cache)
 		if err != nil {
 			util.Logger.Warn("unable to load the dataset of a context source, the key stays static",
 				attributes.ErrorKey, err, "environment", def.Id, "key", key, "dataset", source.Dataset.Ref)

@@ -771,6 +771,11 @@ func TestParseWindow(t *testing.T) {
 		hours  float64
 	}{
 		{"36h", 36}, {"7d", 168}, {"4w", 672}, {"90m", 1.5}, {"1.5d", 36},
+		{"1y", 8760}, {"0.5y", 4380},
+		//the longest window a time.Duration can carry; it has to keep parsing,
+		//because the overflow guard closes an overflow and does not introduce a
+		//shorter limit of its own
+		{"292y", 292 * 365 * 24},
 	} {
 		got, err := ParseWindow(tc.window)
 		if err != nil || got != time.Duration(tc.hours*float64(time.Hour)) {
@@ -781,5 +786,57 @@ func TestParseWindow(t *testing.T) {
 		if _, err := ParseWindow(bad); err == nil {
 			t.Errorf("%q has to be refused", bad)
 		}
+	}
+}
+
+// A count is read as a float64, which carries far more range than the int64
+// behind a time.Duration. Converting an out of range float is undefined and on
+// the usual machines lands on the most negative duration there is - so "293y"
+// used to parse without an error and hand the platform origin a negative
+// window, whose end.Add(-window) queries from three centuries in the future.
+//
+// The same conversion is undefined for a NaN, which "nan" is a spelling of and
+// which compares false against every bound, so it needs the negated form of
+// the positivity check rather than a second comparison.
+func TestParseWindowRefusesWhatATimeDurationCannotHold(t *testing.T) {
+	//refused as too long, and asserted on the reason rather than only on the
+	//presence of an error: what an out of range conversion produces differs by
+	//architecture - amd64 lands on the most negative duration, others saturate
+	//at the largest positive one - so a test that only demands "some error"
+	//passes on this machine without the range check and fails on another.
+	for _, tooLong := range []string{
+		"293y", "300y", "1e15d", "1e300w", //beyond int64
+		"infd", "Infinityy", //parse as +Inf
+	} {
+		got, err := ParseWindow(tooLong)
+		if err == nil {
+			t.Errorf("%q has to be refused, got %v", tooLong, got)
+			continue
+		}
+		if !strings.Contains(err.Error(), "longer than the clock can hold") {
+			t.Errorf("%q has to be refused for its length, got %v", tooLong, err)
+		}
+		if got != 0 {
+			t.Errorf("%q: a refused window has to come back as 0, got %v", tooLong, got)
+		}
+	}
+	//refused as no usable count at all
+	for _, bad := range []string{
+		"nand", "NaNy", //parse as NaN and compare false against every bound
+		"1e-30d", //rounds away to no window at all
+	} {
+		got, err := ParseWindow(bad)
+		if err == nil {
+			t.Errorf("%q has to be refused, got %v", bad, got)
+			continue
+		}
+		if got != 0 {
+			t.Errorf("%q: a refused window has to come back as 0, got %v", bad, got)
+		}
+	}
+	//the failure this guards against is a window that is not positive; assert
+	//it on the largest value that still passes rather than only on the message
+	if got, err := ParseWindow("292y"); err != nil || got <= 0 {
+		t.Errorf("292y has to parse into a positive window, got %v (%v)", got, err)
 	}
 }
