@@ -52,12 +52,14 @@ func (this *Runtime) runContextSource(ctx context.Context, env *environment, gen
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			this.tickContextSource(env, gen, key, source)
+			this.tickContextSource(env, gen, key, source, time.Now())
 		}
 	}
 }
 
-func (this *Runtime) tickContextSource(env *environment, gen *generation, key string, source domain.Source) {
+// tickContextSource moves one context key to what its source says at now, the
+// instant the caller took for this tick.
+func (this *Runtime) tickContextSource(env *environment, gen *generation, key string, source domain.Source, now time.Time) {
 	env.mux.Lock()
 	defer env.mux.Unlock()
 	switch source.Kind {
@@ -65,7 +67,7 @@ func (this *Runtime) tickContextSource(env *environment, gen *generation, key st
 		if source.Profile == nil {
 			return
 		}
-		value := profileValue(*source.Profile, gen.def.Seed, contextSeriesId(key), source.IntervalSeconds, time.Now())
+		value := profileValue(*source.Profile, gen.def.Seed, contextSeriesId(key), source.IntervalSeconds, now)
 		env.contextStates()[key] = value
 		env.dirty = true
 	case domain.SourceDataset:
@@ -73,8 +75,8 @@ func (this *Runtime) tickContextSource(env *environment, gen *generation, key st
 		if len(points) < 2 {
 			return //the loader already reported the missing dataset
 		}
-		anchor := this.anchorFor(env, contextSeriesId(key), source.Dataset)
-		value, playable := replayValue(*source.Dataset, points, anchor, time.Now(), source.IntervalSeconds)
+		anchor := this.anchorFor(env, contextSeriesId(key), source.Dataset, now)
+		value, playable := replayValue(*source.Dataset, points, anchor, now, source.IntervalSeconds)
 		if !playable {
 			return
 		}
@@ -86,13 +88,13 @@ func (this *Runtime) tickContextSource(env *environment, gen *generation, key st
 // anchorFor returns the persisted replay anchor, creating it on first use -
 // the same bookkeeping executeDataset does for channels, under the same map.
 // Must be called with env.mux held.
-func (this *Runtime) anchorFor(env *environment, id string, source *domain.DatasetSource) int64 {
+func (this *Runtime) anchorFor(env *environment, id string, source *domain.DatasetSource, now time.Time) int64 {
 	if source.Anchor == domain.AnchorOriginal {
 		return 0
 	}
 	anchor, known := env.state.Anchors[id]
 	if !known {
-		anchor = time.Now().Unix()
+		anchor = now.Unix()
 		if env.state.Anchors == nil {
 			env.state.Anchors = map[string]int64{}
 		}

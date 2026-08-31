@@ -257,9 +257,8 @@ func scheduleValue(state domain.ScheduleState, seed int64, channelId string, ste
 // whole run, send included: the asset state it writes - the name of the running
 // state, the values that state declares - is state like any other, and a
 // formula on the same asset reads it under the same mutex.
-func (this *Runtime) executeSchedule(env *environment, gen *generation, binding channelBinding, send func(value interface{})) {
+func (this *Runtime) executeSchedule(env *environment, gen *generation, binding channelBinding, send func(value interface{}), now time.Time) {
 	source := *binding.channel.Source.Schedule
-	now := time.Now()
 
 	env.mux.Lock()
 	defer env.mux.Unlock()

@@ -578,7 +578,7 @@ func TestADueEvaluationIsRunBeforeTheHeartbeatIsServed(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	pending := &latest{}
-	if !rt.dueEvaluation(waiting, env, gen, binding, pending, &covLogGate{}) {
+	if !rt.dueEvaluation(waiting, env, gen, binding, pending, &covLogGate{}, time.Now()) {
 		t.Fatal("the waiting evaluation was not run, so a heartbeat in this state would send the reading before it")
 	}
 	if value, known := pending.get(); !known || value != 230.0 {
@@ -592,7 +592,7 @@ func TestADueEvaluationIsRunBeforeTheHeartbeatIsServed(t *testing.T) {
 	//between two evaluations would compute an extra value off the grid
 	idle := time.NewTicker(time.Hour)
 	defer idle.Stop()
-	if rt.dueEvaluation(idle, env, gen, binding, &latest{}, &covLogGate{}) {
+	if rt.dueEvaluation(idle, env, gen, binding, &latest{}, &covLogGate{}, time.Now()) {
 		t.Error("an evaluation was run although none was due")
 	}
 	if publisher.count() != 1 {

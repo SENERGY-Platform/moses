@@ -316,7 +316,7 @@ func (this *Runtime) HandleCommand(externalDeviceRef string, externalServiceRef 
 			"environment", env.id, "device_ref", externalDeviceRef)
 		return true
 	}
-	this.dispatch(env, channel.gen, channel.binding, cmdMsg, responder, false)
+	this.dispatch(env, channel.gen, channel.binding, cmdMsg, responder, false, time.Now())
 	return true
 }
 
@@ -672,10 +672,11 @@ func (this *Runtime) runChannel(ctx context.Context, env *environment, gen *gene
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			now := time.Now()
 			//input is nil on a tick, as it was for a legacy sensor service
 			this.dispatch(env, gen, binding, nil, func(value interface{}) {
 				this.publish(env, binding, value)
-			}, true)
+			}, true, now)
 		}
 	}
 }
@@ -705,7 +706,7 @@ func (this *Runtime) runSplitChannel(ctx context.Context, env *environment, gen 
 		case <-ctx.Done():
 			return
 		case <-source.C:
-			this.dispatch(env, gen, binding, nil, pending.put, true)
+			this.dispatch(env, gen, binding, nil, pending.put, true, time.Now())
 		case <-publishC:
 			//nothing to send before the source has run once. Skipping is right
 			//rather than sending a zero value: the channel carries a unit, and a
@@ -720,7 +721,11 @@ func (this *Runtime) runSplitChannel(ctx context.Context, env *environment, gen 
 // dispatch runs whatever drives the channel. tick separates a schedule tick
 // from a command: a cumulative profile advances its meter only on ticks, or
 // every read command would inflate the reading.
-func (this *Runtime) dispatch(env *environment, gen *generation, binding channelBinding, input interface{}, send func(value interface{}), tick bool) {
+//
+// now is the instant of this run, taken once by the caller: every source, every
+// replay anchor and every zone value with a time constant resolves against the
+// same moment, so one tick is one point in time rather than a handful of them.
+func (this *Runtime) dispatch(env *environment, gen *generation, binding channelBinding, input interface{}, send func(value interface{}), tick bool, now time.Time) {
 	//every send below happens while the environment mutex is held (a script
 	//calls send inside its run, the other kinds send under their own lock), so
 	//remembering the value here needs no lock of its own. The cache is what a
@@ -736,33 +741,35 @@ func (this *Runtime) dispatch(env *environment, gen *generation, binding channel
 	}
 	switch binding.channel.Source.Kind {
 	case domain.SourceProfile:
-		this.executeProfile(env, gen, binding, remembered, tick)
+		this.executeProfile(env, gen, binding, remembered, tick, now)
 	case domain.SourceDataset:
-		this.executeDataset(env, binding, remembered)
+		this.executeDataset(env, binding, remembered, now)
 	case domain.SourceFormula:
-		this.executeFormula(env, binding, remembered)
+		this.executeFormula(env, binding, remembered, now)
 	case domain.SourceAggregate:
+		//no clock: an aggregate reads the values its inputs last produced and
+		//has nothing of its own to resolve against an instant
 		this.executeAggregate(env, gen, binding, remembered)
 	case domain.SourceSchedule:
 		//through remembered like every other declarative source: the value of a
 		//schedule is what a formula reading channel.<id> sees, and what an
 		//aggregate above the asset sums
-		this.executeSchedule(env, gen, binding, remembered)
+		this.executeSchedule(env, gen, binding, remembered, now)
 	default:
-		this.execute(env, gen, binding, input, remembered)
+		this.execute(env, gen, binding, input, remembered, now)
 	}
 }
 
 // executeFormula resolves the inputs and publishes the result. A missing state
 // key counts as 0, like moses.state.get seeds a missing key - a formula over a
 // value nothing has produced yet starts from zero rather than failing.
-func (this *Runtime) executeFormula(env *environment, binding channelBinding, send func(value interface{})) {
+func (this *Runtime) executeFormula(env *environment, binding channelBinding, send func(value interface{}), now time.Time) {
 	inputs := binding.channel.Source.Formula.Inputs
 	env.mux.Lock()
 	defer env.mux.Unlock()
 	values := make(map[string]interface{}, len(inputs))
 	for name, ref := range inputs {
-		values[name] = this.resolveInput(env, binding.zoneId, binding.asset.id, ref)
+		values[name] = this.resolveInput(env, binding.zoneId, binding.asset.id, ref, now)
 	}
 	value, err := binding.program.Evaluate(values)
 	if err != nil {
@@ -816,12 +823,12 @@ func (this *Runtime) executeAggregate(env *environment, gen *generation, binding
 	send(sum)
 }
 
-func (this *Runtime) resolveInput(env *environment, zoneId string, assetId string, ref string) interface{} {
+func (this *Runtime) resolveInput(env *environment, zoneId string, assetId string, ref string, now time.Time) interface{} {
 	if key, ok := strings.CutPrefix(ref, formula.RefContext); ok {
 		return numericOrZero(env.contextStates()[key])
 	}
 	if key, ok := strings.CutPrefix(ref, formula.RefZone); ok {
-		env.advanceZone(zoneId, time.Now())
+		env.advanceZone(zoneId, now)
 		return numericOrZero(env.zoneStates(zoneId)[key])
 	}
 	if key, ok := strings.CutPrefix(ref, formula.RefAsset); ok {
@@ -964,16 +971,16 @@ func (this *Runtime) fetchPlatformSeries(ctx context.Context, owner string, sour
 // executeDataset publishes the replay value for now. The anchor of a looping
 // replay is set on first use and persisted with the state, so a restart
 // resumes mid-loop.
-func (this *Runtime) executeDataset(env *environment, binding channelBinding, send func(value interface{})) {
+func (this *Runtime) executeDataset(env *environment, binding channelBinding, send func(value interface{}), now time.Time) {
 	source := *binding.channel.Source.Dataset
 	env.mux.Lock()
 	defer env.mux.Unlock()
-	anchor := this.anchorFor(env, binding.channel.Id, &source)
+	anchor := this.anchorFor(env, binding.channel.Id, &source, now)
 	//stepSeconds, not the publish interval: a distributing replay hands out the
 	//share of a sample one computation stands for, and with a change trigger the
 	//value is computed on the evaluation cadence. Without a trigger the two are
 	//the same number.
-	value, playable := replayValue(source, binding.points, anchor, time.Now(), binding.stepSeconds)
+	value, playable := replayValue(source, binding.points, anchor, now, binding.stepSeconds)
 	if !playable {
 		return
 	}
@@ -984,7 +991,7 @@ func (this *Runtime) executeDataset(env *environment, binding channelBinding, se
 // script run, so the cumulative state in the asset map is as safe as any other
 // state. send happens under the mutex too, which is what a script's
 // moses.service.send does.
-func (this *Runtime) executeProfile(env *environment, gen *generation, binding channelBinding, send func(value interface{}), tick bool) {
+func (this *Runtime) executeProfile(env *environment, gen *generation, binding channelBinding, send func(value interface{}), tick bool, now time.Time) {
 	p := *binding.channel.Source.Profile
 	env.mux.Lock()
 	defer env.mux.Unlock()
@@ -993,7 +1000,7 @@ func (this *Runtime) executeProfile(env *environment, gen *generation, binding c
 	//spread slot and, below, the share of the hourly rate a tick adds, so a
 	//channel evaluating more often than it publishes does not over-count its
 	//meter.
-	value := profileValue(p, gen.def.Seed, binding.channel.Id, binding.stepSeconds, time.Now())
+	value := profileValue(p, gen.def.Seed, binding.channel.Id, binding.stepSeconds, now)
 	if p.Cumulative {
 		states := env.assetStates(binding.asset.id)
 		counter, _ := asFloat(states[binding.channel.Id])
@@ -1010,8 +1017,8 @@ func (this *Runtime) executeProfile(env *environment, gen *generation, binding c
 	send(value)
 }
 
-func (this *Runtime) execute(env *environment, gen *generation, binding channelBinding, input interface{}, send func(value interface{})) {
-	err := run(binding.code, this.jsApi(env, gen, binding, input, send), this.jsTimeout, &env.mux)
+func (this *Runtime) execute(env *environment, gen *generation, binding channelBinding, input interface{}, send func(value interface{}), now time.Time) {
+	err := run(binding.code, this.jsApi(env, gen, binding, input, send, now), this.jsTimeout, &env.mux)
 	if err != nil {
 		util.Logger.Warn("channel script failed", attributes.ErrorKey, err,
 			"environment", env.id, "asset", binding.asset.id, "channel", binding.channel.Id,
@@ -1029,14 +1036,17 @@ func (this *Runtime) publish(env *environment, binding channelBinding, value int
 	return this.publishReporting(env, binding, value, true)
 }
 
-// publishReporting is publish with the log output made optional. Only the change
-// trigger passes false, and only for an attempt that follows a failure it has
-// already reported - see covLogGate. The ticker paths always report: they
-// publish once per interval, so a line per failure is a line per interval.
+// publishVia is what every publish path has in common: the two reference checks
+// a reading needs to have somewhere to go, and the logging around the attempt.
+// publish is called only once both refs are there, so it may read them.
 //
-// The debug line is not throttled. It is off unless debug is configured, and
-// whoever turned it on asked for every send.
-func (this *Runtime) publishReporting(env *environment, binding channelBinding, value interface{}, report bool) bool {
+// report false suppresses the failure lines, and only the change trigger passes
+// it, for an attempt that follows a failure it has already reported - see
+// covLogGate. The ticker paths always report: they publish once per interval, so
+// a line per failure is a line per interval. The debug line is not throttled: it
+// is off unless debug is configured, and whoever turned it on asked for every
+// send.
+func (this *Runtime) publishVia(env *environment, binding channelBinding, value interface{}, report bool, publish func() error) bool {
 	if this.config.Debug {
 		util.Logger.Debug("send channel data", "environment", env.id, "asset", binding.asset.id,
 			"channel", binding.channel.Id, "value", value)
@@ -1053,7 +1063,7 @@ func (this *Runtime) publishReporting(env *environment, binding channelBinding, 
 		}
 		return false
 	}
-	err := this.publisher.PublishEvent(binding.asset.externalRef, binding.channel.ExternalRef, value)
+	err := publish()
 	if err != nil {
 		if report {
 			util.Logger.Error("unable to send channel data", attributes.ErrorKey, err,
@@ -1062,6 +1072,23 @@ func (this *Runtime) publishReporting(env *environment, binding channelBinding, 
 		return false
 	}
 	return true
+}
+
+// publishReporting is the live publish: the platform stamps the reading with its
+// arrival time.
+func (this *Runtime) publishReporting(env *environment, binding channelBinding, value interface{}, report bool) bool {
+	return this.publishVia(env, binding, value, report, func() error {
+		return this.publisher.PublishEvent(binding.asset.externalRef, binding.channel.ExternalRef, value)
+	})
+}
+
+// publishAt publishes a reading that was taken at a past instant. It reaches
+// timescale under that instant only for a service whose time path resolves; for
+// every other one the platform stamps the arrival time instead.
+func (this *Runtime) publishAt(env *environment, binding channelBinding, value interface{}, report bool, at time.Time) bool {
+	return this.publishVia(env, binding, value, report, func() error {
+		return this.publisher.PublishEventAt(binding.asset.externalRef, binding.channel.ExternalRef, value, at)
+	})
 }
 
 // flushLoop is the write behind: one goroutine for the whole runtime, writing

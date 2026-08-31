@@ -32,10 +32,12 @@ import (
 //	moses.service == moses.channel
 //
 // Everything below runs inside a script run with the environment mutex held,
-// which is what makes the state maps safe without locking of their own.
-func (this *Runtime) jsApi(env *environment, gen *generation, binding channelBinding, input interface{}, send func(value interface{})) map[string]interface{} {
-	environmentApi := this.jsEnvironmentApi(env, gen)
-	zoneApi := this.jsZoneApi(env, gen, binding.zoneId)
+// which is what makes the state maps safe without locking of their own. now is
+// the instant of the run the api is built for: a zone value with a time constant
+// resolves against it, so a script sees one moment however long it runs.
+func (this *Runtime) jsApi(env *environment, gen *generation, binding channelBinding, input interface{}, send func(value interface{}), now time.Time) map[string]interface{} {
+	environmentApi := this.jsEnvironmentApi(env, gen, now)
+	zoneApi := this.jsZoneApi(env, gen, binding.zoneId, now)
 	assetApi := this.jsAssetApi(env, binding.asset.id)
 	channelApi := map[string]interface{}{
 		"input": input,
@@ -55,7 +57,7 @@ func (this *Runtime) jsApi(env *environment, gen *generation, binding channelBin
 	}
 }
 
-func (this *Runtime) jsEnvironmentApi(env *environment, gen *generation) map[string]interface{} {
+func (this *Runtime) jsEnvironmentApi(env *environment, gen *generation, now time.Time) map[string]interface{} {
 	return map[string]interface{}{
 		"state": jsStateApi(env, func() map[string]interface{} { return env.contextStates() }),
 		"getRoom": func(zoneId string) map[string]interface{} {
@@ -63,17 +65,17 @@ func (this *Runtime) jsEnvironmentApi(env *environment, gen *generation) map[str
 				util.Logger.Warn("no zone for id found", "environment", env.id, "id", zoneId)
 				return map[string]interface{}{}
 			}
-			return this.jsZoneApi(env, gen, zoneId)
+			return this.jsZoneApi(env, gen, zoneId, now)
 		},
 	}
 }
 
-func (this *Runtime) jsZoneApi(env *environment, gen *generation, zoneId string) map[string]interface{} {
+func (this *Runtime) jsZoneApi(env *environment, gen *generation, zoneId string, now time.Time) map[string]interface{} {
 	return map[string]interface{}{
 		//a zone value with a time constant is resolved here rather than on a
 		//ticker: the mutex is held, so this is the one place it can be exact
 		"state": jsStateApi(env, func() map[string]interface{} {
-			env.advanceZone(zoneId, time.Now())
+			env.advanceZone(zoneId, now)
 			return env.zoneStates(zoneId)
 		}),
 		"getDevice": func(assetId string) map[string]interface{} {

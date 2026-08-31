@@ -32,7 +32,7 @@ import (
 //
 // Three pieces split by what they need: exceedsChange and covSends are pure
 // and shared by the live path and the backfill, which is the parity
-// guarantee; covPublish is the gate and runs under the environment mutex;
+// guarantee; covGate is the gate and runs under the environment mutex;
 // runChangeChannel owns the two timers and is the only goroutine touching
 // them.
 
@@ -172,8 +172,9 @@ func (this *Runtime) covSend(env *environment, binding channelBinding, value int
 	return sent
 }
 
-// covPublish is the gate in front of publish. It reports whether something went
-// out, which is what restarts the heartbeat gap.
+// covGate is the gate in front of a publish: it decides, sends through send and
+// keeps the bookkeeping. It reports whether something went out, which is what
+// restarts the heartbeat gap.
 //
 // It must be called with env.mux held, like every other publish path: reading
 // the last published value, sending, and writing the new one back have to be
@@ -182,8 +183,10 @@ func (this *Runtime) covSend(env *environment, binding channelBinding, value int
 //
 // forced is the heartbeat: it skips the threshold, not the bookkeeping. A
 // failed publish never advances the bookkeeping, so the next evaluation still
-// sees the old comparison base and retries without a queue to maintain.
-func (this *Runtime) covPublish(env *environment, binding channelBinding, value interface{}, forced bool, logs *covLogGate) bool {
+// sees the old comparison base and retries without a queue to maintain. now is
+// the instant of the evaluation and becomes the stored publish moment, so the
+// bookkeeping follows the clock the run is driven by.
+func (this *Runtime) covGate(env *environment, binding channelBinding, value interface{}, forced bool, now time.Time, send func(value interface{}) bool) bool {
 	number, numeric := asFloat(value)
 	if !numeric {
 		//fail open: a channel whose script sends a string or a boolean has no
@@ -191,7 +194,7 @@ func (this *Runtime) covPublish(env *environment, binding channelBinding, value 
 		//the channel entirely. It publishes on every evaluation instead, and the
 		//bookkeeping is left alone so a later numeric value still compares
 		//against the last number that actually went out.
-		return this.covSend(env, binding, value, logs)
+		return send(value)
 	}
 	if !forced {
 		var base *float64
@@ -204,7 +207,7 @@ func (this *Runtime) covPublish(env *environment, binding channelBinding, value 
 			return false
 		}
 	}
-	if !this.covSend(env, binding, value, logs) {
+	if !send(value) {
 		return false
 	}
 	if !finite(number) {
@@ -218,9 +221,17 @@ func (this *Runtime) covPublish(env *environment, binding channelBinding, value 
 	if env.state.LastPublished == nil {
 		env.state.LastPublished = map[string]repo.PublishedValue{}
 	}
-	env.state.LastPublished[binding.channel.Id] = repo.PublishedValue{Value: number, AtUnix: time.Now().Unix()}
+	env.state.LastPublished[binding.channel.Id] = repo.PublishedValue{Value: number, AtUnix: now.Unix()}
 	env.dirty = true
 	return true
+}
+
+// covPublish is the live gate: covGate sending through covSend, so a channel
+// the platform keeps refusing is logged once rather than on every evaluation.
+func (this *Runtime) covPublish(env *environment, binding channelBinding, value interface{}, forced bool, logs *covLogGate, now time.Time) bool {
+	return this.covGate(env, binding, value, forced, now, func(value interface{}) bool {
+		return this.covSend(env, binding, value, logs)
+	})
 }
 
 // runChangeChannel drives one channel that publishes on change: an evaluation
@@ -252,17 +263,20 @@ func (this *Runtime) runChangeChannel(ctx context.Context, env *environment, gen
 		case <-ctx.Done():
 			return
 		case <-evaluate.C:
-			if this.evaluateChangeChannel(env, gen, binding, pending, logs) {
+			if this.evaluateChangeChannel(env, gen, binding, pending, logs, time.Now()) {
 				heartbeat.Reset(heartbeatEvery)
 			}
 		case <-heartbeat.C:
+			//one instant for this firing, shared by the evaluation that may be
+			//due at the same moment and by the heartbeat publish below
+			now := time.Now()
 			//an evaluation that is due at this very instant is served first: a
 			//select picks at random between two ready cases, and a heartbeat
 			//interval that is a whole multiple of the evaluation cadence - the
 			//shape every document has - makes both due at the same moment on every
 			//heartbeat. Taking the heartbeat first would publish the current or the
 			//previous value on a coin toss.
-			if this.dueEvaluation(evaluate, env, gen, binding, pending, logs) {
+			if this.dueEvaluation(evaluate, env, gen, binding, pending, logs, now) {
 				//that evaluation published, so the gap starts again and this
 				//heartbeat is not owed any more: sending the same value a second
 				//time in the same instant is the duplicate reading the reset
@@ -281,7 +295,7 @@ func (this *Runtime) runChangeChannel(ctx context.Context, env *environment, gen
 				continue
 			}
 			env.mux.Lock()
-			this.covPublish(env, binding, value, true, logs)
+			this.covPublish(env, binding, value, true, logs, now)
 			env.mux.Unlock()
 			//reset whether or not it went out: a failed publish must not end the
 			//heartbeat for good, and the next one is a full gap away rather than
@@ -298,14 +312,14 @@ func (this *Runtime) runChangeChannel(ctx context.Context, env *environment, gen
 // A script may call send zero or several times in one run: each of those values
 // goes through the gate on its own, and the heartbeat is reset once, by the
 // caller, after the run.
-func (this *Runtime) evaluateChangeChannel(env *environment, gen *generation, binding channelBinding, pending *latest, logs *covLogGate) bool {
+func (this *Runtime) evaluateChangeChannel(env *environment, gen *generation, binding channelBinding, pending *latest, logs *covLogGate, now time.Time) bool {
 	published := false
 	this.dispatch(env, gen, binding, nil, func(value interface{}) {
 		pending.put(value)
-		if this.covPublish(env, binding, value, false, logs) {
+		if this.covPublish(env, binding, value, false, logs, now) {
 			published = true
 		}
-	}, true)
+	}, true, now)
 	return published
 }
 
@@ -313,10 +327,10 @@ func (this *Runtime) evaluateChangeChannel(env *environment, gen *generation, bi
 // there is one, and reports whether it published. It never blocks: with nothing
 // waiting it does nothing at all, which is the case of a heartbeat that falls
 // between two evaluations.
-func (this *Runtime) dueEvaluation(evaluate *time.Ticker, env *environment, gen *generation, binding channelBinding, pending *latest, logs *covLogGate) bool {
+func (this *Runtime) dueEvaluation(evaluate *time.Ticker, env *environment, gen *generation, binding channelBinding, pending *latest, logs *covLogGate, now time.Time) bool {
 	select {
 	case <-evaluate.C:
-		return this.evaluateChangeChannel(env, gen, binding, pending, logs)
+		return this.evaluateChangeChannel(env, gen, binding, pending, logs, now)
 	default:
 		return false
 	}
