@@ -1,5 +1,7 @@
 # Pushing to master is the release
 
+## Scope
+
 **Applies when** releasing this service. **Delimitation:** how the built image
 reaches a cluster is deployment configuration and lives outside this
 repository; this document ends at the registry.

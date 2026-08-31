@@ -1,5 +1,7 @@
 # The schedule source
 
+## Scope
+
 **Applies when** a channel is to follow a machine programme rather than a
 pattern: a plant that idles, sets itself up, runs and idles again, with a
 different power draw in each step and the name of the step readable from

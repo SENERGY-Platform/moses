@@ -1,5 +1,7 @@
 # Submetering
 
+## Scope
+
 **Applies when** an asset's `submetered_by` is set, or a channel's source kind
 is `aggregate` - the two halves of the same feature: the tree, and the sum over
 it.

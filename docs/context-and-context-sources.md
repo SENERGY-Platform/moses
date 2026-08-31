@@ -1,5 +1,7 @@
 # Context and context sources
 
+## Scope
+
 **Applies when** working with an environment's `context` and
 `context_sources`. **Delimitation:** the neighbouring case is a channel's
 source on an asset — the same `Source` type with opposite interval rules (a

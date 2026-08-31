@@ -1,5 +1,7 @@
 # Environment graphs
 
+## Scope
+
 **Applies when** an environment is stored or deleted over the environment api,
 in a deployment that has a reachable device-repository. **Delimitation:** the
 neighbouring case is the graph a user drew by hand in the graph view — the same

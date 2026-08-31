@@ -1,5 +1,7 @@
 # Backfill
 
+## Scope
+
 **Applies when** an environment that is running here is to produce readings for
 a window that has already passed — the case being operator development, where a
 model needs weeks of training data on the day the environment is defined rather

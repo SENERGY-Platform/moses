@@ -1,5 +1,7 @@
 # Publishing on change
 
+## Scope
+
 **Applies when** a channel is to behave like real metering hardware, which does
 not send on the clock alone: an Eltako meter sends cyclically every ten minutes
 *and* on a step of 0.1 kWh, a Tasmota reading head the same way. Set

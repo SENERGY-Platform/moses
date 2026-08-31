@@ -1,5 +1,7 @@
 # Device lifecycle of assets
 
+## Scope
+
 **Applies when** an asset names a device type (`external_type_id`) or carries a
 platform device (`external_ref`), in documents written since `external_managed`
 exists (image v0.11.x). **Delimitation:** documents stored before that decode
