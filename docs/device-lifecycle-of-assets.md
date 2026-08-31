@@ -8,8 +8,6 @@ deliberate (`lib/domain/convert.go` preserves refs to keep the timeseries). The
 neighbouring case that looks identical is a device the *user* picked and
 attached: same fields, opposite rule — it is never deleted.
 
-`geltung: allgemein`
-
 ## Rules
 
 - **Provisioning happens on store, not in the editor.** An asset with an

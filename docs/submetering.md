@@ -12,8 +12,6 @@ instead. `submetered_by` is for the opposite shape: a structural meter tree,
 where the assets that feed into a device are named by the tree itself rather
 than by a formula that has to be kept in step with it.
 
-`geltung: allgemein`
-
 ## The field
 
 `Asset.SubmeteredBy` names, by asset id, the asset whose device meters this

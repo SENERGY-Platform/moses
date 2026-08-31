@@ -4,8 +4,6 @@
 reaches a cluster is deployment configuration and lives outside this
 repository; this document ends at the registry.
 
-`geltung: allgemein`
-
 ## The workflow assigns the version — never tag manually
 
 `.github/workflows/prod.yml` runs on every push to master. Its

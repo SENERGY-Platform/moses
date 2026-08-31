@@ -12,8 +12,6 @@ series: nothing is buffered and nothing is averaged, the value is simply not
 sent when it did not move. Not available for context sources and actuators, see
 the last section.
 
-`geltung: allgemein`
-
 ## The shape
 
 ```json

@@ -17,8 +17,6 @@ picked by mistake.
 
 Not available for context sources, see the last section.
 
-`geltung: allgemein`
-
 ## The shape
 
 A milling machine that runs a 40 minute programme, all day:

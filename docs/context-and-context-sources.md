@@ -6,8 +6,6 @@ source on an asset — the same `Source` type with opposite interval rules (a
 channel's dataset source must *not* carry its own interval, it follows the
 channel's publish tick; a context source *must* carry one).
 
-`geltung: allgemein`
-
 ## Static context
 
 `context` is a map of site-wide values every zone, script

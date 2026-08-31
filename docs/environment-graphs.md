@@ -9,8 +9,6 @@ not that; it is a projection and is replaced wholesale on every save. The
 runtime path is out of scope as well: `PATCH /environments/{id}/state` changes
 live values, not the definition, and touches no graph.
 
-`geltung: allgemein`
-
 ## What is mirrored
 
 Every environment is mirrored as one graph in the device-repository, so that

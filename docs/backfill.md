@@ -13,8 +13,6 @@ this writes simulated history out. And this is not an import: it publishes
 through the ordinary connector, so a backfilled row is indistinguishable from a
 live one once it is in timescale.
 
-`geltung: allgemein`
-
 ## What it does
 
 `POST /environments/{id}/backfill` with `{"from": ..., "to": ...}` computes the
