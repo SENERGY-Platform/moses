@@ -232,15 +232,15 @@ func TestSnapshotIsSafeWhileTheEnvironmentTicks(t *testing.T) {
 					failures <- err
 					return
 				}
-				//touch every level of the result, so a shared map would be a
-				//race the detector sees
+				//write into every level of the result: a map still shared with
+				//the live state would be a race the detector sees
 				for _, values := range got.State.Zones {
 					for key := range values {
-						_ = values[key]
+						values[key] = 0
 					}
 				}
 				for key := range got.State.Context {
-					got.State.Context[key] = got.State.Context[key]
+					got.State.Context[key] = 0
 				}
 			}
 		}()
