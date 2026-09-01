@@ -217,6 +217,12 @@ type historyChannel struct {
 	heartbeatSeconds int64
 	lastAttemptUnix  int64
 
+	// faultMemory is what the channel's injected faults remember for the length
+	// of the run, exactly as a live runner keeps its own. The captured meter
+	// offsets are not here: those live in the environment state the run hands
+	// over, so the live channel continues from the register the run left.
+	faultMemory *faultRun
+
 	// reported keeps the log to one line per broken channel.
 	reported bool
 
@@ -328,6 +334,7 @@ func (this *Runtime) runHistory(ctx context.Context, env *environment, gen *gene
 			binding:          binding,
 			heartbeatSeconds: binding.channel.IntervalSeconds,
 			lastAttemptUnix:  baseUnix,
+			faultMemory:      &faultRun{},
 			shared:           shared,
 			result: HistoryChannelStatus{
 				ChannelId:   binding.channel.Id,
@@ -471,6 +478,14 @@ func (this *Runtime) historyChannelDue(env *environment, gen *generation, channe
 	}
 	outcome := historyOutcome{}
 	this.dispatch(env, gen, channel.binding, nil, func(value interface{}) {
+		//env.mux is held here: every executor calls send inside its own run under
+		//it, which is the same precondition covGate states. Ahead of historySend,
+		//so a suppressed reading leaves attempted at 0 and is booked as silent
+		//rather than as failed.
+		value, send := this.faulted(env, channel.binding, channel.faultMemory, value, at)
+		if !send {
+			return
+		}
 		this.historySend(env, channel, value, at, &outcome)
 	}, true, at)
 	channel.record(outcome)
@@ -482,7 +497,22 @@ func (this *Runtime) historyChannelDue(env *environment, gen *generation, channe
 func (this *Runtime) historyPublishDue(env *environment, channel *historyChannel, at time.Time) {
 	outcome := historyOutcome{}
 	if value, known := channel.pending.get(); known {
-		this.historySend(env, channel, value, at, &outcome)
+		switch {
+		case len(channel.binding.faults.list) == 0:
+			//a channel without faults publishes as it always did, without the
+			//mutex this branch does not otherwise need
+			this.historySend(env, channel, value, at, &outcome)
+		default:
+			//this branch runs outside a dispatch, so it takes the environment mutex
+			//itself, the way the heartbeat branch below does; faulted reads and
+			//writes the persisted meter offsets
+			env.mux.Lock()
+			reading, send := this.faulted(env, channel.binding, channel.faultMemory, value, at)
+			env.mux.Unlock()
+			if send {
+				this.historySend(env, channel, reading, at, &outcome)
+			}
+		}
 	}
 	channel.record(outcome)
 }
@@ -502,7 +532,7 @@ func (this *Runtime) historyEvaluateChange(env *environment, gen *generation, ch
 	}
 	this.dispatch(env, gen, channel.binding, nil, func(value interface{}) {
 		channel.pending.put(value)
-		this.covGate(env, channel.binding, value, false, at, send)
+		this.covGate(env, channel.binding, channel.faultMemory, value, false, at, send)
 	}, true, at)
 
 	if outcome.published > 0 {
@@ -516,7 +546,7 @@ func (this *Runtime) historyEvaluateChange(env *environment, gen *generation, ch
 		//standing, so the next evaluation is owed the heartbeat instead
 		if value, known := channel.pending.get(); known {
 			env.mux.Lock()
-			this.covGate(env, channel.binding, value, true, at, send)
+			this.covGate(env, channel.binding, channel.faultMemory, value, true, at, send)
 			env.mux.Unlock()
 			//restarted on the attempt whether or not it went out, mirroring the
 			//live runner: keeping the old moment would make every following

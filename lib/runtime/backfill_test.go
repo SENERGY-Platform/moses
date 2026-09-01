@@ -1093,3 +1093,57 @@ func TestBackfillThroughput(t *testing.T) {
 		t.Errorf("the loop needs %v per reading with the platform faked away, which is too much to be the loop itself", perReading)
 	}
 }
+
+// TestBackfillThroughputWithFaults is the same measurement at the cost ceiling of
+// the injected faults: the full eight per channel, every one of them drawn, and
+// each one looking back over the full 64 evaluation steps. That is 512 hash draws
+// per reading, the most a document can ask for, and it is worth measuring because
+// nothing in the volume check accounts for it.
+func TestBackfillThroughputWithFaults(t *testing.T) {
+	if testing.Short() {
+		t.Skip("throughput measurement")
+	}
+	//the detector costs about a factor of five on this loop - 102 microseconds
+	//per reading against 20 without it - so the bound below would be measuring
+	//the detector rather than the work. The plain run measures it.
+	if raceEnabled {
+		t.Skip("throughput under the race detector is the detector's number, not the loop's")
+	}
+	const id = "env-bf-rate-faults"
+	channel := profileChannel("ch-1", serviceRefOf(id), 1, hourlyProfile())
+	for i := 0; i < domain.MaxChannelFaults; i++ {
+		//a one second evaluation step, so 64 seconds is the full lookback; the rate
+		//is low enough that the readings still mostly go out
+		channel.Faults = append(channel.Faults, domain.Fault{
+			Kind: domain.FaultSpike, PerHour: 1, DurationSeconds: domain.MaxFaultLookbackSlots, Factor: 1.01,
+		})
+	}
+	env := testEnvironment(id, channel)
+	if err := domain.Validate(env); err != nil {
+		t.Fatalf("the worst case has to be a storable document: %v", err)
+	}
+	publisher := &fakePublisher{}
+	rt := startRuntime(t, testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), publisher)
+
+	const readings = 50000
+	from := backfillFrom
+	to := from.Add(readings * time.Second)
+
+	started := time.Now()
+	if _, err := rt.StartBackfill(id, from, to); err != nil {
+		t.Fatalf("unable to start the backfill: %v", err)
+	}
+	status := waitForBackfill(t, rt, id)
+	elapsed := time.Since(started)
+
+	if status.Published == 0 {
+		t.Fatal("the worst case published nothing at all")
+	}
+	perReading := elapsed / time.Duration(status.Published)
+	t.Logf("%d readings in %v, %v per reading, %.0f per second, with %d drawn faults of %d steps lookback each",
+		status.Published, elapsed, perReading, float64(status.Published)/elapsed.Seconds(),
+		domain.MaxChannelFaults, domain.MaxFaultLookbackSlots)
+	if perReading > 100*time.Microsecond {
+		t.Errorf("the loop needs %v per reading at the fault cost ceiling, which is too much to be the loop itself", perReading)
+	}
+}

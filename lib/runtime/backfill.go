@@ -601,6 +601,15 @@ func (this *Runtime) runBackfillChannel(ctx context.Context, job *backfillJob, g
 	var lastPublished *float64
 	lastPublishedAt := from.Unix()
 
+	//the injected faults are reproduced the same way, and resolved locally rather
+	//than read off the generation: the job walks the definition, and both
+	//resolutions have to answer the same question about the same step. The offsets
+	//of a meter exchange are the job's own, so a reconstructed window never touches
+	//what the live simulation counted from.
+	faults, _ := newChannelFaults(gen.def.Seed, channel.channel, step)
+	faultMemory := &faultRun{}
+	exchanges := map[string]float64{}
+
 	for i := int64(0); i < steps; i++ {
 		if ctx.Err() != nil {
 			return
@@ -616,6 +625,27 @@ func (this *Runtime) runBackfillChannel(ctx context.Context, job *backfillJob, g
 		if !ok {
 			status.Silent++
 			continue
+		}
+		//the fault sits between the computed value and the send, exactly as it does
+		//live: the counter above has already advanced on the undisturbed value, and
+		//a frozen or spiked reading is what the comparison below sees.
+		if len(faults.list) > 0 {
+			var send bool
+			value, send = faultedReading(faults, faultMemory, exchanges, value, at)
+			if !send {
+				//suppressed, and counted as silent for the same reason a value that
+				//was never produced is
+				status.Silent++
+				//the heartbeat of the live runner fires and resets its timer whether
+				//or not anything went out, and the history run advances
+				//lastAttemptUnix the same way; without this mirror a suppressed
+				//heartbeat would leave the gap standing here and the two paths would
+				//diverge by up to one heartbeat at the trailing edge of the outage
+				if hasCov && at.Unix()-lastPublishedAt >= interval {
+					lastPublishedAt = at.Unix()
+				}
+				continue
+			}
 		}
 		if hasCov && !covBackfillSends(cov, lastPublished, lastPublishedAt, value, at, interval) {
 			//suppressed, and counted as silent for the same reason a value that

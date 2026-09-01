@@ -186,7 +186,18 @@ func (this *Runtime) covSend(env *environment, binding channelBinding, value int
 // sees the old comparison base and retries without a queue to maintain. now is
 // the instant of the evaluation and becomes the stored publish moment, so the
 // bookkeeping follows the clock the run is driven by.
-func (this *Runtime) covGate(env *environment, binding channelBinding, value interface{}, forced bool, now time.Time, send func(value interface{}) bool) bool {
+//
+// The injected faults are applied at the head, ahead of the threshold: a frozen
+// reading has to look unchanged to the comparison and fall back to the heartbeat,
+// a spike has to publish the outlier and the return to normal, and an outage has
+// to leave the comparison base exactly where it was. run is the fault memory of
+// the caller's own runner, which is why it is a parameter rather than a field of
+// the binding two goroutines share.
+func (this *Runtime) covGate(env *environment, binding channelBinding, run *faultRun, value interface{}, forced bool, now time.Time, send func(value interface{}) bool) bool {
+	value, unfaulted := this.faulted(env, binding, run, value, now)
+	if !unfaulted {
+		return false
+	}
 	number, numeric := asFloat(value)
 	if !numeric {
 		//fail open: a channel whose script sends a string or a boolean has no
@@ -228,8 +239,8 @@ func (this *Runtime) covGate(env *environment, binding channelBinding, value int
 
 // covPublish is the live gate: covGate sending through covSend, so a channel
 // the platform keeps refusing is logged once rather than on every evaluation.
-func (this *Runtime) covPublish(env *environment, binding channelBinding, value interface{}, forced bool, logs *covLogGate, now time.Time) bool {
-	return this.covGate(env, binding, value, forced, now, func(value interface{}) bool {
+func (this *Runtime) covPublish(env *environment, binding channelBinding, run *faultRun, value interface{}, forced bool, logs *covLogGate, now time.Time) bool {
+	return this.covGate(env, binding, run, value, forced, now, func(value interface{}) bool {
 		return this.covSend(env, binding, value, logs)
 	})
 }
@@ -257,13 +268,16 @@ func (this *Runtime) runChangeChannel(ctx context.Context, env *environment, gen
 	defer heartbeat.Stop()
 	pending := &latest{}
 	logs := &covLogGate{}
+	//one fault memory per runner, touched by this goroutine alone: the evaluation
+	//and the heartbeat are two cases of one select
+	faultMemory := &faultRun{}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-evaluate.C:
-			if this.evaluateChangeChannel(env, gen, binding, pending, logs, time.Now()) {
+			if this.evaluateChangeChannel(env, gen, binding, faultMemory, pending, logs, time.Now()) {
 				heartbeat.Reset(heartbeatEvery)
 			}
 		case <-heartbeat.C:
@@ -276,7 +290,7 @@ func (this *Runtime) runChangeChannel(ctx context.Context, env *environment, gen
 			//shape every document has - makes both due at the same moment on every
 			//heartbeat. Taking the heartbeat first would publish the current or the
 			//previous value on a coin toss.
-			if this.dueEvaluation(evaluate, env, gen, binding, pending, logs, now) {
+			if this.dueEvaluation(evaluate, env, gen, binding, faultMemory, pending, logs, now) {
 				//that evaluation published, so the gap starts again and this
 				//heartbeat is not owed any more: sending the same value a second
 				//time in the same instant is the duplicate reading the reset
@@ -295,7 +309,7 @@ func (this *Runtime) runChangeChannel(ctx context.Context, env *environment, gen
 				continue
 			}
 			env.mux.Lock()
-			this.covPublish(env, binding, value, true, logs, now)
+			this.covPublish(env, binding, faultMemory, value, true, logs, now)
 			env.mux.Unlock()
 			//reset whether or not it went out: a failed publish must not end the
 			//heartbeat for good, and the next one is a full gap away rather than
@@ -312,11 +326,13 @@ func (this *Runtime) runChangeChannel(ctx context.Context, env *environment, gen
 // A script may call send zero or several times in one run: each of those values
 // goes through the gate on its own, and the heartbeat is reset once, by the
 // caller, after the run.
-func (this *Runtime) evaluateChangeChannel(env *environment, gen *generation, binding channelBinding, pending *latest, logs *covLogGate, now time.Time) bool {
+func (this *Runtime) evaluateChangeChannel(env *environment, gen *generation, binding channelBinding, run *faultRun, pending *latest, logs *covLogGate, now time.Time) bool {
 	published := false
 	this.dispatch(env, gen, binding, nil, func(value interface{}) {
+		//the undisturbed value: what the heartbeat repeats is the reading, and the
+		//fault is applied again at the instant the heartbeat fires
 		pending.put(value)
-		if this.covPublish(env, binding, value, false, logs, now) {
+		if this.covPublish(env, binding, run, value, false, logs, now) {
 			published = true
 		}
 	}, true, now)
@@ -327,10 +343,10 @@ func (this *Runtime) evaluateChangeChannel(env *environment, gen *generation, bi
 // there is one, and reports whether it published. It never blocks: with nothing
 // waiting it does nothing at all, which is the case of a heartbeat that falls
 // between two evaluations.
-func (this *Runtime) dueEvaluation(evaluate *time.Ticker, env *environment, gen *generation, binding channelBinding, pending *latest, logs *covLogGate, now time.Time) bool {
+func (this *Runtime) dueEvaluation(evaluate *time.Ticker, env *environment, gen *generation, binding channelBinding, run *faultRun, pending *latest, logs *covLogGate, now time.Time) bool {
 	select {
 	case <-evaluate.C:
-		return this.evaluateChangeChannel(env, gen, binding, pending, logs, now)
+		return this.evaluateChangeChannel(env, gen, binding, run, pending, logs, now)
 	default:
 		return false
 	}

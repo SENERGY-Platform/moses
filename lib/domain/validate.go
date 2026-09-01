@@ -606,6 +606,7 @@ func (this *validator) checkChannel(path string, channel Channel) {
 	if channel.PublishOnChange != nil {
 		this.checkPublishOnChange(path, channel)
 	}
+	this.checkFaults(path, channel)
 	this.checkSource(path+".source", channel.Source)
 	if channel.Source.Kind == SourceProfile && (channel.Direction != Sensor || channel.IntervalSeconds <= 0) {
 		this.fail(path, "a profile source computes when the channel publishes, so the channel must be a sensor with an interval")
@@ -676,6 +677,176 @@ func (this *validator) checkPublishOnChange(path string, channel Channel) {
 	if evaluateEvery > 0 && channel.IntervalSeconds > 0 && evaluateEvery > channel.IntervalSeconds {
 		this.fail(cadencePath, "the value would be computed every %d seconds while the heartbeat fires every %d, so the heartbeat would always be first and the trigger would never publish anything; evaluate at least as often as the heartbeat",
 			evaluateEvery, channel.IntervalSeconds)
+	}
+}
+
+// checkFaults refuses an injected fault that could not do what it reads like: a
+// defect that never occurs, one drawn faster than the channel is evaluated, one
+// whose occurrence cannot be found again from the instant alone, or one on a
+// channel that publishes nothing to disturb. Overlapping windows are deliberately
+// allowed - they compose in document order.
+func (this *validator) checkFaults(path string, channel Channel) {
+	if len(channel.Faults) == 0 {
+		return
+	}
+	faultsPath := path + ".faults"
+	if len(channel.Faults) > MaxChannelFaults {
+		//refused without walking the list, the way the timeline is: an untrusted
+		//document must not be able to turn one refusal into thousands
+		this.fail(faultsPath, "a channel may carry at most %d faults, got %d", MaxChannelFaults, len(channel.Faults))
+		return
+	}
+	//reported once for the channel and not once per fault, and the walk goes on:
+	//everything else about the faults is still worth naming in the same round trip
+	if channel.Direction != Sensor || channel.IntervalSeconds <= 0 {
+		this.fail(faultsPath, "a fault disturbs a reading, so it needs a sensor channel with an interval to disturb")
+	}
+	step := channelStepSeconds(channel)
+	//the instant is the whole identity of the offset a meter exchange stores, so
+	//two of them at one instant would share it and the second would restart the
+	//register on the first one's offset
+	exchanged := map[int64]int{}
+	for i := range channel.Faults {
+		path := fmt.Sprintf("%s[%d]", faultsPath, i)
+		this.checkFault(path, channel, channel.Faults[i], step)
+		fault := channel.Faults[i]
+		if fault.Kind != FaultMeterExchange || fault.From.IsZero() {
+			continue
+		}
+		if previous, taken := exchanged[fault.From.Unix()]; taken {
+			this.fail(path+".from", "faults[%d] already exchanges the meter of this channel at that instant, and the two would restart one register from one stored offset; a meter is exchanged once per moment", previous)
+			continue
+		}
+		exchanged[fault.From.Unix()] = i
+	}
+}
+
+// checkFault applies the rules of one fault. The kind decides all of them, so an
+// unknown one stops here rather than producing a list of complaints about fields
+// nobody can say whether they belong.
+func (this *validator) checkFault(path string, channel Channel, fault Fault, stepSeconds int64) {
+	if !validFaultKind(fault.Kind) {
+		this.fail(path+".kind", "unknown fault kind %q, expected one of %v", fault.Kind, faultKinds())
+		return
+	}
+	windowed := !fault.From.IsZero() || !fault.To.IsZero()
+	rated := fault.PerHour != 0 || fault.DurationSeconds != 0
+	switch {
+	case windowed && rated:
+		this.fail(path, "a fault is either dated - from and to - or drawn at a rate - per_hour and duration_seconds - and this one carries both, so which of the two decides when it occurs follows from nothing the document says")
+		return
+	case !windowed && !rated:
+		this.fail(path, "a fault needs either a window (from, and to unless it is a meter exchange) or a rate (per_hour and duration_seconds), otherwise it never occurs at all")
+		return
+	}
+	if windowed {
+		this.checkFaultWindow(path, fault)
+	} else {
+		if fault.Kind == FaultMeterExchange {
+			this.fail(path+".per_hour", "a meter exchange happens at one instant and is not drawn at a rate; declare it with from alone")
+		}
+		this.checkFaultRate(path, fault, stepSeconds)
+	}
+	this.checkFaultFields(path, channel, fault)
+}
+
+// checkFaultWindow applies the two dated-change rules to a window: an instant the
+// simulation can compare on, and a span that is not empty. A meter exchange is
+// the one kind with no end - the new register keeps counting.
+func (this *validator) checkFaultWindow(path string, fault Fault) {
+	this.checkFaultAt(path+".from", fault.From)
+	if fault.Kind == FaultMeterExchange {
+		if !fault.To.IsZero() {
+			this.fail(path+".to", "a meter exchange is one instant: the new register keeps counting from that moment on, so there is nothing for to to end")
+		}
+		return
+	}
+	this.checkFaultAt(path+".to", fault.To)
+	if fault.From.IsZero() || fault.To.IsZero() {
+		return
+	}
+	if !fault.From.Before(fault.To) {
+		this.fail(path+".to", "must lie after from: to is exclusive, so an empty window is a fault that never occurs")
+	}
+}
+
+// checkFaultAt is checkTimelineAt for a fault instant, and deliberately the same
+// rule: both are compared through Unix() on the second grid, and the store
+// truncates to milliseconds either way.
+func (this *validator) checkFaultAt(path string, at time.Time) {
+	switch {
+	case at.IsZero():
+		this.fail(path, "must be set, as an RFC3339 timestamp")
+	case at.Nanosecond() != 0:
+		this.fail(path, "must be a whole second: every clock decision of the simulation is made on the second grid and the store truncates to milliseconds, so a fraction here would be one instant in the document and another one after a round trip")
+	case at.Before(minTimelineTime) || at.After(maxTimelineTime):
+		this.fail(path, "must lie between %s and %s", minTimelineTime.Format(time.RFC3339), maxTimelineTime.Format(time.RFC3339))
+	}
+}
+
+// checkFaultRate applies the rules a drawn occurrence has to satisfy to be
+// reproducible from the instant alone: one draw per evaluation step decides
+// whether an occurrence begins there, and a running one is found by looking back
+// over the steps it can still cover.
+func (this *validator) checkFaultRate(path string, fault Fault, stepSeconds int64) {
+	switch {
+	case math.IsNaN(fault.PerHour) || math.IsInf(fault.PerHour, 0):
+		this.fail(path+".per_hour", "must be a finite number")
+	case !(fault.PerHour > 0):
+		this.fail(path+".per_hour", "must be greater than zero, otherwise the fault never occurs")
+	}
+	if fault.DurationSeconds < 1 {
+		this.fail(path+".duration_seconds", "must be at least one second: an occurrence of no length is never observed")
+		return
+	}
+	if stepSeconds <= 0 {
+		return
+	}
+	//ceil in integers, and by division rather than by (duration+step-1)/step: an
+	//absurd duration from a hand written document would overflow the sum
+	lookback := fault.DurationSeconds / stepSeconds
+	if fault.DurationSeconds%stepSeconds != 0 {
+		lookback++
+	}
+	if lookback > MaxFaultLookbackSlots {
+		this.fail(path+".duration_seconds", "an occurrence of %d seconds spans %d evaluation steps of %d seconds each, and a running one is found by looking back at most %d steps; shorten it, evaluate less often, or declare it as a window with from and to",
+			fault.DurationSeconds, lookback, stepSeconds, MaxFaultLookbackSlots)
+	}
+	if fault.PerHour > 0 && fault.PerHour*float64(stepSeconds)/3600 > 1 {
+		this.fail(path+".per_hour", "at %v occurrences per hour and one evaluation every %d seconds more than one occurrence would begin per step, which a single draw per step cannot express; lower the rate or evaluate more often",
+			fault.PerHour, stepSeconds)
+	}
+}
+
+// checkFaultFields checks the two numbers a fault carries against the kind that
+// reads them. A field the kind ignores is refused rather than dropped: it is a
+// defect the author described and the simulation would not produce.
+func (this *validator) checkFaultFields(path string, channel Channel, fault Fault) {
+	if fault.Kind == FaultSpike {
+		switch {
+		case math.IsNaN(fault.Factor) || math.IsInf(fault.Factor, 0):
+			this.fail(path+".factor", "must be a finite number")
+		case fault.Factor == 1:
+			this.fail(path+".factor", "a factor of 1 leaves the reading as it is, so the spike would be invisible in the series; a factor of 0 is the sensor that reads nothing and is allowed")
+		}
+	} else if fault.Factor != 0 {
+		this.fail(path+".factor", "only a spike scales the reading, and a %q fault would ignore this field", fault.Kind)
+	}
+
+	if fault.Kind != FaultMeterExchange {
+		if fault.ResetTo != 0 {
+			this.fail(path+".reset_to", "only a meter exchange restarts a register, and a %q fault would ignore this field", fault.Kind)
+		}
+		return
+	}
+	switch {
+	case math.IsNaN(fault.ResetTo) || math.IsInf(fault.ResetTo, 0):
+		this.fail(path+".reset_to", "must be a finite number")
+	case fault.ResetTo < 0:
+		this.fail(path+".reset_to", "must not be negative: it is the reading the new register starts at, and a meter does not count below zero")
+	}
+	if !CumulativeSource(channel.Source) {
+		this.fail(path+".kind", "a meter exchange restarts a register, so it only applies to a channel whose reading counts up: a profile or a dataset with cumulative set")
 	}
 }
 

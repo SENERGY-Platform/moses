@@ -82,6 +82,7 @@ Everything the runtime keeps for the environment:
 | `last_published` of a change trigger | rebuilt by the run's own publishes, so the live channel compares against what the run last sent |
 | schedule anchors | created at the virtual start; a gated programme starts at the rising edge of its context key **inside** the window |
 | the value cache behind formulas and aggregates | filled by the run's own ticks |
+| the offsets of an injected `meter_exchange` | rebuilt over the window and handed over, so the live channel continues on the new register (`docs/injected-faults.md`) |
 | a context key the timeline governs | seeded with the value it stands at at `from`, and read against the virtual instant from there (`docs/dated-changes.md`) |
 
 A value that survived from the live simulation would be a value from the future,
@@ -158,6 +159,9 @@ that row is written synchronously in the same call.
 - **A run is not idempotent.** Running the same window twice writes every row
   twice; the `409` prevents it concurrently, not sequentially.
 - **A failed reading is counted and named, not retried.**
+- **A reading an injected fault suppresses is counted as silent, never as
+  failed**: nothing was attempted, so nothing could be refused
+  (`docs/injected-faults.md`).
 - **A run that panicked reports no per-channel breakdown**, only the counters the
   progress reports left behind: the engine returns nothing in that case.
 - **The virtual clock has no state history of its own.** The run produces the

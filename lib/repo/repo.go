@@ -108,6 +108,18 @@ type RuntimeState struct {
 	// collide with the state keys the schedule itself writes there.
 	ScheduleRuns map[string]ScheduleRun `json:"schedule_runs,omitempty" bson:"schedule_runs,omitempty"`
 
+	// MeterExchanges holds, per injected meter exchange that has already
+	// happened, the offset the new register counts from - the difference between
+	// the reading the fault declares and the undisturbed one at the moment of the
+	// exchange. It has to survive a restart, or an exchanged meter would jump back
+	// to its old reading on the next deployment.
+	//
+	// A sibling of Anchors, LastPublished and ScheduleRuns, for the same reasons:
+	// runtime bookkeeping no client can reach, kept out of the asset map so it
+	// cannot collide with the meter reading a cumulative profile stores there. The
+	// key is built by meterExchangeKey in lib/runtime.
+	MeterExchanges map[string]float64 `json:"meter_exchanges,omitempty" bson:"meter_exchanges,omitempty"`
+
 	// Approaching holds the zone values that are moving towards a set point,
 	// keyed by zone id and state key. It is stored, so a restart continues an
 	// approach instead of jumping to its target.

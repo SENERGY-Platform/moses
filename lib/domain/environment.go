@@ -208,6 +208,12 @@ type Channel struct {
 	// document stored before this field existed does.
 	PublishOnChange *ChangeTrigger `json:"publish_on_change,omitempty" bson:"publish_on_change,omitempty"`
 
+	// Faults are the defects injected into this channel's measurement: an
+	// outage, a frozen reading, a spike, a meter exchange. Empty is the ordinary
+	// case and the behaviour of every document stored before this field existed;
+	// the simulation itself never sees them, see docs/injected-faults.md.
+	Faults []Fault `json:"faults,omitempty" bson:"faults,omitempty"`
+
 	Source Source `json:"source" bson:"source"`
 }
 

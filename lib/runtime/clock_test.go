@@ -114,7 +114,7 @@ func TestCovGateBooksThePublishAtTheInstantItWasGiven(t *testing.T) {
 
 	//nothing published yet, so the first finite value goes out without a
 	//comparison
-	if !rt.covGate(env, binding, 230.0, false, clockT, send) {
+	if !rt.covGate(env, binding, &faultRun{}, 230.0, false, clockT, send) {
 		t.Fatal("expected the first value to be published")
 	}
 	booked := env.state.LastPublished["ch-1"]
@@ -125,7 +125,7 @@ func TestCovGateBooksThePublishAtTheInstantItWasGiven(t *testing.T) {
 	//a heartbeat carrying a value that is not finite: it is sent, and the
 	//bookkeeping is left exactly as it was
 	later := clockT.Add(time.Minute)
-	if !rt.covGate(env, binding, math.NaN(), true, later, send) {
+	if !rt.covGate(env, binding, &faultRun{}, math.NaN(), true, later, send) {
 		t.Fatal("expected a forced publish to go out")
 	}
 	if again := env.state.LastPublished["ch-1"]; again != booked {

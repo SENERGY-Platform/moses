@@ -795,6 +795,8 @@ func (this *Runtime) runChannel(ctx context.Context, env *environment, gen *gene
 	}
 	ticker := time.NewTicker(time.Duration(binding.channel.IntervalSeconds) * time.Second)
 	defer ticker.Stop()
+	//one fault memory per runner, touched by this goroutine alone
+	faultMemory := &faultRun{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -803,6 +805,12 @@ func (this *Runtime) runChannel(ctx context.Context, env *environment, gen *gene
 			now := time.Now()
 			//input is nil on a tick, as it was for a legacy sensor service
 			this.dispatch(env, gen, binding, nil, func(value interface{}) {
+				//env.mux is held here: every executor calls send inside its own run
+				//under it, which is the same precondition covGate states
+				value, send := this.faulted(env, binding, faultMemory, value, now)
+				if !send {
+					return
+				}
 				this.publish(env, binding, value)
 			}, true, now)
 		}
@@ -820,6 +828,9 @@ func (this *Runtime) runSplitChannel(ctx context.Context, env *environment, gen 
 	pending := &latest{}
 	source := time.NewTicker(time.Duration(binding.sourceInterval) * time.Second)
 	defer source.Stop()
+	//one fault memory per runner: the source half and the publish half are two
+	//cases of the one select below, so this goroutine is its only writer
+	faultMemory := &faultRun{}
 
 	publishes := binding.channel.Direction == domain.Sensor && binding.channel.IntervalSeconds > 0
 	var publishC <-chan time.Time
@@ -839,8 +850,25 @@ func (this *Runtime) runSplitChannel(ctx context.Context, env *environment, gen 
 			//nothing to send before the source has run once. Skipping is right
 			//rather than sending a zero value: the channel carries a unit, and a
 			//fabricated reading is worse than a missing one.
-			if value, ok := pending.get(); ok {
+			value, ok := pending.get()
+			if !ok {
+				continue
+			}
+			//a channel without faults publishes exactly as it did before this
+			//existed, and in particular does not take a mutex this branch never
+			//needed - the other hooks sit inside a dispatch that holds it anyway
+			if len(binding.faults.list) == 0 {
 				this.publish(env, binding, value)
+				continue
+			}
+			now := time.Now()
+			//this branch runs outside a dispatch, so it takes the environment mutex
+			//itself; faulted reads and writes the persisted meter offsets
+			env.mux.Lock()
+			reading, send := this.faulted(env, binding, faultMemory, value, now)
+			env.mux.Unlock()
+			if send {
+				this.publish(env, binding, reading)
 			}
 		}
 	}

@@ -204,6 +204,11 @@ type channelBinding struct {
 	// document byte identical.
 	stepSeconds int64
 
+	// faults are the resolved injected faults of this channel, empty for a
+	// channel that declares none. They are resolved against stepSeconds, so the
+	// field has to be filled after stepSeconds is final.
+	faults channelFaults
+
 	// points is the parsed series of a dataset channel, loaded at start.
 	points []dataset.Point
 
@@ -483,6 +488,18 @@ func (this *generation) addAsset(envId string, zoneId string, asset domain.Asset
 			binding.cov = &cov
 			binding.stepSeconds = cov.evalSeconds
 		}
+		//after stepSeconds is final: a drawn occurrence is placed on the evaluation
+		//grid, and resolving against the publish interval instead would put the
+		//live channel and a reconstruction of the same window on two different grids
+		faults, unusable := newChannelFaults(this.def.Seed, channel, binding.stepSeconds)
+		for _, reason := range unusable {
+			//validation refuses every one of these, so the document bypassed the api
+			//or was written for a later version of the format. The channel keeps
+			//running undisturbed, which is the honest fallback.
+			util.Logger.Warn("an injected fault of this channel is unusable and does nothing",
+				"environment", envId, "channel", channel.Id, "reason", reason)
+		}
+		binding.faults = faults
 		//a source interval makes the channel tick even when nothing is published
 		//on a schedule: that is a state the other channels of the asset read
 		if publishes || binding.sourceInterval > 0 {
@@ -769,6 +786,30 @@ func (this *environment) carryLastValues(gen *generation) {
 		}
 	}
 
+	// and the same prune again for the captured meter offsets: an entry belongs
+	// to one exchange of one channel at one instant, so once that fault is gone
+	// from the document - removed, redated, or the channel with it - nothing reads
+	// it again and it would be written out on every flush forever. The key comes
+	// from meterExchangeKey here as it does at the writer, so the two cannot drift
+	// apart and leave the map growing - or, worse, drop an offset that is still in
+	// use and restart a live register.
+	if len(this.state.MeterExchanges) > 0 {
+		exchanged := map[string]bool{}
+		for _, binding := range gen.sensors {
+			for _, fault := range binding.faults.list {
+				if fault.kind == domain.FaultMeterExchange {
+					exchanged[meterExchangeKey(binding.channel.Id, fault.fromUnix)] = true
+				}
+			}
+		}
+		for key := range this.state.MeterExchanges {
+			if !exchanged[key] {
+				delete(this.state.MeterExchanges, key)
+				this.dirty = true
+			}
+		}
+	}
+
 	for _, binding := range gen.sensors {
 		profile := binding.channel.Source.Profile
 		if binding.channel.Source.Kind != domain.SourceProfile || profile == nil || !profile.Cumulative {
@@ -861,6 +902,12 @@ func (this *environment) snapshot() repo.RuntimeState {
 		result.ScheduleRuns = make(map[string]repo.ScheduleRun, len(this.state.ScheduleRuns))
 		for id, run := range this.state.ScheduleRuns {
 			result.ScheduleRuns[id] = run
+		}
+	}
+	if len(this.state.MeterExchanges) > 0 {
+		result.MeterExchanges = make(map[string]float64, len(this.state.MeterExchanges))
+		for key, offset := range this.state.MeterExchanges {
+			result.MeterExchanges[key] = offset
 		}
 	}
 	if len(this.state.Approaching) > 0 {

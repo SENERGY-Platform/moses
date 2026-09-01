@@ -33,6 +33,12 @@ once per `interval_seconds` (the heartbeat). That is what real metering
 hardware does, and the last published value is persisted so a restart produces
 no burst of transients — see `docs/publish-on-change.md`.
 
+A sensor channel can also carry `faults`: an outage, a frozen reading, a spike
+or a meter exchange, either dated or drawn at a rate from the seed. The defect
+sits in the *measurement*, so the simulation itself keeps the undisturbed value
+and the ground truth is available to measure a detection against — see
+`docs/injected-faults.md`.
+
 A `schedule` channel writes the name of the state it is in into the asset
 state, along with the values that state declares (the air a running machine
 consumes), so a formula, the live state and a dashboard read what the plant is

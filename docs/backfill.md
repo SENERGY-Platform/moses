@@ -174,7 +174,11 @@ Three consequences are worth knowing before reading such a dataset:
   refused for the same channel with a ten second evaluation.
 - **A suppressed instant counts as silent.** Published plus silent plus failed
   is still the number of steps of the grid, only the grid is now the evaluation
-  one.
+  one. An instant an injected fault suppresses is the third cause of a silent
+  step, next to a value that was never produced and one that did not move far
+  enough; and when such an instant was a heartbeat firing, the job spends the gap
+  anyway, because the live timer is reset by the attempt — see
+  `docs/injected-faults.md`.
 - **A heartbeat lands up to one evaluation late** when the heartbeat interval is
   not a whole multiple of the evaluation interval: the job publishes at the first
   grid instant at which the gap has run, and there is no grid instant in between.
@@ -206,6 +210,10 @@ the job holds no part of its state:
   channel jump weeks in its data.
 - **A cumulative profile counts in a counter local to the job**, from zero. The
   live meter reading in the asset state is left where it is.
+- **An injected `meter_exchange` captures its offset in a map local to the job.**
+  The persisted `meter_exchanges` of the live channel is neither read nor
+  written, so a reconstruction cannot move the register the live simulation
+  counts on — see `docs/injected-faults.md`.
 
 The consequence of the second one is visible in the data and is worth knowing:
 **the backfilled meter reading is a ramp of its own** and does not join up with
