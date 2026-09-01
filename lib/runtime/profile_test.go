@@ -85,6 +85,62 @@ func TestTheSpreadStaysInsideItsBounds(t *testing.T) {
 	}
 }
 
+// The spread has to separate the channels of one site, and the ids of one site
+// are the ones that differ least: ch-1 next to ch-2, or two platform service
+// urns differing in their last character. fnv-1a carries a byte upwards only
+// through the multiplications that follow it, so with the id hashed last those
+// pairs drew the same number to within 4e-7 of a span of 2 - a whole hall of
+// meters sharing one noise sequence, which is invisible in any single series.
+//
+// Measured rather than asserted on one instant: over 100k slots, two ids may not
+// land within a millionth of each other more often than independent draws would,
+// which for a uniform pair on [-1, 1) is about one slot in 1e6.
+func TestNeighbouringChannelIdsDrawDifferentSpread(t *testing.T) {
+	const slots = 100000
+	//one in a thousand: three orders of magnitude of headroom over the ~1e-6
+	//two independent draws would give, and four below the 100% the broken order
+	//produced
+	const tolerated = slots / 1000
+	for _, pair := range [][2]string{
+		{"ch-1", "ch-2"},
+		{"ch-23", "ch-24"},
+		{"urn:infai:ses:service:aaa", "urn:infai:ses:service:aab"},
+	} {
+		near := 0
+		for slot := int64(0); slot < slots; slot++ {
+			if math.Abs(spreadDraw(4711, pair[0], slot)-spreadDraw(4711, pair[1], slot)) < 1e-6 {
+				near++
+			}
+		}
+		if near > tolerated {
+			t.Errorf("%v and %v drew within a millionth of each other in %d of %d slots, which is not two draws of their own",
+				pair[0], pair[1], near, slots)
+		}
+	}
+}
+
+// The same for the two axes the id must not have broken: one channel's draw has
+// to move from slot to slot and from seed to seed.
+func TestOneChannelsSpreadMovesWithTheSlotAndTheSeed(t *testing.T) {
+	const slots = 100000
+	const tolerated = slots / 1000
+	nearSlot, nearSeed := 0, 0
+	for slot := int64(0); slot < slots; slot++ {
+		if math.Abs(spreadDraw(4711, "ch-1", slot)-spreadDraw(4711, "ch-1", slot+1)) < 1e-6 {
+			nearSlot++
+		}
+		if math.Abs(spreadDraw(4711, "ch-1", slot)-spreadDraw(4712, "ch-1", slot)) < 1e-6 {
+			nearSeed++
+		}
+	}
+	if nearSlot > tolerated {
+		t.Errorf("two neighbouring slots drew within a millionth of each other %d times in %d", nearSlot, slots)
+	}
+	if nearSeed > tolerated {
+		t.Errorf("two neighbouring seeds drew within a millionth of each other %d times in %d", nearSeed, slots)
+	}
+}
+
 func TestMondayBased(t *testing.T) {
 	if mondayBased(time.Monday) != 0 || mondayBased(time.Sunday) != 6 || mondayBased(time.Saturday) != 5 {
 		t.Errorf("monday=%d sunday=%d saturday=%d", mondayBased(time.Monday), mondayBased(time.Sunday), mondayBased(time.Saturday))

@@ -57,15 +57,23 @@ func mondayBased(day time.Weekday) int {
 }
 
 // spreadDraw is a deterministic draw in [-1, 1).
+//
+// The channel id is hashed FIRST and the numbers after it, which is load
+// bearing rather than cosmetic: fnv-1a mixes each byte into the low bits and
+// carries it upwards only through the multiplications that follow, so whatever
+// is hashed last barely reaches the top 53 bits this reads. With the id last,
+// ch-1 and ch-2 drew spreads that differed by at most 4e-7 out of a span of 2 -
+// neighbouring meters of one site effectively shared their noise. The sixteen
+// number bytes behind the id are what avalanches it.
 func spreadDraw(seed int64, channelId string, slot int64) float64 {
 	h := fnv.New64a()
+	h.Write([]byte(channelId))
 	var buf [16]byte
 	for i := 0; i < 8; i++ {
 		buf[i] = byte(uint64(seed) >> (8 * i))
 		buf[8+i] = byte(uint64(slot) >> (8 * i))
 	}
 	h.Write(buf[:])
-	h.Write([]byte(channelId))
 	// top 53 bits, the float64 mantissa, mapped onto [-1, 1)
 	return float64(h.Sum64()>>11)/float64(1<<52) - 1
 }
