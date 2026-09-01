@@ -61,6 +61,12 @@ type environment struct {
 	// here.
 	lastValues map[string]float64
 
+	// timelineWarned remembers the context keys a script has already tried to
+	// write although the timeline governs them, guarded by mux like the state
+	// maps: the refusal is worth one line per key, and one per tick would bury
+	// the service log of a site whose scripts were written before the timeline.
+	timelineWarned map[string]bool
+
 	// saves counts the Save calls that have left the mutex but not yet returned.
 	// Remove waits for it before deleting the stored state, so that a flush in
 	// flight cannot resurrect the document of a deleted environment.
@@ -128,6 +134,12 @@ type generation struct {
 	// "is this device mine" for HandleCommand, which has to be answerable even
 	// for an asset whose channels cannot be executed.
 	deviceRefs map[string]bool
+
+	// timeline resolves the document's dated changes and is nil for a document
+	// without any. One index per generation, three consumers: the live runners,
+	// a backfill and a history run all read it, so the step they produce is the
+	// same one.
+	timeline *timelineIndex
 }
 
 // submeterCandidate is one accepted asset as the aggregate pass needs it:
@@ -237,6 +249,8 @@ func newGeneration(def domain.Environment, series map[string][]dataset.Point) *g
 		deviceRefs:      map[string]bool{},
 		aggregateInputs: map[string][]string{},
 		series:          series,
+		//a pure function of the definition, so it needs no pass of its own
+		timeline: newTimelineIndex(def),
 	}
 	result.addZones(def.Id, def.Zones, 1)
 	//second pass: the meter tree only exists once the whole document has been
@@ -491,12 +505,35 @@ func (this *generation) addAsset(envId string, zoneId string, asset domain.Asset
 	}
 }
 
+// contextSeed is the definition's context with every governed key resolved to
+// the value it stands at at.
+//
+// at is what separates the two starts: the live simulation seeds the value of
+// now, a history run the value of the instant its window begins at. Seeding
+// today's value into a run that starts a year ago would put the future into its
+// first tick.
+func (this *generation) contextSeed(at time.Time) map[string]interface{} {
+	if this.timeline == nil {
+		return this.def.Context
+	}
+	//a copy: the definition is shared by every consumer of this generation and
+	//is never written to
+	result := make(map[string]interface{}, len(this.def.Context))
+	for key, value := range this.def.Context {
+		result[key] = value
+	}
+	this.timeline.overlayContext(result, at)
+	return result
+}
+
 // seed fills in what the stored state does not have yet from the definition's
 // initial states. It never removes anything, since a zone or asset that is
 // currently not in the definition may come back with the next edit. The
 // definition itself is not touched, and the values are copied deeply, so a
 // script writing into a nested map cannot reach the exported document.
-func (this *environment) seed(gen *generation) {
+//
+// at is the instant the governed context keys are resolved to; see contextSeed.
+func (this *environment) seed(gen *generation, at time.Time) {
 	this.mux.Lock()
 	defer this.mux.Unlock()
 
@@ -512,7 +549,7 @@ func (this *environment) seed(gen *generation) {
 		this.state.Assets = map[string]map[string]interface{}{}
 	}
 
-	if seedInto(this.state.Context, gen.def.Context) {
+	if seedInto(this.state.Context, gen.contextSeed(at)) {
 		this.dirty = true
 	}
 	//creating the bucket of a zone or an asset is deliberately NOT a change:
@@ -538,6 +575,32 @@ func (this *environment) seed(gen *generation) {
 			this.dirty = true
 		}
 	}
+}
+
+// warnTimelineGoverned reports one script's attempt to write a context key the
+// timeline governs, once per key. It must be called with mux held, which every
+// script run holds for its whole execution.
+func (this *environment) warnTimelineGoverned(key string) {
+	if this.timelineWarned[key] {
+		return
+	}
+	if this.timelineWarned == nil {
+		this.timelineWarned = map[string]bool{}
+	}
+	this.timelineWarned[key] = true
+	util.Logger.Warn("a script set a context key the timeline governs, the write is dropped",
+		"environment", this.id, "key", key)
+}
+
+// forgetTimelineWarnings clears what warnTimelineGoverned has already reported.
+// It runs on every generation change, because what the timeline governs is a
+// property of the definition: a timeline that was removed and added again would
+// otherwise stay silent forever, on the strength of a line a previous generation
+// wrote about a document that no longer exists.
+func (this *environment) forgetTimelineWarnings() {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	this.timelineWarned = nil
 }
 
 // markUnderHistory closes the environment to everything that would mix the

@@ -44,7 +44,8 @@ func historyFixture(t *testing.T, def domain.Environment, series map[string][]da
 	gen := newGeneration(def, series)
 	env := &environment{id: def.Id, gen: gen, state: repo.RuntimeState{EnvironmentId: def.Id}}
 	env.resetForHistory()
-	env.seed(gen)
+	//seeded with the window start, exactly as StartHistory does
+	env.seed(gen, historyFrom)
 	return rt, env, gen
 }
 
@@ -314,7 +315,7 @@ func TestAHistoryRunDiscardsTheStateItStartedFrom(t *testing.T) {
 	env.lastValues = map[string]float64{"ch-1": 500000}
 
 	env.resetForHistory()
-	env.seed(gen)
+	env.seed(gen, historyFrom)
 	runEngine(t, rt, env, gen, historyFrom, historyFrom.Add(10*time.Minute))
 
 	values := historyValues(publisher, serviceRefOf(id))

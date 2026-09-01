@@ -59,7 +59,7 @@ func (this *Runtime) jsApi(env *environment, gen *generation, binding channelBin
 
 func (this *Runtime) jsEnvironmentApi(env *environment, gen *generation, now time.Time) map[string]interface{} {
 	return map[string]interface{}{
-		"state": jsStateApi(env, func() map[string]interface{} { return env.contextStates() }),
+		"state": jsContextStateApi(env, gen, now),
 		"getRoom": func(zoneId string) map[string]interface{} {
 			if _, known := gen.zones[zoneId]; !known {
 				util.Logger.Warn("no zone for id found", "environment", env.id, "id", zoneId)
@@ -119,6 +119,48 @@ func jsStateApi(env *environment, states func() map[string]interface{}) map[stri
 		"set": func(field string, value interface{}) {
 			states()[field] = value
 			env.dirty = true
+		},
+	}
+}
+
+// jsContextStateApi is the context scope of the script api. It differs from
+// every other scope in one thing: a key the document's timeline governs is
+// read-only here.
+//
+// get answers with the declared value of this instant and does not seed the key,
+// since seeding would persist a value the document decides. set is dropped with
+// one warning per key: a script writing such a key would be overwritten by the
+// next read anyway, and a value that looks set and is not is the harder failure
+// to find. Every other key behaves exactly as it did.
+func jsContextStateApi(env *environment, gen *generation, now time.Time) map[string]interface{} {
+	plain := jsStateApi(env, func() map[string]interface{} { return env.contextStates() })
+	if gen == nil || gen.timeline == nil {
+		return plain
+	}
+	get := plain["get"].(func(field string) interface{})
+	set := plain["set"].(func(field string, value interface{}))
+	return map[string]interface{}{
+		"get": func(field string) interface{} {
+			if !gen.timeline.governsContext(field) {
+				return get(field)
+			}
+			if value, governed := gen.timeline.effectiveContext(field, now); governed {
+				return value
+			}
+			//before the first change the inline value stands, and seeding put it
+			//into the state at start; a key that is missing anyway reads as 0
+			//without being written
+			if value, exists := env.contextStates()[field]; exists {
+				return value
+			}
+			return 0
+		},
+		"set": func(field string, value interface{}) {
+			if gen.timeline.governsContext(field) {
+				env.warnTimelineGoverned(field)
+				return
+			}
+			set(field, value)
 		},
 	}
 }

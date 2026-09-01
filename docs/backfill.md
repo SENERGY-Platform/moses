@@ -22,10 +22,12 @@ environment over that window and publishes every reading with the timestamp it
 would have had. `GET` on the same path follows the job.
 
 The arithmetic is the live arithmetic. `profileValue` and `replayValue` are
-functions of the instant alone, so the job is the same loop the live runtime
-runs, driven by a different clock. Seed plus window therefore determine the
-result: **the same document and the same window produce the same dataset**,
-which is what makes a model retrainable on it.
+functions of the instant alone — and so is the document's timeline, whose dated
+changes the job resolves against each instant it computes (`docs/dated-changes.md`),
+so a step lands at the same place here as it does live. The job is the same loop
+the live runtime runs, driven by a different clock. Seed plus window therefore
+determine the result: **the same document and the same window produce the same
+dataset**, which is what makes a model retrainable on it.
 
 ## The hard condition: `senergy/time_path`
 

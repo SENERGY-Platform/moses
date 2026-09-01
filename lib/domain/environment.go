@@ -105,8 +105,16 @@ type Environment struct {
 	ContextSources map[string]Source `json:"context_sources,omitempty" bson:"context_sources,omitempty"`
 
 	// Context is the shared surroundings every zone below can read: outdoor
-	// temperature, irradiation, calendar. Initial values only.
+	// temperature, irradiation, calendar. Initial values only - unless the
+	// timeline governs the key, see Timeline.
 	Context map[string]interface{} `json:"context" bson:"context"`
+
+	// Timeline carries the dated changes of this environment: a source parameter
+	// or a context value that takes effect at an instant, so a measure with a
+	// start date is one document with a step in it rather than two documents.
+	// Empty is the ordinary case and the behaviour of every document stored
+	// before this field existed. See docs/dated-changes.md.
+	Timeline []DatedChange `json:"timeline,omitempty" bson:"timeline,omitempty"`
 
 	Zones []Zone `json:"zones" bson:"zones"`
 }

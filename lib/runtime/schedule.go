@@ -263,7 +263,7 @@ func (this *Runtime) executeSchedule(env *environment, gen *generation, binding 
 	env.mux.Lock()
 	defer env.mux.Unlock()
 
-	run, open := this.scheduleRun(env, binding, source, now)
+	run, open := this.scheduleRun(env, gen, binding, source, now)
 	if !open {
 		//a closed gate is the machine standing still, and it has to say so in
 		//every value it writes: the name, every state write of every state, and
@@ -287,7 +287,9 @@ func (this *Runtime) executeSchedule(env *environment, gen *generation, binding 
 		this.storeScheduleRun(env, binding.channel.Id, run)
 	}
 
-	state := source.States[position.index]
+	//the value of this step as the timeline has it at this instant; the walk
+	//above is untouched by it, since durations are not governed
+	state := gen.timeline.effectiveScheduleState(binding.channel.Id, source.States[position.index], now)
 	this.writeScheduleStates(env, binding, source, state.Name, state.StateWrites)
 	send(scheduleValue(state, gen.def.Seed, binding.channel.Id, binding.stepSeconds, now))
 }
@@ -299,7 +301,7 @@ func (this *Runtime) executeSchedule(env *environment, gen *generation, binding 
 // The rising edge is the point of the gate: a schedule that merely paused
 // while closed would resume mid-state, so a shift break would just continue
 // the previous shift instead of starting the morning peak fresh.
-func (this *Runtime) scheduleRun(env *environment, binding channelBinding, source domain.ScheduleSource, now time.Time) (repo.ScheduleRun, bool) {
+func (this *Runtime) scheduleRun(env *environment, gen *generation, binding channelBinding, source domain.ScheduleSource, now time.Time) (repo.ScheduleRun, bool) {
 	id := binding.channel.Id
 	run, known := env.state.ScheduleRuns[id]
 
@@ -324,7 +326,12 @@ func (this *Runtime) scheduleRun(env *environment, binding channelBinding, sourc
 	//carrying something that is not a number, reads as 0 - which is a closed
 	//gate. A gate that defaulted to open would run every declared machine of a
 	//site through a shift nobody scheduled.
-	open := numericOrZero(env.contextStates()[source.Gate.ContextKey]) > source.Gate.Threshold
+	//
+	//Both sides go through the timeline: the key through the read-only layer,
+	//the threshold through its own target. A dated threshold takes effect at the
+	//next evaluation, which is the gate semantics that was already there.
+	threshold := gen.timeline.effectiveGateThreshold(id, source.Gate.Threshold, now)
+	open := this.contextValue(env, gen, source.Gate.ContextKey, now) > threshold
 	switch {
 	case open && (!known || !run.Open):
 		//the rising edge is a new pass: the anchor, the cycle counter and the

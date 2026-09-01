@@ -697,7 +697,10 @@ func (this *Runtime) backfillValue(gen *generation, channel backfillChannel, poi
 	source := channel.channel.Source
 	switch source.Kind {
 	case domain.SourceProfile:
-		value := profileValue(*source.Profile, gen.def.Seed, channel.channel.Id, stepSeconds, at)
+		//the same lookup the live tick and the history run make, against the same
+		//index: the step lands at the same instant in all three
+		profile := gen.timeline.effectiveProfile(domain.TimelineChannel, channel.channel.Id, *source.Profile, at)
+		value := profileValue(profile, gen.def.Seed, channel.channel.Id, stepSeconds, at)
 		if cumulative {
 			//the same share of an hourly rate the live tick adds
 			*counter += value * float64(stepSeconds) / 3600
@@ -705,7 +708,8 @@ func (this *Runtime) backfillValue(gen *generation, channel backfillChannel, poi
 		}
 		return value, true
 	case domain.SourceDataset:
-		return replayValue(*source.Dataset, points, anchor, at, stepSeconds)
+		replay := gen.timeline.effectiveDataset(domain.TimelineChannel, channel.channel.Id, *source.Dataset, at)
+		return replayValue(replay, points, anchor, at, stepSeconds)
 	}
 	return 0, false
 }

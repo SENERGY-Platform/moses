@@ -203,7 +203,10 @@ func (this *Runtime) StartHistory(id string, from time.Time) (HistoryStatus, err
 	this.stopRunners(id)
 	env.commands.Wait()
 	env.resetForHistory()
-	env.seed(gen)
+	//seeded with the window start, not with now: the run stands at from, and a
+	//governed context key seeded from today would put the future into its first
+	//tick
+	env.seed(gen, from)
 
 	util.Logger.Info("history run started", "environment", id, "from", from, "to", to,
 		"channels", len(gen.sensors), "context_sources", len(gen.def.ContextSources))

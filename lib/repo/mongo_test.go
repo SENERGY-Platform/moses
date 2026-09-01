@@ -242,6 +242,63 @@ func TestMongoGetDecodesFreeFormValuesTheWayTheLegacyDriverDid(t *testing.T) {
 	}
 }
 
+// TestMongoPutAndGetPreserveTheTimeline is the reason a dated change has to be a
+// whole second: the store keeps a time to the millisecond, so a whole second
+// survives the round trip untouched while a fraction below that does not. The
+// second case is what a document that got past validation would look like, and
+// it is asserted rather than left to be discovered in a series.
+func TestMongoPutAndGetPreserveTheTimeline(t *testing.T) {
+	store := testStore(t)
+	ctx := testContext(t)
+	whole := time.Date(2026, 10, 1, 4, 30, 15, 0, time.UTC)
+	env := testEnvironment("env-timeline", "Metallbau", "owner-1")
+	env.Timeline = []domain.DatedChange{
+		{At: whole, Target: "channel.channel-1.profile.base", Value: 180},
+		//refused by validation; here to pin what the store does with it
+		{At: whole.Add(1500 * time.Microsecond), Target: "context.price", Value: 0.41},
+	}
+
+	if _, err := store.Put(ctx, env); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Get(ctx, "env-timeline")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Timeline) != 2 {
+		t.Fatalf("the timeline came back as %#v", got.Timeline)
+	}
+	if !got.Timeline[0].At.Equal(whole) {
+		t.Errorf("a whole second has to survive the store unchanged, got %v", got.Timeline[0].At)
+	}
+	//the second the runtime compares on is what has to be preserved, and it is
+	//the same second whichever zone the value comes back in
+	if got.Timeline[0].At.Unix() != whole.Unix() {
+		t.Errorf("the unix second moved: %v against %v", got.Timeline[0].At.Unix(), whole.Unix())
+	}
+	if got.Timeline[0].Target != env.Timeline[0].Target || got.Timeline[0].Value != env.Timeline[0].Value {
+		t.Errorf("the change came back as %#v", got.Timeline[0])
+	}
+	//below a millisecond the store rounds, so the document and the stored
+	//document would disagree about the instant
+	if got.Timeline[1].At.Nanosecond()%int(time.Millisecond) != 0 {
+		t.Errorf("expected the store to keep milliseconds at most, got %v", got.Timeline[1].At)
+	}
+
+	//and a document without a timeline reads back without one, which is what
+	//every document stored before the field existed looks like
+	if _, err = store.Put(ctx, testEnvironment("env-none", "Metallbau", "owner-1")); err != nil {
+		t.Fatal(err)
+	}
+	none, err := store.Get(ctx, "env-none")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if none.Timeline != nil {
+		t.Errorf("expected no timeline at all, got %#v", none.Timeline)
+	}
+}
+
 func TestMongoGetReportsAnUnknownEnvironmentAsNotFound(t *testing.T) {
 	store := testStore(t)
 	_, err := store.Get(testContext(t), "does-not-exist")

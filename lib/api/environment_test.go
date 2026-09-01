@@ -1129,6 +1129,52 @@ func TestPatchStateReportsUnknownIdsAsABadRequest(t *testing.T) {
 	}
 }
 
+// A context key the timeline governs is a declared function of time. Setting it
+// is refused rather than silently overwritten by the next read, and 400 is the
+// same answer an unknown id gets: the request names something the document does
+// not let it write.
+func TestPatchStateReportsATimelineGovernedKeyAsABadRequest(t *testing.T) {
+	store := newFakeEnvironments()
+	notifier := &recordingNotifier{setErr: &repo.TimelineGovernedError{Keys: []string{"electricity_price"}}}
+	router := testRouterWithNotifier(store, notifier)
+	do(t, router, "PUT", "/environments/env-1", "user-a", minimalEnvironment())
+
+	change := repo.StateChange{Context: map[string]interface{}{"electricity_price": 0.42}}
+	resp := do(t, router, "PATCH", "/environments/env-1/state", "user-a", change)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "electricity_price") {
+		t.Errorf("the governed key has to be named, got %q", resp.Body.String())
+	}
+}
+
+// A change that is wrong in two ways is answered once, with both halves in the
+// body: the message is taken off the error itself rather than off whichever type
+// the switch matched first, or its author would be sent back for a second round
+// trip to learn the other half.
+func TestPatchStateNamesUnknownIdsAndGovernedKeysInOneAnswer(t *testing.T) {
+	store := newFakeEnvironments()
+	notifier := &recordingNotifier{setErr: errors.Join(
+		&repo.UnknownIdsError{Zones: []string{"no-zone"}},
+		&repo.TimelineGovernedError{Keys: []string{"electricity_price"}},
+	)}
+	router := testRouterWithNotifier(store, notifier)
+	do(t, router, "PUT", "/environments/env-1", "user-a", minimalEnvironment())
+
+	change := repo.StateChange{
+		Context: map[string]interface{}{"electricity_price": 0.42},
+		Zones:   map[string]map[string]interface{}{"no-zone": {"temperature": 20.0}},
+	}
+	resp := do(t, router, "PATCH", "/environments/env-1/state", "user-a", change)
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "no-zone") || !strings.Contains(resp.Body.String(), "electricity_price") {
+		t.Errorf("both halves have to be named, got %q", resp.Body.String())
+	}
+}
+
 func TestPatchStateOfAnEnvironmentThatIsNotRunningIs404(t *testing.T) {
 	store := newFakeEnvironments()
 	notifier := &recordingNotifier{setErr: repo.ErrNotRunning}

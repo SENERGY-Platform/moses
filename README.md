@@ -49,8 +49,8 @@ sources* drive entries over time — see
 Zones can carry **time constants**: a changed value approaches its target as
 `target + (from-target)*exp(-elapsed/tau)`, resolved lazily when read.
 
-All stochastic sources derive from the environment's **seed** — same seed and
-same clock, same values.
+All stochastic sources derive from the environment's **seed** — same seed, same
+clock and same timeline, same values.
 
 ## Scripts
 

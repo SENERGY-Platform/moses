@@ -157,6 +157,20 @@ func (this *UnknownIdsError) Error() string {
 	return strings.Join(parts, "; ")
 }
 
+// TimelineGovernedError names the context keys a change tried to set that the
+// document's timeline governs. Refused rather than applied: such a key is a
+// declared function of time, so the value would be overwritten by the next read,
+// and a change that looks accepted and does nothing is the harder failure to
+// find. The fix is to edit the timeline of the environment.
+type TimelineGovernedError struct {
+	Keys []string
+}
+
+func (this *TimelineGovernedError) Error() string {
+	return "the timeline of this environment governs these context keys, so they cannot be set from outside: " +
+		strings.Join(this.Keys, ", ")
+}
+
 // Approach is one value on its way to a set point, following
 // target + (from-target) * exp(-elapsed/tau). Both ends and the start time are
 // stored rather than only the current value, so the curve is exact for any step

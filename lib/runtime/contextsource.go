@@ -67,7 +67,10 @@ func (this *Runtime) tickContextSource(env *environment, gen *generation, key st
 		if source.Profile == nil {
 			return
 		}
-		value := profileValue(*source.Profile, gen.def.Seed, contextSeriesId(key), source.IntervalSeconds, now)
+		//the profile of this instant, resolved against the key the source writes
+		//rather than against a channel id
+		profile := gen.timeline.effectiveProfile(domain.TimelineContextSource, key, *source.Profile, now)
+		value := profileValue(profile, gen.def.Seed, contextSeriesId(key), source.IntervalSeconds, now)
 		env.contextStates()[key] = value
 		env.dirty = true
 	case domain.SourceDataset:
@@ -75,8 +78,9 @@ func (this *Runtime) tickContextSource(env *environment, gen *generation, key st
 		if len(points) < 2 {
 			return //the loader already reported the missing dataset
 		}
+		replay := gen.timeline.effectiveDataset(domain.TimelineContextSource, key, *source.Dataset, now)
 		anchor := this.anchorFor(env, contextSeriesId(key), source.Dataset, now)
-		value, playable := replayValue(*source.Dataset, points, anchor, now, source.IntervalSeconds)
+		value, playable := replayValue(replay, points, anchor, now, source.IntervalSeconds)
 		if !playable {
 			return
 		}

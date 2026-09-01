@@ -402,6 +402,8 @@ func deleteEnvironmentH(environments repo.Environments, catalog DeviceCatalog, m
 //
 // @Summary Set live state of one running environment
 // @Description Merges the given values into the live state. Only the keys named are touched; everything else keeps running. Context is the shared surroundings every zone reads, zones and assets are keyed by their id from the definition. Takes effect on the next tick of the scripts that read it, and is not a change to the definition.
+// @Description
+// @Description A context key the environment's `timeline` governs is a declared function of time and cannot be moved from here: a value differing from the declared one is refused with 400. Sending the value GET on this path handed out is not a move and is accepted, so reading the state, editing one key and sending the whole thing back works unchanged.
 // @Tags Environment
 // @Accept json
 // @Produce json
@@ -409,7 +411,7 @@ func deleteEnvironmentH(environments repo.Environments, catalog DeviceCatalog, m
 // @Param id path string true "environment id"
 // @Param state body repo.StateChange true "the values to set"
 // @Success 204 {string} string "applied"
-// @Failure 400 {string} string "the body is unreadable, empty, or names a zone or asset the definition does not have"
+// @Failure 400 {string} string "the body is unreadable, empty, names a zone or asset the definition does not have, or moves a context key the timeline governs; a change wrong in both ways names both"
 // @Failure 401 {string} string "the token carries no subject"
 // @Failure 404 {string} string "no such environment, no access to it, or it is not running here"
 // @Failure 409 {string} string "a history run of this environment is in progress, so it stands at a past instant"
@@ -450,11 +452,17 @@ func patchEnvironmentStateH(environments repo.Environments, catalog DeviceCatalo
 
 		err = setState(notifier, id, change)
 		unknownIds := &repo.UnknownIdsError{}
+		governed := &repo.TimelineGovernedError{}
 		switch {
 		case err == nil:
 			gc.Status(http.StatusNoContent)
-		case errors.As(err, &unknownIds):
-			gc.String(http.StatusBadRequest, "%s", unknownIds.Error())
+		//both kinds of refusal are a 400, and the message is taken off the error
+		//itself rather than off the matched type: a change that names an unknown
+		//id AND a governed key is reported as one error carrying both, and
+		//printing only the half that matched first would send its author back for
+		//a second round trip
+		case errors.As(err, &unknownIds), errors.As(err, &governed):
+			gc.String(http.StatusBadRequest, "%s", err.Error())
 		case errors.Is(err, moses_runtime.ErrHistoryRunning):
 			//409 and not 404: the environment is here and known, it just stands at
 			//a past instant, and the change would be thrown away with the state the

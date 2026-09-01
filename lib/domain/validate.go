@@ -22,6 +22,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"time"
 )
 
 // MaxZoneDepth bounds how deep zones may nest. Four levels cover building,
@@ -79,11 +80,13 @@ type validator struct {
 	ids   map[string]string
 	nodes int
 
-	// channelIds and channelRefs implement the second pass: a formula may
+	// channelByIds and channelRefs implement the second pass: a formula may
 	// reference a channel defined later in the document, so the reference can
-	// only be checked once the whole tree is indexed.
-	channelIds  map[string]bool
-	channelRefs []channelRef
+	// only be checked once the whole tree is indexed. The whole channel is kept
+	// rather than only its id, because a dated change also has to be checked
+	// against the source kind the channel it names is driven by.
+	channelByIds map[string]Channel
+	channelRefs  []channelRef
 
 	// assetSites and submeterRefs implement the same second pass for
 	// submetered_by: the target asset may be defined later in the document or
@@ -134,7 +137,7 @@ func (this *validator) claimId(path string, id string) {
 // Validate checks an environment for everything that would make it unusable or
 // ambiguous. It returns a *ValidationError listing every problem, or nil.
 func Validate(env Environment) error {
-	v := &validator{ids: map[string]string{}, channelIds: map[string]bool{}, assetSites: map[string]int{}}
+	v := &validator{ids: map[string]string{}, channelByIds: map[string]Channel{}, assetSites: map[string]int{}}
 
 	if strings.TrimSpace(env.Name) == "" {
 		v.fail("name", "must not be empty")
@@ -159,7 +162,7 @@ func Validate(env Environment) error {
 		v.fail("", "environment has %d nodes, the limit is %d", v.nodes, MaxNodes)
 	}
 	for _, ref := range v.channelRefs {
-		if !v.channelIds[ref.id] {
+		if _, exists := v.channelByIds[ref.id]; !exists {
 			v.fail(ref.path, "the referenced channel %q does not exist in this environment", ref.id)
 		}
 	}
@@ -205,6 +208,11 @@ func Validate(env Environment) error {
 		}
 	}
 	v.checkSubmeterCycles(parents)
+
+	// the third second pass: a dated change names a channel, a context source or
+	// a context key, and whether it exists and what kind of source drives it is
+	// only known once the whole tree has been walked
+	v.checkTimeline(env)
 
 	if len(v.problems) == 0 {
 		return nil
@@ -413,6 +421,164 @@ func (this *validator) checkSubmeterCycles(parents map[string]submeterRef) {
 	}
 }
 
+// timelineSlot is the uniqueness key of a dated change: one target may carry at
+// most one value per instant, since which of two would apply follows from
+// nothing the document says.
+type timelineSlot struct {
+	target TimelineTarget
+	atUnix int64
+}
+
+// checkTimeline refuses a dated change that could not do what it reads like: an
+// instant the simulation cannot compare on, a target nothing in this document
+// has, a field the named source does not carry, or two values for one instant.
+//
+// Everything here is about the document being executable. A change that lies in
+// the future is deliberately fine - a planned measure is the case the timeline
+// exists for.
+func (this *validator) checkTimeline(env Environment) {
+	if len(env.Timeline) > MaxTimelineChanges {
+		//refused without walking the entries: the list is untrusted input, and
+		//reporting ten thousand problems about a document that is refused anyway
+		//is the same denial of service in the response
+		this.fail("timeline", "a timeline may carry at most %d changes, got %d", MaxTimelineChanges, len(env.Timeline))
+		return
+	}
+	seen := map[timelineSlot]int{}
+	for i := range env.Timeline {
+		change := env.Timeline[i]
+		path := fmt.Sprintf("timeline[%d]", i)
+		this.checkTimelineAt(path+".at", change.At)
+		target, err := ParseTimelineTarget(change.Target)
+		if err != nil {
+			this.fail(path+".target", "%s", err.Error())
+			continue
+		}
+		this.checkTimelineTarget(path, env, target, change.Value)
+		slot := timelineSlot{target: target, atUnix: change.At.Unix()}
+		if previous, taken := seen[slot]; taken {
+			this.fail(path, "timeline[%d] already changes %q at that instant, and which of the two applies follows from nothing the document says",
+				previous, change.Target)
+			continue
+		}
+		seen[slot] = i
+	}
+}
+
+// checkTimelineAt refuses an instant the simulation could not compare against.
+func (this *validator) checkTimelineAt(path string, at time.Time) {
+	switch {
+	case at.IsZero():
+		this.fail(path, "must be set, as an RFC3339 timestamp")
+	case at.Nanosecond() != 0:
+		this.fail(path, "must be a whole second: every clock decision of the simulation is made on the second grid and the store truncates to milliseconds, so a fraction here would be one instant in the document and another one after a round trip")
+	case at.Before(minTimelineTime) || at.After(maxTimelineTime):
+		this.fail(path, "must lie between %s and %s", minTimelineTime.Format(time.RFC3339), maxTimelineTime.Format(time.RFC3339))
+	}
+}
+
+// checkTimelineTarget resolves one target against the document and checks the
+// value against the field it lands on.
+func (this *validator) checkTimelineTarget(path string, env Environment, target TimelineTarget, value float64) {
+	targetPath := path + ".target"
+	switch target.Kind {
+	case TimelineContext:
+		if _, declared := env.Context[target.Ref]; !declared {
+			this.fail(targetPath, "the context key %q is not declared in context; declare it there with its initial value, so the document shows where the dated value starts from", target.Ref)
+			return
+		}
+		if _, driven := env.ContextSources[target.Ref]; driven {
+			this.fail(targetPath, "the context key %q is driven by a context source, which writes it on every one of its ticks and would overwrite the dated value; change the parameters of that source instead", target.Ref)
+			return
+		}
+		this.checkTimelineValue(path+".value", target.Field, value)
+	case TimelineContextSource:
+		source, declared := env.ContextSources[target.Ref]
+		if !declared {
+			this.fail(targetPath, "no context source of this environment writes the key %q", target.Ref)
+			return
+		}
+		this.checkTimelineSourceField(path, target, source, value)
+	case TimelineChannel:
+		channel, declared := this.channelByIds[target.Ref]
+		if !declared {
+			this.fail(targetPath, "the referenced channel %q does not exist in this environment", target.Ref)
+			return
+		}
+		switch target.Field {
+		case TimelineStateValue, TimelineStateSpread, TimelineGateThreshold:
+			if this.checkTimelineScheduleField(targetPath, target, channel) {
+				this.checkTimelineValue(path+".value", target.Field, value)
+			}
+		default:
+			this.checkTimelineSourceField(path, target, channel.Source, value)
+		}
+	}
+}
+
+// checkTimelineSourceField checks the three fields a channel and a context source
+// have in common against the source that is actually declared there.
+func (this *validator) checkTimelineSourceField(path string, target TimelineTarget, source Source, value float64) {
+	targetPath := path + ".target"
+	switch target.Field {
+	case TimelineProfileBase, TimelineProfileSpread:
+		if source.Kind != SourceProfile || source.Profile == nil {
+			this.fail(targetPath, "the %s %q is driven by a %q source, so it carries no profile to change", timelineSubject(target.Kind), target.Ref, source.Kind)
+			return
+		}
+	case TimelineDatasetScale:
+		if source.Kind != SourceDataset || source.Dataset == nil {
+			this.fail(targetPath, "the %s %q is driven by a %q source, so it carries no dataset to change", timelineSubject(target.Kind), target.Ref, source.Kind)
+			return
+		}
+		if source.Dataset.Cumulative {
+			//scale multiplies the reading, and a cumulative replay's reading
+			//contains every loop it has already counted: scaling it from an
+			//instant on would restate the whole meter rather than bend the curve
+			//from there, which is a step where the author asked for a kink
+			this.fail(targetPath, "the dataset of the %s %q is cumulative, and scaling a meter reading from an instant on would multiply everything it has already counted instead of bending the curve from there; model the change as a second channel", timelineSubject(target.Kind), target.Ref)
+			return
+		}
+	}
+	this.checkTimelineValue(path+".value", target.Field, value)
+}
+
+// checkTimelineScheduleField checks a target that names a schedule, and reports
+// whether the value below it is still worth checking.
+func (this *validator) checkTimelineScheduleField(targetPath string, target TimelineTarget, channel Channel) bool {
+	if channel.Source.Kind != SourceSchedule || channel.Source.Schedule == nil {
+		this.fail(targetPath, "the channel %q is driven by a %q source, so it runs no schedule to change", target.Ref, channel.Source.Kind)
+		return false
+	}
+	schedule := channel.Source.Schedule
+	if target.Field == TimelineGateThreshold {
+		if schedule.Gate == nil {
+			this.fail(targetPath, "the schedule of channel %q has no gate, so it has no threshold to change", target.Ref)
+			return false
+		}
+		return true
+	}
+	for i := range schedule.States {
+		if schedule.States[i].Name == target.State {
+			return true
+		}
+	}
+	this.fail(targetPath, "the schedule of channel %q has no state named %q", target.Ref, target.State)
+	return false
+}
+
+// checkTimelineValue applies the rule of the field the change lands on: a spread
+// is a percentage and cannot be negative, everything else only has to be a
+// number that can be compared and stored.
+func (this *validator) checkTimelineValue(path string, field TimelineField, value float64) {
+	switch field {
+	case TimelineProfileSpread, TimelineStateSpread:
+		this.checkThreshold(path, value)
+	default:
+		this.checkFinite(path, value)
+	}
+}
+
 func (this *validator) checkChannel(path string, channel Channel) {
 	this.nodes++
 	if strings.TrimSpace(channel.Name) == "" {
@@ -422,8 +588,11 @@ func (this *validator) checkChannel(path string, channel Channel) {
 		this.fail(path+".direction", "must be %q or %q, got %q", Sensor, Actuator, channel.Direction)
 	}
 	this.claimId(path+".id", channel.Id)
-	if channel.Id != "" {
-		this.channelIds[channel.Id] = true
+	//the first channel of a duplicated id keeps the entry, the way assetSites
+	//does: claimId already reports the duplicate, and letting the second one win
+	//would report a source kind nobody referenced on top of it
+	if _, taken := this.channelByIds[channel.Id]; channel.Id != "" && !taken {
+		this.channelByIds[channel.Id] = channel
 	}
 	if channel.Source.IntervalSeconds < 0 {
 		this.fail(path+".source.interval_seconds", "must not be negative")

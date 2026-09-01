@@ -719,8 +719,10 @@ func TestAnOpenRunWithoutAPassSaltAdoptsItsAnchorOnce(t *testing.T) {
 		ScheduleRuns: map[string]repo.ScheduleRun{"ch-1": {StartUnix: scheduleT.Unix(), Open: true}},
 	}}
 	binding := channelBinding{channel: scheduleChannel("ch-1", "service", 1, source)}
+	//no timeline in this document, so the gate reads the inline threshold
+	gen := newGeneration(domain.Environment{Id: envId}, nil)
 
-	run, open := runtime.scheduleRun(env, binding, source, scheduleT.Add(time.Hour))
+	run, open := runtime.scheduleRun(env, gen, binding, source, scheduleT.Add(time.Hour))
 	if !open {
 		t.Fatal("the gate is open, so the run has to be too")
 	}
@@ -733,7 +735,7 @@ func TestAnOpenRunWithoutAPassSaltAdoptsItsAnchorOnce(t *testing.T) {
 	//and once the anchor has rolled, the salt stays where it was adopted
 	env.state.ScheduleRuns["ch-1"] = repo.ScheduleRun{
 		StartUnix: scheduleT.Unix() + 3600, CycleOffset: 1800, PassUnix: scheduleT.Unix(), Open: true}
-	rolled, _ := runtime.scheduleRun(env, binding, source, scheduleT.Add(2*time.Hour))
+	rolled, _ := runtime.scheduleRun(env, gen, binding, source, scheduleT.Add(2*time.Hour))
 	if rolled.PassUnix != scheduleT.Unix() {
 		t.Errorf("the adopted salt was overwritten by the rolled anchor: %+v", rolled)
 	}

@@ -82,6 +82,7 @@ Everything the runtime keeps for the environment:
 | `last_published` of a change trigger | rebuilt by the run's own publishes, so the live channel compares against what the run last sent |
 | schedule anchors | created at the virtual start; a gated programme starts at the rising edge of its context key **inside** the window |
 | the value cache behind formulas and aggregates | filled by the run's own ticks |
+| a context key the timeline governs | seeded with the value it stands at at `from`, and read against the virtual instant from there (`docs/dated-changes.md`) |
 
 A value that survived from the live simulation would be a value from the future,
 which is why none of it is carried.

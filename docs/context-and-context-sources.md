@@ -13,7 +13,16 @@ channel's publish tick; a context source *must* carry one).
 `context` is a map of site-wide values every zone, script
 (`moses.environment.state`) and formula (`context.<key>`) can read. A static
 entry keeps its value until changed — by an editor, by
-`PATCH /environments/{id}/state`, or by a script.
+`PATCH /environments/{id}/state`, or by a script — **unless the environment's
+`timeline` governs it**, which is the one exception to that sentence.
+
+A key the timeline carries a `context.<key>` change for is a declared function
+of time and therefore read-only from outside: the state endpoint answers `400`
+for a value that differs from the declared one (an unchanged value is accepted,
+so reading the state and sending it back still works), and a script's `set` is
+dropped. Such a key must be declared here and must *not* also be driven by a
+context source, which would overwrite the dated value on its next tick
+(`docs/dated-changes.md`).
 
 ## Context sources
 

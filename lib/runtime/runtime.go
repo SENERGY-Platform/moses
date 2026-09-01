@@ -422,11 +422,16 @@ func (this *Runtime) startEnvironment(ctx context.Context, def domain.Environmen
 		env = &environment{id: def.Id, state: state}
 	}
 
-	env.seed(gen)
+	//the live start seeds the governed context keys with the value of now; a
+	//history run seeds them with the value of its own window start instead
+	env.seed(gen, time.Now())
 	//after seed, because it reads the persisted meter readings seed has just
 	//made sure are there, and before the new generation is published, because
 	//from that moment on its runners write the cache it is fixing up
 	env.carryLastValues(gen)
+	//what the timeline governs is a property of the definition, so what has
+	//already been reported about it belongs to the generation that is going away
+	env.forgetTimelineWarnings()
 
 	this.mux.Lock()
 	env.gen = gen
@@ -633,12 +638,17 @@ func (this *Runtime) SetState(id string, change repo.StateChange) error {
 	if !running {
 		return repo.ErrNotRunning
 	}
-	if err := validateChangeIds(gen, change); err != nil {
-		return err
-	}
 
 	env.mux.Lock()
 	defer env.mux.Unlock()
+	now := time.Now()
+	//judged under the mutex, because a governed context key is compared against
+	//the value the reading direction answers with, and that is the live state
+	//covered by the timeline. Still ahead of the two checks below, so a malformed
+	//change is a 400 whatever else is going on with the environment.
+	if err := this.refuseChange(env, gen, change, now); err != nil {
+		return err
+	}
 	if env.removed {
 		return repo.ErrNotRunning
 	}
@@ -647,7 +657,6 @@ func (this *Runtime) SetState(id string, change repo.StateChange) error {
 	if env.underHistory {
 		return ErrHistoryRunning
 	}
-	now := time.Now()
 	mergeInto(env.state.Context, change.Context)
 	for zoneId, values := range change.Zones {
 		if env.state.Zones[zoneId] == nil {
@@ -682,9 +691,34 @@ func mergeInto(target map[string]interface{}, values map[string]interface{}) {
 	}
 }
 
-// validateChangeIds refuses a change naming a zone or asset the definition does
-// not have, and names every one of them rather than the first.
-func validateChangeIds(gen *generation, change repo.StateChange) error {
+// refuseChange collects everything about a state change that cannot be applied
+// and reports all of it at once, rather than the first thing it finds: fixing a
+// change one round trip per mistake is the same unusable endpoint that made
+// validation collect its problems.
+//
+// It must be called with env.mux held, since the governed-key check reads the
+// live state.
+func (this *Runtime) refuseChange(env *environment, gen *generation, change repo.StateChange, now time.Time) error {
+	unknown := unknownChangeIds(gen, change)
+	governed := this.governedChangeKeys(env, gen, change, now)
+	switch {
+	case unknown != nil && governed != nil:
+		//joined rather than folded into a third type: each of the two is
+		//meaningful on its own everywhere else, errors.As still finds either,
+		//and the message carries both
+		return errors.Join(unknown, governed)
+	case unknown != nil:
+		return unknown
+	case governed != nil:
+		return governed
+	}
+	return nil
+}
+
+// unknownChangeIds names every zone and asset the definition does not have,
+// rather than only the first: a key written under an id nothing reads is state
+// that looks set and has no effect.
+func unknownChangeIds(gen *generation, change repo.StateChange) *repo.UnknownIdsError {
 	problem := &repo.UnknownIdsError{}
 	for zoneId := range change.Zones {
 		if gen == nil || gen.zones[zoneId] == nil {
@@ -701,6 +735,46 @@ func validateChangeIds(gen *generation, change repo.StateChange) error {
 	}
 	sort.Strings(problem.Zones)
 	sort.Strings(problem.Assets)
+	return problem
+}
+
+// governedChangeKeys names the context keys a change would move although the
+// timeline governs them.
+//
+// Only a value that actually differs is refused, and that is the whole subtlety:
+// the reading direction hands out the declared value of a governed key, so a
+// client that reads the state, edits a neighbouring key and sends the whole
+// thing back submits that value unchanged. Refusing it would break the round
+// trip the two endpoints are documented as, for a change that changes nothing.
+// A real attempt to move the key is named.
+//
+// The comparison is the one a schedule makes against a stored state value, so a
+// number that arrived as an integer counts as equal to the float it stands for.
+// It must be called with env.mux held.
+func (this *Runtime) governedChangeKeys(env *environment, gen *generation, change repo.StateChange, now time.Time) *repo.TimelineGovernedError {
+	if gen == nil {
+		return nil
+	}
+	problem := &repo.TimelineGovernedError{}
+	for key, value := range change.Context {
+		if !gen.timeline.governsContext(key) {
+			continue
+		}
+		//exactly what Snapshot would have answered for this key at this instant:
+		//the declared value where the timeline has taken effect, the live one
+		//before its first change
+		declared := this.contextValue(env, gen, key, now)
+		//declared second, so the comparison switches on the float64 and the
+		//submitted value goes through asFloat
+		if sameStateValue(value, declared) {
+			continue
+		}
+		problem.Keys = append(problem.Keys, key)
+	}
+	if len(problem.Keys) == 0 {
+		return nil
+	}
+	sort.Strings(problem.Keys)
 	return problem
 }
 
@@ -797,9 +871,9 @@ func (this *Runtime) dispatch(env *environment, gen *generation, binding channel
 	case domain.SourceProfile:
 		this.executeProfile(env, gen, binding, remembered, tick, now)
 	case domain.SourceDataset:
-		this.executeDataset(env, binding, remembered, now)
+		this.executeDataset(env, gen, binding, remembered, now)
 	case domain.SourceFormula:
-		this.executeFormula(env, binding, remembered, now)
+		this.executeFormula(env, gen, binding, remembered, now)
 	case domain.SourceAggregate:
 		//no clock: an aggregate reads the values its inputs last produced and
 		//has nothing of its own to resolve against an instant
@@ -817,13 +891,13 @@ func (this *Runtime) dispatch(env *environment, gen *generation, binding channel
 // executeFormula resolves the inputs and publishes the result. A missing state
 // key counts as 0, like moses.state.get seeds a missing key - a formula over a
 // value nothing has produced yet starts from zero rather than failing.
-func (this *Runtime) executeFormula(env *environment, binding channelBinding, send func(value interface{}), now time.Time) {
+func (this *Runtime) executeFormula(env *environment, gen *generation, binding channelBinding, send func(value interface{}), now time.Time) {
 	inputs := binding.channel.Source.Formula.Inputs
 	env.mux.Lock()
 	defer env.mux.Unlock()
 	values := make(map[string]interface{}, len(inputs))
 	for name, ref := range inputs {
-		values[name] = this.resolveInput(env, binding.zoneId, binding.asset.id, ref, now)
+		values[name] = this.resolveInput(env, gen, binding.zoneId, binding.asset.id, ref, now)
 	}
 	value, err := binding.program.Evaluate(values)
 	if err != nil {
@@ -877,9 +951,11 @@ func (this *Runtime) executeAggregate(env *environment, gen *generation, binding
 	send(sum)
 }
 
-func (this *Runtime) resolveInput(env *environment, zoneId string, assetId string, ref string, now time.Time) interface{} {
+func (this *Runtime) resolveInput(env *environment, gen *generation, zoneId string, assetId string, ref string, now time.Time) interface{} {
 	if key, ok := strings.CutPrefix(ref, formula.RefContext); ok {
-		return numericOrZero(env.contextStates()[key])
+		//through the read-only layer: a governed key is what the document says
+		//it is at this instant, whatever is in the live state
+		return this.contextValue(env, gen, key, now)
 	}
 	if key, ok := strings.CutPrefix(ref, formula.RefZone); ok {
 		env.advanceZone(zoneId, now)
@@ -1025,8 +1101,10 @@ func (this *Runtime) fetchPlatformSeries(ctx context.Context, owner string, sour
 // executeDataset publishes the replay value for now. The anchor of a looping
 // replay is set on first use and persisted with the state, so a restart
 // resumes mid-loop.
-func (this *Runtime) executeDataset(env *environment, binding channelBinding, send func(value interface{}), now time.Time) {
-	source := *binding.channel.Source.Dataset
+func (this *Runtime) executeDataset(env *environment, gen *generation, binding channelBinding, send func(value interface{}), now time.Time) {
+	//the scale of this instant, which is the one field of a replay the timeline
+	//governs; the anchor below is unaffected by it
+	source := gen.timeline.effectiveDataset(domain.TimelineChannel, binding.channel.Id, *binding.channel.Source.Dataset, now)
 	env.mux.Lock()
 	defer env.mux.Unlock()
 	anchor := this.anchorFor(env, binding.channel.Id, &source, now)
@@ -1046,7 +1124,9 @@ func (this *Runtime) executeDataset(env *environment, binding channelBinding, se
 // state. send happens under the mutex too, which is what a script's
 // moses.service.send does.
 func (this *Runtime) executeProfile(env *environment, gen *generation, binding channelBinding, send func(value interface{}), tick bool, now time.Time) {
-	p := *binding.channel.Source.Profile
+	//the profile of this instant: base and spread as the timeline has them here,
+	//the inline ones until the first change of each
+	p := gen.timeline.effectiveProfile(domain.TimelineChannel, binding.channel.Id, *binding.channel.Source.Profile, now)
 	env.mux.Lock()
 	defer env.mux.Unlock()
 	//stepSeconds is the span one computation stands for: the publish interval

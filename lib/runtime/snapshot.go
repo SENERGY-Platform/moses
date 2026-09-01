@@ -50,9 +50,14 @@ type StateSnapshot struct {
 // the scripts keep writing into - which is the same reason the flusher copies
 // before it hands the state to the store.
 func (this *Runtime) Snapshot(id string) (StateSnapshot, error) {
-	//the env lookup is guarded by the runtime mux, the way SetState does it
+	//the env lookup and its generation are guarded by the runtime mux, the way
+	//SetState reads them
 	this.mux.RLock()
 	env, running := this.envs[id]
+	var gen *generation
+	if running {
+		gen = env.gen
+	}
 	this.mux.RUnlock()
 	if !running {
 		return StateSnapshot{}, repo.ErrNotRunning
@@ -88,6 +93,14 @@ func (this *Runtime) Snapshot(id string) (StateSnapshot, error) {
 
 	//snapshot() is the deep copy the flusher already relies on
 	state := env.snapshot()
+	//the one place the timeline covers a value instead of replacing it: what the
+	//stored map holds for a governed key is whatever was last written into it,
+	//while every reader of that key inside the simulation sees the declared
+	//value of this instant. Reporting the map would show a number nothing acts
+	//on. Applied to the copy only, so nothing about the live state moves.
+	if gen != nil {
+		gen.timeline.overlayContext(state.Context, now)
+	}
 	return StateSnapshot{
 		State: repo.StateChange{
 			Context: state.Context,
