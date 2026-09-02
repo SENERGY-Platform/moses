@@ -558,20 +558,32 @@ func TestGetReturnsWhatPutAccepts(t *testing.T) {
 	}
 }
 
-func TestGetNeverDisclosesTheOwner(t *testing.T) {
+// An admin lists everyone's environments, so the owner has to be readable;
+// what must not work is claiming one through the body.
+func TestGetDisclosesTheOwnerAndAPutCannotChangeIt(t *testing.T) {
 	store := newFakeEnvironments()
 	env := minimalEnvironment()
 	env.Id = "env-1"
 	env.Owner = "user-a"
 	store.stored["env-1"] = env
+	router := testRouter(store)
 
-	resp := do(t, testRouter(store), "GET", "/environments/env-1", "user-a", nil)
+	resp := do(t, router, "GET", "/environments/env-1", "user-a", nil)
 	body := map[string]interface{}{}
 	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if _, present := body["owner"]; present {
-		t.Fatal("the owner must not be serialised, an import could otherwise claim it")
+	if body["owner"] != "user-a" {
+		t.Fatalf("expected the owner to be served, got %#v", body["owner"])
+	}
+
+	body["owner"] = "user-b"
+	back := do(t, router, "PUT", "/environments/env-1", "user-a", body)
+	if back.Code != http.StatusOK {
+		t.Fatalf("expected the update to be accepted, got %d: %s", back.Code, back.Body.String())
+	}
+	if got := store.stored["env-1"].Owner; got != "user-a" {
+		t.Fatalf("an owner sent in the body must be ignored, got %q", got)
 	}
 }
 

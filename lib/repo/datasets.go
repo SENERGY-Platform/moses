@@ -31,8 +31,9 @@ type DatasetColumn struct {
 // in gridfs; Timezone records how offsetless timestamps were interpreted at
 // upload time, so a later re-parse cannot silently read them differently.
 type DatasetMeta struct {
-	Id          string          `json:"id" bson:"id"`
-	Owner       string          `json:"-" bson:"owner"`
+	Id string `json:"id" bson:"id"`
+	// Owner is the uploader's user id, decided by the server; read-only for callers.
+	Owner       string          `json:"owner,omitempty" bson:"owner"`
 	Name        string          `json:"name" bson:"name"`
 	Timezone    string          `json:"timezone" bson:"timezone"`
 	Columns     []DatasetColumn `json:"columns" bson:"columns"`

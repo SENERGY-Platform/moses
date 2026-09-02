@@ -73,9 +73,9 @@ type Environment struct {
 	Name string          `json:"name" bson:"name"`
 	Type EnvironmentType `json:"type" bson:"type"`
 
-	// Never serialised to json: taken from the caller's token, so an import
-	// cannot transfer ownership.
-	Owner string `json:"-" bson:"owner"`
+	// Owner is the creator's user id, decided by the server from the token and
+	// kept on update, so a value sent in a request body is ignored.
+	Owner string `json:"owner,omitempty" bson:"owner"`
 
 	// Version is counted by the server: every successful write increments it,
 	// and a write is refused unless the client's version still matches the
