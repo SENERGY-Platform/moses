@@ -49,7 +49,11 @@ window produce the same series twice:
 
 Everything a channel reads therefore moves before the channel. A derivation over
 a derivation — a formula over a formula, an aggregate of aggregates — is the one
-case that still reads the previous instant, since both sit in class 3.
+case that still reads the previous instant, since both sit in class 3. For an
+aggregate that means its first instant publishes nothing when an input of it is
+itself derived: the input has no value yet, and an aggregate does not publish a
+total that is short by one of its inputs (`docs/submetering.md`). The step is
+booked as silent.
 
 ## The hard condition: `senergy/time_path`
 

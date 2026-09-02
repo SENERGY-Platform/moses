@@ -691,3 +691,153 @@ func TestAnAggregateThatMatchesIsNotReportedAsEmpty(t *testing.T) {
 		t.Errorf("a matching aggregate must not be reported as summing nothing: %s", logs)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// an input that has not produced a value yet
+// ---------------------------------------------------------------------------
+
+// A channel that has produced nothing yet is unknown, not zero. Summed as zero
+// the total is short by a whole sub-meter, and a total that is too low is
+// indistinguishable from a real drop - so nothing goes out until every input
+// this generation can tick has produced once.
+//
+// The script child publishes every four seconds, the total every second, so the
+// first three totals would be the profile child alone.
+func TestAnAggregateWaitsForAnInputThatHasNotProducedYet(t *testing.T) {
+	const envId = "env-agg-await-script"
+	totalRef := serviceOf(envId, "total")
+	slow := scriptChannel("ch-slow", domain.Sensor, 4, serviceOf(envId, "slow"), "moses.service.send(100);")
+	slow.CharacteristicId = energyCharacteristic
+	env := treeEnvironment(envId,
+		treeAsset{id: "a-total", channels: []domain.Channel{
+			aggregateChannel("ch-total", totalRef, 1, energyCharacteristic)}},
+		treeAsset{id: "a-fast", submeteredBy: "a-total", channels: []domain.Channel{
+			measuringChannel("ch-fast", serviceOf(envId, "fast"), energyCharacteristic, 10)}},
+		treeAsset{id: "a-slow", submeteredBy: "a-total", channels: []domain.Channel{slow}},
+	)
+	if err := domain.Validate(env); err != nil {
+		t.Fatalf("the document has to be a legal one: %v", err)
+	}
+	publisher := &fakePublisher{}
+	startRuntime(t, testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), publisher)
+
+	//the premise: the fast child really is publishing while the slow one has not
+	//run yet, so the total had every chance to go out short
+	if !waitFor(8*time.Second, func() bool { return len(valuesOn(publisher, serviceOf(envId, "fast"))) >= 2 }) {
+		t.Fatalf("setup: the fast child did not publish, it published %v", valuesOn(publisher, serviceOf(envId, "fast")))
+	}
+	if len(valuesOn(publisher, serviceOf(envId, "slow"))) > 0 {
+		t.Fatalf("setup: the slow child was expected to be silent still, it published %v",
+			valuesOn(publisher, serviceOf(envId, "slow")))
+	}
+	if got := valuesOn(publisher, totalRef); len(got) != 0 {
+		t.Fatalf("the total must publish nothing at all while an input has produced no value, it published %v", got)
+	}
+
+	if !waitFor(10*time.Second, func() bool { return sawValue(publisher, totalRef, 110.0) }) {
+		t.Fatalf("the total never reached 10+100=110 once both children had produced, it published %v",
+			valuesOn(publisher, totalRef))
+	}
+	//10 would be the profile child alone, 100 the script child alone, 0 neither
+	assertOnlyValues(t, publisher, totalRef, 110)
+}
+
+// An input nothing in this generation can tick is not waited for: it contributes
+// 0 for as long as the generation runs (indexAggregates says so in the log), and
+// waiting for it would silence the total forever instead. The end to end case is
+// TestAnAggregateDropsWhatAChannelCanNoLongerProduceAfterAReload; this pins the
+// index the rule reads.
+func TestOnlyInputsWithARunnerAreAwaited(t *testing.T) {
+	const envId = "env-agg-awaited-index"
+	//no publish interval, no source interval and no platform service: nothing
+	//ticks it and no command can reach it
+	dead := deadChannel(measuringChannel("ch-dead", "", energyCharacteristic, 10))
+	env := treeEnvironment(envId,
+		treeAsset{id: "a-total", channels: []domain.Channel{
+			aggregateChannel("ch-total", serviceOf(envId, "total"), 1, energyCharacteristic)}},
+		treeAsset{id: "a-live", submeteredBy: "a-total", channels: []domain.Channel{
+			measuringChannel("ch-live", serviceOf(envId, "live"), energyCharacteristic, 10)}},
+		treeAsset{id: "a-dead", submeteredBy: "a-total", channels: []domain.Channel{dead}},
+	)
+	gen := newGeneration(env, nil)
+
+	if got := gen.aggregateInputs["ch-total"]; !reflect.DeepEqual(got, []string{"ch-live", "ch-dead"}) {
+		t.Errorf("both children stay inputs of the sum, got %v", got)
+	}
+	if got := gen.aggregateAwaited["ch-total"]; !reflect.DeepEqual(got, []string{"ch-live"}) {
+		t.Errorf("only the child with a runner may be waited for, got %v", got)
+	}
+}
+
+// The defect this rule exists for: lastValues is in memory only and
+// carryLastValues restores the counters of cumulative profiles alone, so after
+// a restart a script or formula child reads as a missing map entry. Summed as
+// 0, the first total after the restart was the cumulative child alone - a drop
+// of the whole script child's share on a distribution meter, published as a
+// plausible reading.
+func TestTheFirstTotalAfterARestartIsNotSmallerThanTheLastOneBefore(t *testing.T) {
+	const envId = "env-agg-restart-script"
+	totalRef := serviceOf(envId, "total")
+	//base 3600 with a one second tick: the meter climbs by one per tick
+	counter := profileChannel("ch-counter", serviceOf(envId, "counter"), 1, domain.ProfileSource{Base: 3600, Cumulative: true})
+	counter.CharacteristicId = energyCharacteristic
+	//four seconds against the total's one: after the restart the total ticks
+	//three times before the script has produced anything, which is what makes
+	//the assertion below independent of the order two runners happen to start in
+	script := scriptChannel("ch-script", domain.Sensor, 4, serviceOf(envId, "script"), "moses.service.send(1000);")
+	script.CharacteristicId = energyCharacteristic
+	env := treeEnvironment(envId,
+		treeAsset{id: "a-total", channels: []domain.Channel{
+			aggregateChannel("ch-total", totalRef, 1, energyCharacteristic)}},
+		treeAsset{id: "a-counter", submeteredBy: "a-total", channels: []domain.Channel{counter}},
+		treeAsset{id: "a-script", submeteredBy: "a-total", channels: []domain.Channel{script}},
+	)
+	if err := domain.Validate(env); err != nil {
+		t.Fatalf("the document has to be a legal one: %v", err)
+	}
+	envs := newFakeEnvironments(env)
+	states := newFakeStates()
+	publisher := &fakePublisher{}
+	first := startRuntime(t, testConfig(time.Hour), envs, states, publisher)
+
+	//waited for a total that carries the script child's share: a restart is only
+	//a regression against a total that was complete to begin with
+	if !waitFor(15*time.Second, func() bool {
+		got := valuesOn(publisher, totalRef)
+		if len(got) < 2 {
+			return false
+		}
+		number, ok := got[len(got)-1].(float64)
+		return ok && number >= 1000
+	}) {
+		t.Fatalf("setup: the total never carried the script child's 1000 before the restart, it published %v",
+			valuesOn(publisher, totalRef))
+	}
+	//Stop flushes, which is what puts the meter reading into the store the
+	//second incarnation loads
+	first.Stop()
+
+	before := valuesOn(publisher, totalRef)
+	last, ok := before[len(before)-1].(float64)
+	if !ok {
+		t.Fatalf("expected a bare number, got %T (%v)", before[len(before)-1], before[len(before)-1])
+	}
+	mark := len(before)
+
+	startRuntime(t, testConfig(time.Hour), envs, states, publisher)
+	if !waitFor(15*time.Second, func() bool { return len(valuesOn(publisher, totalRef)) > mark }) {
+		t.Fatalf("the total never published again after the restart, it published %v", valuesOn(publisher, totalRef))
+	}
+	//every total of the second incarnation, not only the first: the counter only
+	//ever rises, so none of them may fall below the last one of the first
+	for i, value := range valuesOn(publisher, totalRef)[mark:] {
+		number, ok := value.(float64)
+		if !ok {
+			t.Fatalf("expected a bare number, got %T (%v)", value, value)
+		}
+		if number < last {
+			t.Errorf("total %d after the restart is %v, below the %v published before it: the restart summed a child that had produced nothing as 0",
+				i, number, last)
+		}
+	}
+}

@@ -123,6 +123,13 @@ type generation struct {
 	// level deep, whatever the level below is made of.
 	aggregateInputs map[string][]string
 
+	// aggregateAwaited is the subset of aggregateInputs that has a runner in
+	// this generation and will therefore produce a value on its own. An
+	// aggregate publishes nothing while one of these has none yet; an input
+	// nothing can tick is not waited for, since waiting would silence the total
+	// for as long as the generation runs.
+	aggregateAwaited map[string][]string
+
 	// candidates is scaffolding of the indexing pass, not part of the indexed
 	// generation: the aggregate pass needs the whole document, because the
 	// asset a submetered_by names may appear after the asset naming it, and it
@@ -247,13 +254,14 @@ func (this *latest) get() (interface{}, bool) {
 // from a future version of the format.
 func newGeneration(def domain.Environment, series map[string][]dataset.Point) *generation {
 	result := &generation{
-		def:             def,
-		zones:           map[string]*zoneInfo{},
-		assets:          map[string]*assetInfo{},
-		commands:        map[commandKey]channelBinding{},
-		deviceRefs:      map[string]bool{},
-		aggregateInputs: map[string][]string{},
-		series:          series,
+		def:              def,
+		zones:            map[string]*zoneInfo{},
+		assets:           map[string]*assetInfo{},
+		commands:         map[commandKey]channelBinding{},
+		deviceRefs:       map[string]bool{},
+		aggregateInputs:  map[string][]string{},
+		aggregateAwaited: map[string][]string{},
+		series:           series,
 		//a pure function of the definition, so it needs no pass of its own
 		timeline: newTimelineIndex(def),
 	}
@@ -325,6 +333,9 @@ func (this *generation) indexAggregates(envId string) {
 				continue
 			}
 			inputs := []string{}
+			//the inputs a tick of this generation will fill in, which is what
+			//executeAggregate waits for before it publishes a total
+			awaited := []string{}
 			for _, index := range children[candidate.assetId] {
 				child := this.candidates[index]
 				for _, sub := range child.channels {
@@ -338,6 +349,7 @@ func (this *generation) indexAggregates(envId string) {
 					inputs = append(inputs, sub.Id)
 					switch {
 					case ticking[sub.Id]:
+						awaited = append(awaited, sub.Id)
 					case commanded[sub.Id]:
 						//not silent, and not zero either: it keeps the value it
 						//last produced (carryLastValues) until the next command
@@ -369,6 +381,7 @@ func (this *generation) indexAggregates(envId string) {
 					"characteristic", characteristic, "submetered_assets", len(children[candidate.assetId]))
 			}
 			this.aggregateInputs[channel.Id] = inputs
+			this.aggregateAwaited[channel.Id] = awaited
 		}
 	}
 }

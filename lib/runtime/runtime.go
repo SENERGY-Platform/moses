@@ -942,20 +942,31 @@ func (this *Runtime) executeFormula(env *environment, gen *generation, binding c
 // the runner, so the list needs no lock; env.lastValues does, and it is the
 // same mutex every other source sends under - no second lock, no new order.
 //
-// A channel that has not produced a value yet counts as 0, the same way a
-// formula's channel reference does, so one dead sub-meter cannot silence the
-// whole total. An aggregate over no inputs publishes 0 rather than nothing.
-// lastValues is in memory only, so after a restart the sum is short until
-// every sub-metered channel has ticked once, except for cumulative channels,
-// whose reading is restored from persisted state at start
-// (environment.carryLastValues). An input whose last value is not a finite
-// number is left out of the sum rather than carried into it, since a script
-// can send NaN or infinity on a channel and one such child would otherwise
-// turn every total above it into NaN.
+// While an input this generation can tick has no value yet (lastValues is in
+// memory only and empty after a restart), nothing is published: a total short
+// by one sub-meter is indistinguishable from a real drop. An input nothing can
+// tick contributes 0, an aggregate over no inputs publishes 0, and a non-finite
+// input is left out so one NaN child cannot turn every total above it into NaN.
 func (this *Runtime) executeAggregate(env *environment, gen *generation, binding channelBinding, send func(value interface{})) {
 	inputs := gen.aggregateInputs[binding.channel.Id]
 	env.mux.Lock()
 	defer env.mux.Unlock()
+	//an input that has produced nothing yet is not 0, it is unknown: summing it
+	//as 0 publishes a total that is short by a whole sub-meter
+	missing := 0
+	for _, id := range gen.aggregateAwaited[binding.channel.Id] {
+		if _, known := env.lastValues[id]; !known {
+			missing++
+		}
+	}
+	if missing > 0 {
+		//one line per tick of this aggregate, like the formula with an input it
+		//cannot resolve: after a start this is the first tick or two, and if it
+		//keeps coming an input is never producing at all
+		util.Logger.Warn("an aggregate has inputs that have not produced a value yet, it publishes nothing until they have",
+			"environment", env.id, "channel", binding.channel.Id, "missing", missing, "inputs", len(inputs))
+		return
+	}
 	//summed in the indexed order, which is document order: float addition is
 	//not associative, so a map iteration here would make the same document
 	//produce slightly different totals from one start to the next

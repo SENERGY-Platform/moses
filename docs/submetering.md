@@ -151,40 +151,16 @@ it, so a setpoint carrying the same characteristic stays storable.
 channel ids once, while the definition is indexed (`aggregateInputs`), and
 `executeAggregate` sums **the value each of those channels last published**
 (`env.lastValues`), one level deep, never walking the tree at execution time.
-Four consequences follow, and all four are deliberate:
+Six consequences follow, and all six are deliberate:
 
-- **A channel that has not produced a value yet counts as 0.** That is the same
-  convention a formula's channel reference follows.
-- **Each level of the tree costs one publish tick.** An intermediate aggregate
-  is summed like any other channel, so its own total reaches the level above on
-  the next tick of the channel above - a three-level tree is therefore up to
-  two ticks behind its leaves.
-- **After a restart the total is short by its non-cumulative children until
-  each of them has ticked once**, so for at most one of their intervals.
-  `lastValues` is in memory only and starts empty - except for the cumulative
-  channels: a cumulative meter's reading is persisted state, and the last value
-  such a channel published is that same reading, so it is restored into the
-  cache at start (`lib/runtime/environment.go`, `carryLastValues`). Without
-  that, the total of a cumulative chain would read 0 for a tick and then jump
-  to the real sum, in a series whose whole point is that it only ever rises.
-- **A reload drops the remembered value of every channel that can no longer
-  produce one.** The environment object and its value cache survive a reload,
-  the generation does not, so the cache is pruned against the new generation
-  (`carryLastValues`): an entry is kept for a channel that has a runner and for
-  a channel a command can reach, and dropped otherwise. Without the prune, an
-  edit that took a channel's runner away would leave its last reading in every
-  total above it for as long as the process ran - a missing summand shows up as
-  a total that is too low, a frozen one looks exactly like a meter still
-  reading.
-- **An input whose last value is not a finite number is left out of the sum.**
-  `checkStates` refuses NaN and infinity for stored states, but nothing stops a
-  script from sending `1/0` on a channel. One such child would otherwise turn
-  the total of every level above it into a non-number, which is a larger loss
-  than one summand missing from one total; the tick logs a WARN naming how many
-  inputs it left out.
-- **The order of the sum is document order**, fixed at index time. Float
-  addition is not associative, so a set iteration here would make the same
-  document produce marginally different totals from one start to the next.
+- **An input this generation can tick and that has produced no value yet stops
+  the total from being published at all.** A missing entry in `lastValues` is
+  unknown, not zero: summed as zero the total is short by a whole sub-meter,
+  which a change trigger would even persist as the new comparison base. The
+  tick logs a WARN and publishes nothing. An input nothing can tick is not
+  waited for and contributes 0, as the index-time WARN below says. In a history
+  run an aggregate over a formula or over another aggregate skips its first
+  instant this way (both sit in the same event class) and books it as silent.
 
 Two WARNs at index time flag when a total will be short - a plausible number is
 the one kind of wrong value nobody notices:
@@ -193,7 +169,8 @@ the one kind of wrong value nobody notices:
   interval, so nothing ticks it. If a command can reach it, it contributes the
   value it last produced until the next command moves it; if it cannot, it
   contributes 0 for as long as the generation runs. The two are logged as
-  different lines, because only the second one is silence.
+  different lines, because only the second one is silence. Neither is waited
+  for by the rule above - the total goes out without them rather than never.
 - **An aggregate whose sub-metered assets match nothing** - the tree is there
   and the input list is still empty, either because the characteristics differ
   or because the sub-metered channels carry none at all. That is what a
