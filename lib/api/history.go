@@ -35,7 +35,7 @@ func init() {
 
 // HistoryEndpoints start, follow and abort the run that gives one environment a
 // past.
-func HistoryEndpoints(config config.Config, environments repo.Environments, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier, router gin.IRouter) {
+func HistoryEndpoints(config config.Config, environments repo.Environments, shares repo.Shares, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier, permissions Permissions, router gin.IRouter) {
 	for _, route := range []func(repo.Environments, RuntimeNotifier) (string, string, gin.HandlerFunc){
 		postHistoryH,
 		getHistoryH,

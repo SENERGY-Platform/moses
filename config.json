@@ -7,6 +7,7 @@
     "environment_collection_name":"environments",
     "state_collection_name":"environment_states",
     "dataset_collection_name": "datasets",
+    "share_collection_name": "environment_shares",
     "mongo_url":"mongodb://db",
     "mongo_table": "moses",
     "js_timeout":2000000000,

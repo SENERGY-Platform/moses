@@ -35,7 +35,7 @@ func init() {
 
 // BackfillEndpoints start and observe the reconstruction of an environment over
 // a window that has already passed.
-func BackfillEndpoints(config config.Config, environments repo.Environments, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier, router gin.IRouter) {
+func BackfillEndpoints(config config.Config, environments repo.Environments, shares repo.Shares, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier, permissions Permissions, router gin.IRouter) {
 	for _, route := range []func(repo.Environments, RuntimeNotifier) (string, string, gin.HandlerFunc){
 		postBackfillH,
 		getBackfillH,

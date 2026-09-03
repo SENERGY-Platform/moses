@@ -56,6 +56,9 @@ type Config struct {
 	// DatasetCollectionName holds the metadata of uploaded datasets; the raw
 	// files live in a gridfs bucket named <collection>_content.
 	DatasetCollectionName string `json:"dataset_collection_name" env_var:"DATASET_COLLECTION_NAME"`
+	// ShareCollectionName holds, per environment, the accounts its devices are
+	// shared with. Beside the definition and not in it, see lib/repo/shares.go.
+	ShareCollectionName string `json:"share_collection_name" env_var:"SHARE_COLLECTION_NAME"`
 
 	// TimescaleWrapperUrl is where dataset sources with the platform origin
 	// fetch real measurements from. Empty disables the origin: affected

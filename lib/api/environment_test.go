@@ -189,12 +189,26 @@ func testRouterWithNotifier(store repo.Environments, notifier RuntimeNotifier) *
 // testRouterWith is the one place the environment endpoints are wired for a
 // test, so a new collaborator does not have to be threaded through every helper.
 func testRouterWith(store repo.Environments, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier) *gin.Engine {
+	//nil share store and nil permissions: the handlers have to work without
+	//permissions-v2 behind them, which is what every test that is not about
+	//sharing wants
+	return testRouterWithAll(store, nil, catalog, mirror, notifier, nil)
+}
+
+// testRouterWithShares wires the share store and permissions-v2 in, which is
+// what turns a share into rights on the devices of an environment.
+func testRouterWithShares(store repo.Environments, shares repo.Shares, catalog DeviceCatalog, permissions Permissions) *gin.Engine {
+	return testRouterWithAll(store, shares, catalog, nil, nil, permissions)
+}
+
+func testRouterWithAll(store repo.Environments, shares repo.Shares, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier, permissions Permissions) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	EnvironmentEndpoints(config.Config{}, store, catalog, mirror, notifier, router)
-	EnvironmentStateEndpoints(config.Config{}, store, catalog, mirror, notifier, router)
-	BackfillEndpoints(config.Config{}, store, catalog, mirror, notifier, router)
-	HistoryEndpoints(config.Config{}, store, catalog, mirror, notifier, router)
+	EnvironmentEndpoints(config.Config{}, store, shares, catalog, mirror, notifier, permissions, router)
+	EnvironmentStateEndpoints(config.Config{}, store, shares, catalog, mirror, notifier, permissions, router)
+	BackfillEndpoints(config.Config{}, store, shares, catalog, mirror, notifier, permissions, router)
+	HistoryEndpoints(config.Config{}, store, shares, catalog, mirror, notifier, permissions, router)
+	ShareEndpoints(config.Config{}, store, shares, catalog, mirror, notifier, permissions, router)
 	return router
 }
 

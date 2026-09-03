@@ -210,7 +210,17 @@ func New(config config.Config, ctx context.Context) (err error) {
 	//for the applications that read graphs. nil for the gateway token: moses
 	//always forwards the caller's own token
 	graphMirror := deviceRepo.NewClient(config.DeviceRepoUrl, nil)
-	api.Start(ctx, config, staterepo, environments, environments.Datasets(), catalog, graphMirror, notifier)
+	//permissions-v2 is where the rights of a device live; the share endpoints
+	//forward the caller's own token to it, as every other outgoing call does.
+	//Declared as the interface, not as the concrete type: a typed nil in an
+	//interface is not nil, and the api decides on exactly that comparison
+	var permissions api.Permissions
+	if config.PermissionsV2Url == "" {
+		util.Logger.Warn("no permissions_v2_url configured, the devices of an environment cannot be shared")
+	} else {
+		permissions = newPermissionsClient(config.PermissionsV2Url)
+	}
+	api.Start(ctx, config, staterepo, environments, environments.Shares(), environments.Datasets(), catalog, graphMirror, notifier, permissions)
 	go func() {
 		<-ctx.Done()
 		//runtime first, its final flush needs the store closed below

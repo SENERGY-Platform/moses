@@ -41,23 +41,26 @@ import (
 //
 // Re-storing the same document creates nothing, because the reference is set
 // by then - which is what makes a retry after a failed write safe.
-func provisionDevices(ctx context.Context, catalog DeviceCatalog, token sc_jwt.Token, env *domain.Environment) error {
+//
+// It returns the devices it created, because they are the ones that still have
+// to inherit what the environment as a whole already granted.
+func provisionDevices(ctx context.Context, catalog DeviceCatalog, token sc_jwt.Token, env *domain.Environment) ([]managedDevice, error) {
+	created := []managedDevice{}
 	if catalog == nil {
-		return nil
+		return created, nil
 	}
-	created := 0
 	for i := range env.Zones {
 		if err := provisionZone(ctx, catalog, token, &env.Zones[i], &created); err != nil {
-			return err
+			return created, err
 		}
 	}
-	if created > 0 {
-		util.Logger.Info("created platform devices for new assets", "environment", env.Id, "devices", created)
+	if len(created) > 0 {
+		util.Logger.Info("created platform devices for new assets", "environment", env.Id, "devices", len(created))
 	}
-	return nil
+	return created, nil
 }
 
-func provisionZone(ctx context.Context, catalog DeviceCatalog, token sc_jwt.Token, zone *domain.Zone, created *int) error {
+func provisionZone(ctx context.Context, catalog DeviceCatalog, token sc_jwt.Token, zone *domain.Zone, created *[]managedDevice) error {
 	for i := range zone.Zones {
 		if err := provisionZone(ctx, catalog, token, &zone.Zones[i], created); err != nil {
 			return err
@@ -78,7 +81,7 @@ func provisionZone(ctx context.Context, catalog DeviceCatalog, token sc_jwt.Toke
 		//this device exists because of this asset, so it goes when the asset goes.
 		//The only place the flag is ever set to true.
 		asset.ExternalManaged = true
-		*created++
+		*created = append(*created, managedDevice{assetId: asset.Id, deviceId: device.Id})
 	}
 	return nil
 }

@@ -36,7 +36,7 @@ func init() {
 // EnvironmentStateEndpoints serve the reading direction of the live state. The
 // writing direction is PATCH /environments/{id}/state in environment.go, and the
 // two are deliberately the same shape.
-func EnvironmentStateEndpoints(config config.Config, environments repo.Environments, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier, router gin.IRouter) {
+func EnvironmentStateEndpoints(config config.Config, environments repo.Environments, shares repo.Shares, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier, permissions Permissions, router gin.IRouter) {
 	for _, route := range []func(repo.Environments, RuntimeNotifier) (string, string, gin.HandlerFunc){
 		getEnvironmentStateH,
 	} {

@@ -89,6 +89,10 @@ A script source runs with `moses` bound in the VM:
 - An environment can also be *given* a past: simulated from an instant in the
   past up to now, with state, so the reconstructed meter and the live one are one
   ramp and the end state becomes the live state — `docs/history-run.md`.
+- The devices of an environment and the graph they appear in can be shared with
+  other users and groups, read and execute, without sharing the environment
+  itself. The set is stored beside the document, not in it — rules and failure
+  behaviour in `docs/sharing.md`.
 - Users see their own environments; the platform `admin` role sees all.
   Ownership never transfers.
 
