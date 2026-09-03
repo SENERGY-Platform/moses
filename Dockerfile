@@ -5,8 +5,8 @@ WORKDIR /go/src/app
 
 ENV GO111MODULE=on
 
-# the openapi specification is generated here rather than committed, so it can
-# never drift from the annotations it is generated from
+# the committed openapi specification is regenerated here as well, so the image
+# never carries a stale one; CI fails when the committed files would change
 RUN go generate ./...
 
 RUN CGO_ENABLED=0 GOOS=linux go build -o app

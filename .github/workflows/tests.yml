@@ -45,6 +45,13 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # the generated openapi files are committed so the spec is readable without
+      # a build; a diff here means a handler changed and the spec was not regenerated
+      - name: OpenAPI
+        run: |
+          go generate ./...
+          git diff --exit-code -- docs/
+
       - name: Secrets
         uses: gitleaks/gitleaks-action@v2
         env:

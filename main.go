@@ -16,7 +16,7 @@
 
 package main
 
-//go:generate go run github.com/swaggo/swag/cmd/swag@v1.16.4 init --generalInfo lib/api/api.go --output docs --parseDependency --parseInternal --outputTypes json,yaml
+//go:generate go run github.com/swaggo/swag/cmd/swag@v1.16.4 init --generalInfo lib/api/api.go --output docs --parseDependency --parseInternal
 
 import (
 	"context"
