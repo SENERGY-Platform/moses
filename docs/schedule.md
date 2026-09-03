@@ -9,7 +9,9 @@ outside. Set `source.kind: "schedule"` on a sensor channel with an
 `interval_seconds`. **Delimitation:** three neighbours are close enough to be
 picked by mistake.
 
-- `profile` is a *pattern over the clock* - hour and weekday factors. It has no
+- `profile` is a *pattern over the clock* - hour and weekday factors, read in
+  the process's local time (`TZ`; `docs/backfill.md`, "The clock a profile is
+  read by"). It has no
   states, nothing it publishes is named, and it cannot be started by anything.
 - `script` is what a schedule deliberately is not: a schedule has **no
   transitions and no conditions**. A programme that reacts to a measurement is a

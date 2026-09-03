@@ -30,7 +30,8 @@ context source, which would overwrite the dated value on its next tick
 each on its own ticker (`lib/runtime/contextsource.go`):
 
 - **Allowed: `profile` and `dataset`.** A day-cycle temperature, a replayed
-  weather series.
+  weather series. A profile's hour and weekday factors are local hours of the
+  process (`TZ`), see `docs/backfill.md`.
 - **Refused: `script`, `formula`, `aggregate` and `schedule`** — validation
   answers `not supported for context sources`. A formula reading the context it
   writes would be a cycle; scripts already can write the context directly; an
