@@ -195,6 +195,13 @@ which is why none of it is carried.
   produce ack - and where `publish_to_postgres` is on, the longer of that and
   the timescale write beside it rather than the sum of the two. The publish pool
   divides that by its workers.
+- **Since the pool, the loop's computing bounds a run, not the acks.** Measured
+  on the 69-channel demonstrator with 16 workers: 0.65 ms per simulation step,
+  about 1,500 steps and 1,150 readings a second, a year in roughly three hours —
+  where the synchronous path took 1.4 ms per step and six and a half hours. The
+  loop is one goroutine and most of a step is script execution in otto, so more
+  workers change nothing further; the next gain has to come from the compute
+  side.
 
 ## Operating it
 
