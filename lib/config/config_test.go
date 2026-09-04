@@ -322,6 +322,11 @@ func TestLoadConfigLocationLoadsTheShippedConfigJson(t *testing.T) {
 	if config.StateFlushInterval != 5*time.Second {
 		t.Errorf("StateFlushInterval: expected 5s from state_flush_interval=5000000000, got %v", config.StateFlushInterval)
 	}
+	// the shipped worker count of the publish pool: a zero here would silently
+	// fall back to the runtime default instead of being the configured value
+	if config.PublishWorkers != 16 {
+		t.Errorf("PublishWorkers: expected the shipped 16, got %v", config.PublishWorkers)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -404,6 +409,7 @@ func TestConfigFieldsMapToTheExpectedEnvironmentVariableNames(t *testing.T) {
 		"Protocol":                  "PROTOCOL",
 		"ProtocolSegmentName":       "PROTOCOL_SEGMENT_NAME",
 		"PublishToPostgres":         "PUBLISH_TO_POSTGRES",
+		"PublishWorkers":            "PUBLISH_WORKERS",
 		"ServerPort":                "SERVER_PORT",
 		"StateCollectionName":       "STATE_COLLECTION_NAME",
 		"DatasetCollectionName":     "DATASET_COLLECTION_NAME",

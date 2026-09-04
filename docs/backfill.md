@@ -199,6 +199,30 @@ clock. Without that conversion every backfilled day profile would sit at the
 server's zone offset away from the live one - a silent error in the training
 data. `lib/runtime/backfill_test.go` pins it.
 
+## The readings go out through the publish pool
+
+A job builds a pool of workers of its own - the same kind a history run builds,
+sized by `PUBLISH_WORKERS`, default 16 - which publishes its readings through the
+same synchronous call; a channel is pinned to one worker by a hash of its id, so
+its readings keep the order they were computed in. What a job gains from that is the
+overlap between computing and sending and nothing more, because it works one
+channel at a time and one channel is one worker. A channel publishing on change
+waits for each ack, since its comparison base may only be advanced by a reading
+that really went out.
+
+The counters are booked when the ack arrives. The job drains the pool before it
+moves on to the next channel, so the totals of a channel are final once it is
+reported, while the `position` of a running job may lag by the readings in
+flight. A reading the pool accepted but never sent, because the job was
+cancelled, counts as **silent** rather than failed: nothing was attempted, so
+nothing was refused, and the state `cancelled` is what says why it is missing.
+
+The first reading of every service topic is produced alone, for the reason
+`docs/history-run.md` gives. Between two steps the job waits until its channel's
+worker holds fewer than 32 readings: it works one channel at a time, so without
+that bound a job would stage its whole window on one worker, and a cancelled job
+would have to book all of it as silent.
+
 ## What the job does not touch
 
 The live simulation of the same environment keeps running while a job does, and

@@ -194,18 +194,33 @@ func (this *Runtime) covSend(env *environment, binding channelBinding, value int
 // the caller's own runner, which is why it is a parameter rather than a field of
 // the binding two goroutines share.
 func (this *Runtime) covGate(env *environment, binding channelBinding, run *faultRun, value interface{}, forced bool, now time.Time, send func(value interface{}) bool) bool {
-	value, unfaulted := this.faulted(env, binding, run, value, now)
-	if !unfaulted {
+	reading, number, numeric, ok := this.covDecide(env, binding, run, value, forced, now)
+	if !ok {
 		return false
 	}
-	number, numeric := asFloat(value)
+	if !send(reading) {
+		return false
+	}
+	covBook(env, binding, number, numeric, now)
+	return true
+}
+
+// covDecide is the half of the gate that does not publish: the fault, the number
+// and the threshold. Split out because the history run publishes through a pool
+// and books afterwards, and both paths have to reach the same decision.
+//
+// numeric false is the fail-open case: a channel whose script sends a string or a
+// boolean has no distance between two values, so it publishes on every
+// evaluation and covBook leaves the base alone - a later numeric value still
+// compares against the last number that actually went out.
+func (this *Runtime) covDecide(env *environment, binding channelBinding, run *faultRun, value interface{}, forced bool, now time.Time) (reading interface{}, number float64, numeric bool, ok bool) {
+	value, unfaulted := this.faulted(env, binding, run, value, now)
+	if !unfaulted {
+		return nil, 0, false, false
+	}
+	number, numeric = asFloat(value)
 	if !numeric {
-		//fail open: a channel whose script sends a string or a boolean has no
-		//distance between two values, and dropping such a value would silence
-		//the channel entirely. It publishes on every evaluation instead, and the
-		//bookkeeping is left alone so a later numeric value still compares
-		//against the last number that actually went out.
-		return send(value)
+		return value, 0, false, true
 	}
 	if !forced {
 		var base *float64
@@ -215,26 +230,28 @@ func (this *Runtime) covGate(env *environment, binding channelBinding, run *faul
 			base = &stored
 		}
 		if !covSends(*binding.cov, base, number) {
-			return false
+			return nil, 0, false, false
 		}
 	}
-	if !send(value) {
-		return false
-	}
-	if !finite(number) {
-		//it went out, so the heartbeat gap restarts, but it must not become the
-		//comparison base: every later comparison against it would be false and
-		//the channel would fall back to the heartbeat forever. The stored state
-		//cannot hold it either (copyValue turns it into 0, which would be a
-		//comparison base nobody wrote).
-		return true
+	return value, number, true, true
+}
+
+// covBook is the comparison base a reading that went out leaves behind. It must
+// be called with env.mux held, and only for a reading the platform accepted.
+//
+// A value that is not a number and one that is not finite leave the base alone:
+// every later comparison against a non-finite base would be false and the channel
+// would fall back to the heartbeat forever, and the stored state cannot hold it
+// either (copyValue turns it into 0, a base nobody wrote).
+func covBook(env *environment, binding channelBinding, number float64, numeric bool, at time.Time) {
+	if !numeric || !finite(number) {
+		return
 	}
 	if env.state.LastPublished == nil {
 		env.state.LastPublished = map[string]repo.PublishedValue{}
 	}
-	env.state.LastPublished[binding.channel.Id] = repo.PublishedValue{Value: number, AtUnix: now.Unix()}
+	env.state.LastPublished[binding.channel.Id] = repo.PublishedValue{Value: number, AtUnix: at.Unix()}
 	env.dirty = true
-	return true
 }
 
 // covPublish is the live gate: covGate sending through covSend, so a channel

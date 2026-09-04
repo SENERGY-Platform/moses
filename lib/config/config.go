@@ -75,6 +75,14 @@ type Config struct {
 	// json: nanoseconds, env: duration string ("5s").
 	StateFlushInterval time.Duration `json:"state_flush_interval" env_var:"STATE_FLUSH_INTERVAL"`
 
+	// PublishWorkers is how many readings a history run or a backfill has in
+	// flight at once, which is what multiplies the throughput of a run. A channel
+	// is pinned to one worker, so raising it past the number of channels of an
+	// environment changes nothing, and every worker holds a queue of jobs
+	// carrying a full channel binding. Zero or less is the default of 16, and the
+	// count is clamped to 256.
+	PublishWorkers int `json:"publish_workers" env_var:"PUBLISH_WORKERS"`
+
 	KafkaUrl           string `json:"kafka_url" env_var:"KAFKA_URL"`
 	KafkaResponseTopic string `json:"kafka_response_topic" env_var:"KAFKA_RESPONSE_TOPIC"`
 	KafkaGroupName     string `json:"kafka_group_name" env_var:"KAFKA_GROUP_NAME"`

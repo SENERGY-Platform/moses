@@ -141,10 +141,13 @@ func parityBackfill(t *testing.T, def domain.Environment, series map[string][]da
 	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, publisher)
 	gen := newGeneration(def, series)
 	job := &backfillJob{done: make(chan struct{}), status: BackfillStatus{EnvironmentId: def.Id}}
+	//one pool for every channel, as the job has it: with one per channel the
+	//channels would never share a worker and the parity would not cover the pool
+	pool := testPublishPool(t, rt)
 	result := map[string][]float64{}
 	for _, channel := range backfillChannels(def) {
 		status := BackfillChannelStatus{ChannelId: channel.channel.Id}
-		rt.runBackfillChannel(context.Background(), job, gen, channel, series[channel.channel.Id], from, to, &status)
+		rt.runBackfillChannel(context.Background(), pool, job, gen, channel, series[channel.channel.Id], from, to, &status)
 		if status.Failed > 0 {
 			t.Fatalf("the backfill of %v failed %d readings: %v", channel.channel.Id, status.Failed, status.LastError)
 		}

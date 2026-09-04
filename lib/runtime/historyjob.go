@@ -28,10 +28,11 @@ import (
 	"github.com/SENERGY-Platform/moses/lib/util"
 )
 
-// maxHistoryTicks bounds one run. Every reading is published synchronously, so
-// the number of due events is the runtime of the run; a window and a set of
-// intervals that multiply out beyond this are refused before the live channels
-// are stopped for it.
+// maxHistoryTicks bounds one run. Every reading is published synchronously and
+// the publish pool sends at most as many at once as it has workers, so the
+// number of due events still bounds the runtime of the run; a window and a set
+// of intervals that multiply out beyond this are refused before the live
+// channels are stopped for it.
 const maxHistoryTicks = 20_000_000
 
 var (

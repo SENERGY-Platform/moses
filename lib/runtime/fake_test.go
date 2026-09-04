@@ -18,6 +18,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -247,6 +248,20 @@ func (this *fakeStates) loadCount(environmentId string) int {
 	return this.loads[environmentId]
 }
 
+// savesOf counts the writes of one environment, which is how a test tells a
+// flusher that keeps running from one that got stuck on another environment.
+func (this *fakeStates) savesOf(environmentId string) int {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	count := 0
+	for _, saved := range this.saves {
+		if saved.state.EnvironmentId == environmentId {
+			count++
+		}
+	}
+	return count
+}
+
 func (this *fakeStates) loadBudgetFor(environmentId string) ctxBudget {
 	this.mux.Lock()
 	defer this.mux.Unlock()
@@ -290,6 +305,17 @@ type fakePublisher struct {
 	// Written once before the runtime starts and never again, so reading it
 	// outside the mutex is not a race.
 	gate chan struct{}
+
+	// latency, when set, is how long one timestamped publish takes. It is how a
+	// test makes the workers of the publish pool finish in an order other than
+	// the one they were given. Written once before the runtime starts, like gate.
+	latency func() time.Duration
+
+	// inFlight and peak count the timestamped publishes that are running at the
+	// same time, which is how a test tells a pooled path from a synchronous one:
+	// without the pool the peak is one.
+	inFlight int
+	peak     int
 }
 
 func (this *fakePublisher) PublishEvent(externalDeviceRef string, externalServiceRef string, value interface{}) error {
@@ -308,6 +334,16 @@ func (this *fakePublisher) PublishEventAt(externalDeviceRef string, externalServ
 		//would otherwise block on it
 		<-this.gate
 	}
+	this.enter()
+	defer this.leave()
+	//marshalled the way the connector does, outside every lock of the runtime:
+	//a reading that is still the map in the environment state races here
+	_, _ = json.Marshal(value)
+	if this.latency != nil {
+		//before the lock as well, or the publishes would serialise on the fake
+		//and no test could observe the pool overlapping them
+		time.Sleep(this.latency())
+	}
 	this.mux.Lock()
 	defer this.mux.Unlock()
 	if this.failAt != nil {
@@ -319,6 +355,28 @@ func (this *fakePublisher) PublishEventAt(externalDeviceRef string, externalServ
 		deviceRef: externalDeviceRef, serviceRef: externalServiceRef, value: value, at: at,
 	})
 	return this.err
+}
+
+func (this *fakePublisher) enter() {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	this.inFlight++
+	if this.inFlight > this.peak {
+		this.peak = this.inFlight
+	}
+}
+
+func (this *fakePublisher) leave() {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	this.inFlight--
+}
+
+// peakConcurrency is the most timestamped publishes that ever ran at once.
+func (this *fakePublisher) peakConcurrency() int {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	return this.peak
 }
 
 func (this *fakePublisher) TimeShapeOf(externalDeviceRef string, externalServiceRef string) (devices.TimeShape, error) {
@@ -444,6 +502,16 @@ func testConfig(flushInterval time.Duration) config.Config {
 		StateFlushInterval:  flushInterval,
 		ProtocolSegmentName: "payload",
 	}
+}
+
+// testPublishPool is the pool a test needs when it drives one backfill channel
+// directly rather than through a job. It closes with the test, so a test that
+// fails halfway still leaves no worker behind.
+func testPublishPool(t *testing.T, rt *Runtime) *publishPool {
+	t.Helper()
+	pool := newPublishPool(context.Background(), rt.publishWorkers, rt.backfillPublisher())
+	t.Cleanup(pool.Close)
+	return pool
 }
 
 // startRuntime builds a runtime on the fakes and stops it when the test ends.

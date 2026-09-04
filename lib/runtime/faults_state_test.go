@@ -378,9 +378,11 @@ func TestABackfillNeverTouchesTheLiveMeterOffsets(t *testing.T) {
 	env := &environment{id: id, gen: gen, state: repo.RuntimeState{EnvironmentId: id, MeterExchanges: live}}
 
 	job := &backfillJob{done: make(chan struct{}), status: BackfillStatus{EnvironmentId: id}}
+	//one pool for every channel, as the job has it
+	pool := testPublishPool(t, rt)
 	for _, channel := range backfillChannels(def) {
 		status := BackfillChannelStatus{ChannelId: channel.channel.Id}
-		rt.runBackfillChannel(context.Background(), job, gen, channel, nil, from, to, &status)
+		rt.runBackfillChannel(context.Background(), pool, job, gen, channel, nil, from, to, &status)
 		if status.Published == 0 {
 			t.Fatal("the job is meant to publish something")
 		}

@@ -476,9 +476,9 @@ func (this *Runtime) skipReason(channel backfillChannel, points []dataset.Point)
 	return ""
 }
 
-// runBackfill is the job. Channels are done one after another rather than in
-// parallel: every publish is synchronous, so parallelism here would only move
-// the queue from this service into the platform's ingestion.
+// runBackfill is the job. Channels are done one after another, as they always
+// were, and one channel is one shard of the publish pool - so a job gains the
+// overlap between computing and sending and nothing more.
 func (this *Runtime) runBackfill(ctx context.Context, job *backfillJob, gen *generation, channels []backfillChannel, from time.Time, to time.Time) {
 	defer this.backfillWorkers.Done()
 	defer close(job.done)
@@ -499,6 +499,19 @@ func (this *Runtime) runBackfill(ctx context.Context, job *backfillJob, gen *gen
 			current.CurrentChannel = ""
 			current.Position = nil
 		})
+	}()
+
+	//registered after the recover above, so it runs before it: nothing may be in
+	//flight when the job reports itself finished, however it ended
+	pool := newPublishPool(ctx, this.publishWorkers, this.backfillPublisher())
+	defer pool.Close()
+	//and the same as the run: a job that broke must not let Close send the rest
+	//of the window it had staged
+	defer func() {
+		if problem := recover(); problem != nil {
+			pool.Abort()
+			panic(problem)
+		}
 	}()
 
 	started := time.Now()
@@ -525,7 +538,7 @@ func (this *Runtime) runBackfill(ctx context.Context, job *backfillJob, gen *gen
 		job.update(func(current *BackfillStatus) {
 			current.CurrentChannel = channel.channel.Id
 		})
-		this.runBackfillChannel(ctx, job, gen, channel, points, from, to, &status)
+		this.runBackfillChannel(ctx, pool, job, gen, channel, points, from, to, &status)
 		published += status.Published
 		job.update(func(current *BackfillStatus) {
 			current.Channels = append(current.Channels, status)
@@ -564,7 +577,23 @@ func (this *Runtime) runBackfill(ctx context.Context, job *backfillJob, gen *gen
 // simulation keeps running while the job does, and moving the persisted loop
 // anchor backwards would make the live channel jump to a different point in
 // its data.
-func (this *Runtime) runBackfillChannel(ctx context.Context, job *backfillJob, gen *generation, channel backfillChannel, points []dataset.Point, from time.Time, to time.Time, status *BackfillChannelStatus) {
+func (this *Runtime) runBackfillChannel(ctx context.Context, pool *publishPool, job *backfillJob, gen *generation, channel backfillChannel, points []dataset.Point, from time.Time, to time.Time, status *BackfillChannelStatus) {
+	//every reading is acked before this returns, on every way out: the caller
+	//reads these counters afterwards
+	defer pool.Drain()
+
+	//book guards status against the workers, which count a reading up when its
+	//ack arrives while this loop is already computing further
+	book := sync.Mutex{}
+	silent := func() {
+		book.Lock()
+		status.Silent++
+		book.Unlock()
+	}
+	//acks is where a channel with a change trigger waits for its answer; only one
+	//such reading is ever in flight, so the single slot cannot fill up
+	acks := make(chan bool, 1)
+
 	interval := channel.channel.IntervalSeconds
 	//with a change trigger the value is computed on the evaluation grid and the
 	//publish interval becomes the heartbeat, exactly as it does live
@@ -623,7 +652,7 @@ func (this *Runtime) runBackfillChannel(ctx context.Context, job *backfillJob, g
 
 		value, ok := this.backfillValue(gen, channel, points, anchor, at, &counter, cumulative, step)
 		if !ok {
-			status.Silent++
+			silent()
 			continue
 		}
 		//the fault sits between the computed value and the send, exactly as it does
@@ -635,7 +664,7 @@ func (this *Runtime) runBackfillChannel(ctx context.Context, job *backfillJob, g
 			if !send {
 				//suppressed, and counted as silent for the same reason a value that
 				//was never produced is
-				status.Silent++
+				silent()
 				//the heartbeat of the live runner fires and resets its timer whether
 				//or not anything went out, and the history run advances
 				//lastAttemptUnix the same way; without this mirror a suppressed
@@ -651,54 +680,103 @@ func (this *Runtime) runBackfillChannel(ctx context.Context, job *backfillJob, g
 			//suppressed, and counted as silent for the same reason a value that
 			//was never produced is: nothing was sent at this instant. Published
 			//plus silent plus failed stays the number of steps.
-			status.Silent++
+			silent()
 			continue
 		}
-		if err := this.publisher.PublishEventAt(channel.externalDeviceRef, channel.channel.ExternalRef, value, at); err != nil {
-			status.Failed++
-			status.LastError = err.Error()
-			//WARN, not ERROR: a backfill that loses readings is worth looking at
-			//and is not a page. The count and the message are in the status.
-			if status.Failed == 1 {
-				util.Logger.Warn("unable to publish a backfilled reading", attributes.ErrorKey, err,
-					"environment", gen.def.Id, "channel", channel.channel.Id, "at", at)
-			}
-			//the attempt restarts the heartbeat gap whether or not the reading
-			//went out, mirroring the live runner, which resets the timer right
-			//after covPublish unconditionally; keeping the old moment would make
-			//every following instant overdue and shift the reconstructed grid
-			//off the live cadence. The comparison base stays as it was, exactly
-			//as covPublish leaves the stored entry alone on a failure.
-			if hasCov {
-				lastPublishedAt = at.Unix()
-			}
-			continue
-		}
-		if hasCov {
-			//every publish restarts the heartbeat gap, mirroring the live
-			//timer reset after covPublish
-			lastPublishedAt = at.Unix()
-			if finite(value) {
-				sent := value
-				lastPublished = &sent
-			}
-			//a value that is not finite went out but must not become the
-			//comparison base, exactly as covPublish refuses to store one: every
-			//later comparison against it would be false, so a NaN sample would
-			//suppress movement here while the live channel kept publishing it -
-			//breaking the parity the bookkeeping exists for.
-		}
-		status.Published++
-		if status.Published%backfillLogEvery == 0 {
-			util.Logger.Info("backfill progress", "environment", gen.def.Id,
-				"channel", channel.channel.Id, "published", status.Published, "at", at)
-		}
-		position := at
-		job.update(func(current *BackfillStatus) {
-			current.Position = &position
-			current.Published++
+		//captured for the callback rather than read off the loop variable, which
+		//has moved on by the time the ack arrives
+		instant := at
+		pool.Submit(publishJob{
+			channelId: channel.channel.Id,
+			binding: channelBinding{
+				asset:   assetRef{id: channel.assetId, externalRef: channel.externalDeviceRef},
+				channel: channel.channel,
+			},
+			value: value,
+			at:    instant,
+			done: func(sent bool, err error) {
+				this.backfillPublished(job, gen, channel, status, &book, sent, err, instant)
+				if hasCov {
+					acks <- sent
+				}
+			},
 		})
+		//the backpressure: a job holds one step plus the mark in memory rather
+		//than the window it is reconstructing
+		pool.Throttle()
+		if !hasCov {
+			continue
+		}
+		//a change trigger waits: the comparison base may only be advanced by a
+		//reading that really went out
+		sent := <-acks
+		//the attempt restarts the heartbeat gap whether or not the reading went
+		//out, mirroring the live runner, which resets the timer right after
+		//covPublish unconditionally; keeping the old moment would make every
+		//following instant overdue and shift the reconstructed grid off the live
+		//cadence.
+		lastPublishedAt = at.Unix()
+		if sent && finite(value) {
+			base := value
+			lastPublished = &base
+		}
+		//a value that is not finite went out but must not become the comparison
+		//base, exactly as covPublish refuses to store one: every later comparison
+		//against it would be false, so a NaN sample would suppress movement here
+		//while the live channel kept publishing it. A refused reading leaves the
+		//base alone for the same reason covPublish does.
 	}
+}
+
+// backfillPublisher is the send behind a backfill's publish pool: the same call
+// the job made itself before the pool existed.
+func (this *Runtime) backfillPublisher() func(job publishJob) (bool, error) {
+	return func(job publishJob) (bool, error) {
+		err := this.publisher.PublishEventAt(job.binding.asset.externalRef, job.binding.channel.ExternalRef, job.value, job.at)
+		return err == nil, err
+	}
+}
+
+// backfillPublished books what became of one reading. It runs on a worker, so
+// what it touches on the channel's status is under book.
+//
+// A reading the abort dropped is silent rather than failed - nothing was
+// attempted, so nothing was refused. WARN and not ERROR on a real failure: a
+// backfill that loses readings is worth looking at and is not a page, and one
+// line per channel keeps a broken service from writing one per reading.
+func (this *Runtime) backfillPublished(job *backfillJob, gen *generation, channel backfillChannel, status *BackfillChannelStatus, book *sync.Mutex, sent bool, err error, at time.Time) {
+	if !sent {
+		aborted := errors.Is(err, ErrPublishAborted)
+		book.Lock()
+		if aborted {
+			status.Silent++
+		} else {
+			status.Failed++
+		}
+		if err != nil && (!aborted || status.LastError == "") {
+			status.LastError = err.Error()
+		}
+		first := !aborted && status.Failed == 1
+		book.Unlock()
+		if first {
+			util.Logger.Warn("unable to publish a backfilled reading", attributes.ErrorKey, err,
+				"environment", gen.def.Id, "channel", channel.channel.Id, "at", at)
+		}
+		return
+	}
+	book.Lock()
+	status.Published++
+	published := status.Published
+	book.Unlock()
+	if published%backfillLogEvery == 0 {
+		util.Logger.Info("backfill progress", "environment", gen.def.Id,
+			"channel", channel.channel.Id, "published", published, "at", at)
+	}
+	position := at
+	job.update(func(current *BackfillStatus) {
+		current.Position = &position
+		current.Published++
+	})
 }
 
 // covBackfillSends is the live gate's decision, replayed on the grid: whatever

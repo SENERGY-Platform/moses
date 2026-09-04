@@ -80,6 +80,10 @@ type Runtime struct {
 	jsTimeout     time.Duration
 	flushInterval time.Duration
 
+	// publishWorkers is how many readings a history run or a backfill has in
+	// flight at once, see publishpool.go.
+	publishWorkers int
+
 	// lifecycle serialises Start, Stop, Reload and Remove against each other, so
 	// that two api calls arriving at once cannot interleave their stop and start
 	// phases. It is never held while a script runs.
@@ -174,19 +178,31 @@ func newRuntime(config config.Config, environments repo.Environments, states rep
 		util.Logger.Warn("no state flush interval configured, using the default", "default", defaultStateFlushInterval)
 		flushInterval = defaultStateFlushInterval
 	}
+	//a zero count is an unset configuration, and one below zero is a mistake; a
+	//pool of no workers would accept readings nobody ever sends
+	publishWorkers := config.PublishWorkers
+	if publishWorkers <= 0 {
+		publishWorkers = defaultPublishWorkers
+	}
+	if publishWorkers > maxPublishWorkers {
+		util.Logger.Warn("more publish workers configured than the pool allows, using the limit",
+			"configured", config.PublishWorkers, "limit", maxPublishWorkers)
+		publishWorkers = maxPublishWorkers
+	}
 	result := &Runtime{
-		config:        config,
-		environments:  environments,
-		states:        states,
-		datasets:      datasets,
-		publisher:     publisher,
-		jsTimeout:     jsTimeout,
-		flushInterval: flushInterval,
-		envs:          map[string]*environment{},
-		commands:      map[commandKey]*runningChannel{},
-		devices:       map[string]*environment{},
-		backfills:     map[string]*backfillJob{},
-		histories:     map[string]*historyJob{},
+		config:         config,
+		environments:   environments,
+		states:         states,
+		datasets:       datasets,
+		publisher:      publisher,
+		jsTimeout:      jsTimeout,
+		flushInterval:  flushInterval,
+		publishWorkers: publishWorkers,
+		envs:           map[string]*environment{},
+		commands:       map[commandKey]*runningChannel{},
+		devices:        map[string]*environment{},
+		backfills:      map[string]*backfillJob{},
+		histories:      map[string]*historyJob{},
 	}
 	result.historyEngine = result.runHistory
 	return result

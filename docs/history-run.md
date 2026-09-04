@@ -55,6 +55,64 @@ itself derived: the input has no value yet, and an aggregate does not publish a
 total that is short by one of its inputs (`docs/submetering.md`). The step is
 booked as silent.
 
+## The readings go out in parallel
+
+The loop computes as it always did and hands every reading to a pool of workers
+(`PUBLISH_WORKERS`, default 16, clamped to 256) which publish it through the same
+synchronous call, so an ack and an error stay per reading. **A channel is pinned
+to one worker by a hash of its id**, so the readings of one channel go out in the
+order they were computed; two channels may share a worker and then take turns.
+What a run costs is the number of readings divided by the workers, times the ack
+of one publish. That ack is the kafka produce, and where `publish_to_postgres` is
+switched on the longer of it and the timescale write, which the connector starts
+next to the produce and waits for afterwards.
+
+**The hand-over never waits**, because it happens with the environment mutex
+held and the flusher needs that mutex to write the state of *every* environment
+in turn - a run that waited there would keep the state of its neighbours from
+reaching the database. The backpressure sits between two instants instead, where
+no mutex is held: the loop waits there until the whole pool holds fewer than 32
+readings per worker **and** the worker of the channel it last handed one to holds
+fewer than 32. The second bound is what a run over few channels needs, since all of
+its readings sit on one worker, and it also bounds what an abort has to book as
+silent.
+
+The three counters are booked when the ack arrives rather than when the reading
+is handed over. `published + silent + failed` is still exactly the number of
+steps of the publish grid, and a status polled while the run is going may lag the
+computation by the readings in flight. A reading the pool accepted but never sent
+- an abort, or the service shutting down - is booked as **silent**: nothing was
+attempted, so nothing was refused, and the state of the run is what says why it
+is missing. Its message only stands as `last_error` while no platform refusal is
+known.
+
+**A channel publishing on change collects the answer of its previous publish
+before it decides the next one.** The comparison base is advanced only by a
+reading that really went out, and the heartbeat of an instant depends on whether
+the change publish of that instant succeeded, so the gate never decides against a
+reading whose fate is unknown - a base advanced on a refused reading would
+silence the channel for a whole heartbeat and report a run as silent that in
+truth failed. Thousands of other events lie between two steps of one channel, so
+that answer has normally been there for a long time.
+
+The pool is drained before the chase measures the gap and before the handover, so
+the gap is measured on readings that have landed and the live channels never
+start next to a history reading still on its way.
+
+**The first reading of every service topic is produced alone.** The platform's
+connector library keeps the topics it has created in a map it neither locks for
+the write nor for the read every later publish makes, so a first produce next to
+any other produce ends the process (SNRGY-4664). A worker that has a first
+reading of a topic therefore takes a lock that excludes every other publish of
+this process - the lock and the set of produced-to topics are process wide, so
+two runs of two environments cannot produce a first reading at once either - and
+marks the topic only once the reading really went out, since a publish that
+failed for want of a token never created it.
+
+What is left of that gap is what does not go through a pool: the live runners of
+every environment, and the responses to device commands. Those still produce on
+the same writer, so this reduces the odds and guarantees nothing.
+
 ## The hard condition: `senergy/time_path`
 
 The same one the backfill has, and for the same reason: the platform's timescale
@@ -133,8 +191,10 @@ which is why none of it is carried.
   start later, or widen the intervals. The steps the run adds while it chases
   the clock are not counted, and are bounded instead by the halving above: at
   most about twice the pass they follow.
-- Every reading is published synchronously under `Sync` qos, so the number of
-  steps is the runtime of the run.
+- Every reading is published under `Sync` qos, so one publish costs a kafka
+  produce ack - and where `publish_to_postgres` is on, the longer of that and
+  the timescale write beside it rather than the sum of the two. The publish pool
+  divides that by its workers.
 
 ## Operating it
 

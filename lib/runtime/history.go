@@ -19,8 +19,10 @@ package runtime
 import (
 	"container/heap"
 	"context"
+	"errors"
 	"math"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
@@ -118,10 +120,17 @@ type HistoryResult struct {
 	End      time.Time
 }
 
-// historyShared is what the whole run keeps rather than one channel: the message
-// of the most recent publish failure. Recent by instant, since the events are
-// processed in the order of the virtual clock.
+// historyShared is what the whole run keeps rather than one channel: the pool
+// and the message of the most recent publish failure.
+//
+// mux guards lastError and the counters of every channel, which the pool's
+// workers book while the loop computes - so a polled status may lag by the acks
+// in flight, while the totals of a drained run are exact. It is a leaf lock,
+// never held while a reading is submitted.
 type historyShared struct {
+	pool *publishPool
+
+	mux       sync.Mutex
 	lastError string
 }
 
@@ -223,6 +232,13 @@ type historyChannel struct {
 	// over, so the live channel continues from the register the run left.
 	faultMemory *faultRun
 
+	// outstanding is the one publish of this channel whose answer has not been
+	// collected yet, acks where the worker leaves it. A change trigger decides
+	// against the base and the gap the previous publish left, so every decision
+	// collects the answer first - which is what keeps at most one open.
+	outstanding *covOutstanding
+	acks        chan bool
+
 	// reported keeps the log to one line per broken channel.
 	reported bool
 
@@ -230,6 +246,17 @@ type historyChannel struct {
 	shared *historyShared
 
 	result HistoryChannelStatus
+}
+
+// covOutstanding is a publish of a channel with a change trigger that has not
+// been acked yet: what the gate applies once the answer is there.
+type covOutstanding struct {
+	at      time.Time
+	number  float64
+	numeric bool
+	// forced tells a heartbeat publish from a change publish: a heartbeat
+	// restarts the gap on the attempt, a change publish only when it went out.
+	forced bool
 }
 
 // historyOutcome is what one step of one channel did, before it is folded into
@@ -240,6 +267,8 @@ type historyOutcome struct {
 }
 
 func (this *historyChannel) record(outcome historyOutcome) {
+	this.shared.mux.Lock()
+	defer this.shared.mux.Unlock()
 	switch {
 	case outcome.attempted == 0:
 		this.result.Silent++
@@ -248,6 +277,72 @@ func (this *historyChannel) record(outcome historyOutcome) {
 	default:
 		this.result.Failed++
 	}
+}
+
+// historyStep collects the attempts of one step of one channel and books it
+// exactly once, when the last of them has been acked: one step can carry several
+// attempts, and published + silent + failed has to stay the number of steps. The
+// loop has moved on by then, which is why the step is passed down rather than an
+// outcome the caller reads afterwards.
+type historyStep struct {
+	channel *historyChannel
+
+	mux       sync.Mutex
+	attempted int
+	acked     int
+	published int
+	// aborted counts the attempts the pool dropped without sending them, which
+	// count as never attempted: silent means nothing was tried, failed means the
+	// platform refused.
+	aborted int
+	// sealed says the loop is done submitting attempts for this step. Whichever
+	// of sealing and the last ack happens second books the step.
+	sealed bool
+	booked bool
+}
+
+// attempt registers one publish, before the reading is submitted: the counter
+// must never be reached by an ack it does not know about yet.
+func (this *historyStep) attempt() {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	this.attempted++
+}
+
+// ack takes the answer of one attempt.
+func (this *historyStep) ack(sent bool, aborted bool) {
+	this.mux.Lock()
+	this.acked++
+	if sent {
+		this.published++
+	}
+	if aborted {
+		this.aborted++
+	}
+	this.mux.Unlock()
+	this.book()
+}
+
+// seal ends the step on the loop's side.
+func (this *historyStep) seal() {
+	this.mux.Lock()
+	this.sealed = true
+	this.mux.Unlock()
+	this.book()
+}
+
+func (this *historyStep) book() {
+	this.mux.Lock()
+	if this.booked || !this.sealed || this.acked < this.attempted {
+		this.mux.Unlock()
+		return
+	}
+	this.booked = true
+	outcome := historyOutcome{attempted: this.attempted - this.aborted, published: this.published}
+	this.mux.Unlock()
+	//outside this mutex: record takes the run's own, and holding two where one
+	//would do is how a lock order gets invented
+	this.channel.record(outcome)
 }
 
 // runHistory simulates the environment from from to to on a virtual clock.
@@ -310,8 +405,25 @@ func (this *Runtime) runHistory(ctx context.Context, env *environment, gen *gene
 		return at, true
 	}
 
+	//the workers send through the same synchronous path the loop used before the
+	//pool: one reading, one ack, one error. Close covers a panic as well as a
+	//return, so a broken run leaves nothing in flight.
+	pool := newPublishPool(ctx, this.publishWorkers, func(job publishJob) (bool, error) {
+		return this.publishAt(env, job.binding, job.value, false, job.at)
+	})
+	defer pool.Close()
+	//registered after Close, so it runs before it: a run that broke must not let
+	//Close send the rest of its staged readings, whose comparison base nothing
+	//will book
+	defer func() {
+		if problem := recover(); problem != nil {
+			pool.Abort()
+			panic(problem)
+		}
+	}()
+
 	channels := make([]*historyChannel, len(gen.sensors))
-	shared := &historyShared{}
+	shared := &historyShared{pool: pool}
 	grids := []historyGrid{}
 	addGrid := func(class int, order int, step int64) {
 		grids = append(grids, historyGrid{class: class, order: order, step: step})
@@ -336,6 +448,8 @@ func (this *Runtime) runHistory(ctx context.Context, env *environment, gen *gene
 			lastAttemptUnix:  baseUnix,
 			faultMemory:      &faultRun{},
 			shared:           shared,
+			//one slot, because a channel never has more than one publish open
+			acks: make(chan bool, 1),
 			result: HistoryChannelStatus{
 				ChannelId:   binding.channel.Id,
 				AssetId:     binding.asset.id,
@@ -386,7 +500,11 @@ func (this *Runtime) runHistory(ctx context.Context, env *environment, gen *gene
 	for round := 0; ; round++ {
 		for queue.Len() > 0 {
 			if err := ctx.Err(); err != nil {
-				result.Channels = historyResults(channels)
+				//booked before the counters are read, or the three of them would
+				//not add up to the steps the run took
+				pool.Drain()
+				this.historySettleAll(env, channels)
+				result.Channels = historyResults(channels, shared)
 				result.Published, result.Failed, result.LastError = historyTotals(channels, shared)
 				//the end of an aborted run is the last instant it actually
 				//simulated: a chase round that was cut short had already raised
@@ -407,6 +525,10 @@ func (this *Runtime) runHistory(ctx context.Context, env *environment, gen *gene
 			default:
 				this.historyChannelDue(env, gen, channels[event.order], at)
 			}
+			//the backpressure, and here rather than at the submit: the executors
+			//above have released the environment mutex, so a wait for the platform
+			//no longer blocks the flusher of every environment
+			pool.Throttle()
 
 			processed++
 			if processed%historyProgressEvery == 0 && progress != nil {
@@ -421,6 +543,12 @@ func (this *Runtime) runHistory(ctx context.Context, env *environment, gen *gene
 				heap.Push(queue, event)
 			}
 		}
+
+		//the backlog is part of the time the run has lost: a gap taken with
+		//readings in flight would end the chase against a clock the run has not
+		//caught up with
+		pool.Drain()
+		this.historySettleAll(env, channels)
 
 		//the window is drained; a long run has meanwhile lost the time it spent
 		//simulating, and handing the environment over across that hole would put
@@ -438,7 +566,11 @@ func (this *Runtime) runHistory(ctx context.Context, env *environment, gen *gene
 		admit()
 	}
 
-	result.Channels = historyResults(channels)
+	//every pass above ends drained; said again where the counters are read, so a
+	//further way out of the loop cannot report totals that are still moving
+	pool.Drain()
+	this.historySettleAll(env, channels)
+	result.Channels = historyResults(channels, shared)
 	result.Published, result.Failed, result.LastError = historyTotals(channels, shared)
 	result.Position, result.End = position, end
 	if progress != nil {
@@ -447,7 +579,11 @@ func (this *Runtime) runHistory(ctx context.Context, env *environment, gen *gene
 	return result, nil
 }
 
-func historyResults(channels []*historyChannel) []HistoryChannelStatus {
+// historyResults and historyTotals read the counters the pool's workers write,
+// so both take the run's mutex. A caller that wants final numbers drains first.
+func historyResults(channels []*historyChannel, shared *historyShared) []HistoryChannelStatus {
+	shared.mux.Lock()
+	defer shared.mux.Unlock()
 	result := make([]HistoryChannelStatus, 0, len(channels))
 	for _, channel := range channels {
 		result = append(result, channel.result)
@@ -456,6 +592,8 @@ func historyResults(channels []*historyChannel) []HistoryChannelStatus {
 }
 
 func historyTotals(channels []*historyChannel, shared *historyShared) (published int64, failed int64, lastError string) {
+	shared.mux.Lock()
+	defer shared.mux.Unlock()
 	for _, channel := range channels {
 		published += channel.result.Published
 		failed += channel.result.Failed
@@ -476,32 +614,32 @@ func (this *Runtime) historyChannelDue(env *environment, gen *generation, channe
 		this.dispatch(env, gen, channel.binding, nil, channel.pending.put, true, at)
 		return
 	}
-	outcome := historyOutcome{}
+	step := &historyStep{channel: channel}
 	this.dispatch(env, gen, channel.binding, nil, func(value interface{}) {
 		//env.mux is held here: every executor calls send inside its own run under
-		//it, which is the same precondition covGate states. Ahead of historySend,
+		//it, which is the same precondition covGate states. Ahead of the submit,
 		//so a suppressed reading leaves attempted at 0 and is booked as silent
 		//rather than as failed.
 		value, send := this.faulted(env, channel.binding, channel.faultMemory, value, at)
 		if !send {
 			return
 		}
-		this.historySend(env, channel, value, at, &outcome)
+		this.historySubmit(env, channel, value, at, step)
 	}, true, at)
-	channel.record(outcome)
+	step.seal()
 }
 
 // historyPublishDue is the publish half of a split channel. Nothing has been
 // computed before the first source step, and skipping is right rather than
 // sending a fabricated zero, exactly as the live runner does.
 func (this *Runtime) historyPublishDue(env *environment, channel *historyChannel, at time.Time) {
-	outcome := historyOutcome{}
+	step := &historyStep{channel: channel}
 	if value, known := channel.pending.get(); known {
 		switch {
 		case len(channel.binding.faults.list) == 0:
 			//a channel without faults publishes as it always did, without the
 			//mutex this branch does not otherwise need
-			this.historySend(env, channel, value, at, &outcome)
+			this.historySubmit(env, channel, value, at, step)
 		default:
 			//this branch runs outside a dispatch, so it takes the environment mutex
 			//itself, the way the heartbeat branch below does; faulted reads and
@@ -510,80 +648,193 @@ func (this *Runtime) historyPublishDue(env *environment, channel *historyChannel
 			reading, send := this.faulted(env, channel.binding, channel.faultMemory, value, at)
 			env.mux.Unlock()
 			if send {
-				this.historySend(env, channel, reading, at, &outcome)
+				this.historySubmit(env, channel, reading, at, step)
 			}
 		}
 	}
-	channel.record(outcome)
+	step.seal()
 }
 
 // historyEvaluateChange is runChangeChannel on the grid: the evaluation decides
 // through the gate, and the heartbeat is the condition that the gap since the
 // last attempt has run.
 //
-// The gate is called inside the send callback, which every executor invokes with
-// the environment mutex held; taking that mutex here would deadlock. The
-// heartbeat branch runs outside a dispatch and therefore takes it itself, the
-// same way the live heartbeat case does.
+// The publish goes through the pool, and its answer is collected before the next
+// decision of this channel rather than at the send - which is what keeps the
+// series identical to a synchronous one, since the base and the gap are settled
+// before anything reads them.
+//
+// covDecide is called inside the send callback, which every executor invokes
+// with the environment mutex held; the heartbeat branch runs outside a dispatch
+// and takes it itself, as the live heartbeat case does.
 func (this *Runtime) historyEvaluateChange(env *environment, gen *generation, channel *historyChannel, at time.Time) {
-	outcome := historyOutcome{}
-	send := func(value interface{}) bool {
-		return this.historySend(env, channel, value, at, &outcome)
-	}
+	//the publish of the previous step may still be in flight, and its base and
+	//its gap are what this evaluation reads
+	this.historySettleChange(env, channel, false)
+
+	step := &historyStep{channel: channel}
+	changeSent := false
+	attempted := false
 	this.dispatch(env, gen, channel.binding, nil, func(value interface{}) {
 		channel.pending.put(value)
-		this.covGate(env, channel.binding, channel.faultMemory, value, false, at, send)
+		//a second send of the same run compares against what the first left, so
+		//that answer is collected before this one is decided. The one place a run
+		//waits for an ack with the environment mutex held, and only for a script
+		//that sends more than once per evaluation.
+		if this.historySettleChange(env, channel, true) {
+			changeSent = true
+		}
+		reading, number, numeric, ok := this.covDecide(env, channel.binding, channel.faultMemory, value, false, at)
+		if !ok {
+			return
+		}
+		attempted = true
+		this.historySubmitChange(env, channel, reading, number, numeric, at, step, false)
 	}, true, at)
 
-	if outcome.published > 0 {
+	overdue := at.Unix()-channel.lastAttemptUnix >= channel.heartbeatSeconds
+	if attempted && overdue {
+		//the heartbeat of this instant depends on whether the change publish went
+		//out, so exactly that one answer is waited for - and only here, where the
+		//gap has run
+		if this.historySettleChange(env, channel, false) {
+			changeSent = true
+		}
+		overdue = at.Unix()-channel.lastAttemptUnix >= channel.heartbeatSeconds
+	}
+	if changeSent || !overdue {
 		//a publish restarts the gap, so this instant owes no heartbeat
-		channel.lastAttemptUnix = at.Unix()
-		channel.record(outcome)
+		step.seal()
 		return
 	}
-	if at.Unix()-channel.lastAttemptUnix >= channel.heartbeatSeconds {
-		//nothing computed yet means there is no reading to repeat: the gap is left
-		//standing, so the next evaluation is owed the heartbeat instead
-		if value, known := channel.pending.get(); known {
-			env.mux.Lock()
-			this.covGate(env, channel.binding, channel.faultMemory, value, true, at, send)
-			env.mux.Unlock()
-			//restarted on the attempt whether or not it went out, mirroring the
-			//live runner: keeping the old moment would make every following
-			//instant overdue and shift the grid off the live cadence
-			channel.lastAttemptUnix = at.Unix()
+	//nothing computed yet means there is no reading to repeat: the gap is left
+	//standing, so the next evaluation is owed the heartbeat instead
+	if value, known := channel.pending.get(); known {
+		env.mux.Lock()
+		reading, number, numeric, ok := this.covDecide(env, channel.binding, channel.faultMemory, value, true, at)
+		env.mux.Unlock()
+		if ok {
+			this.historySubmitChange(env, channel, reading, number, numeric, at, step, true)
 		}
+		//restarted on the attempt whether or not it went out, mirroring the live
+		//runner: keeping the old moment would make every following instant
+		//overdue and shift the grid off the live cadence
+		channel.lastAttemptUnix = at.Unix()
 	}
-	channel.record(outcome)
+	step.seal()
 }
 
-// historySend publishes one reading under its virtual instant. A channel that
-// cannot publish attempts nothing, so it never books a comparison base either -
-// which is what leaves its first live value to go out unconditionally.
-func (this *Runtime) historySend(env *environment, channel *historyChannel, value interface{}, at time.Time, outcome *historyOutcome) bool {
-	if !channel.result.Publishable {
+// historySettleChange collects the answer of the publish that may still be in
+// flight and applies what depended on it - the comparison base a sent reading
+// leaves, and the gap a sent change publish restarts - reporting whether a change
+// publish went out. held says whether the caller already owns the environment
+// mutex, which the call inside a dispatch does and the one before it does not.
+func (this *Runtime) historySettleChange(env *environment, channel *historyChannel, held bool) bool {
+	outstanding := channel.outstanding
+	if outstanding == nil {
 		return false
 	}
-	outcome.attempted++
-	//report false: the failure is counted and named in the status, and one line
-	//per lost reading would bury the service log over a window of a year
-	sent, err := this.publishAt(env, channel.binding, value, false, at)
+	channel.outstanding = nil
+	if sent := <-channel.acks; !sent {
+		return false
+	}
+	if !held {
+		env.mux.Lock()
+		defer env.mux.Unlock()
+	}
+	covBook(env, channel.binding, outstanding.number, outstanding.numeric, outstanding.at)
+	if outstanding.forced {
+		//the heartbeat restarted the gap on the attempt, in the evaluation itself
+		return false
+	}
+	channel.lastAttemptUnix = outstanding.at.Unix()
+	return true
+}
+
+// historySettleAll collects every answer still open, for a caller that has
+// drained the pool: the base of the last publish of a channel has to be in the
+// state before the environment is handed back to the live simulation.
+func (this *Runtime) historySettleAll(env *environment, channels []*historyChannel) {
+	for _, channel := range channels {
+		this.historySettleChange(env, channel, false)
+	}
+}
+
+// historySubmitChange hands one reading of a channel with a change trigger to
+// the pool and remembers what its answer will decide. The caller has settled the
+// previous one, so the one slot is free.
+func (this *Runtime) historySubmitChange(env *environment, channel *historyChannel, reading interface{}, number float64, numeric bool, at time.Time, step *historyStep, forced bool) {
+	if !channel.result.Publishable {
+		return
+	}
+	step.attempt()
+	channel.outstanding = &covOutstanding{at: at, number: number, numeric: numeric, forced: forced}
+	channel.shared.pool.Submit(publishJob{
+		channelId: channel.binding.channel.Id,
+		binding:   channel.binding,
+		value:     reading,
+		at:        at,
+		done: func(sent bool, err error) {
+			this.historyPublished(env, channel, sent, err, at)
+			step.ack(sent, errors.Is(err, ErrPublishAborted))
+			channel.acks <- sent
+		},
+	})
+}
+
+// historySubmit hands one reading to the pool without waiting for it. A channel
+// that cannot publish attempts nothing, which is what leaves its first live
+// value to go out unconditionally.
+//
+// It needs no lock of its own and is called both with the environment mutex held
+// (from inside a dispatch) and without it (the publish half of a split channel).
+// The workers and the callback below may never take that mutex.
+func (this *Runtime) historySubmit(env *environment, channel *historyChannel, value interface{}, at time.Time, step *historyStep) {
+	if !channel.result.Publishable {
+		return
+	}
+	step.attempt()
+	channel.shared.pool.Submit(publishJob{
+		channelId: channel.binding.channel.Id,
+		binding:   channel.binding,
+		value:     value,
+		at:        at,
+		done: func(sent bool, err error) {
+			this.historyPublished(env, channel, sent, err, at)
+			step.ack(sent, errors.Is(err, ErrPublishAborted))
+		},
+	})
+}
+
+// historyPublished takes what became of one attempt. It runs on the pool's
+// workers, so everything it touches is under the run's mutex and the last error
+// is the most recently acked one rather than the latest by instant.
+//
+// An abort stands as the reason only while no platform error is known, and is not
+// logged: the state of the run already says why its last readings are missing.
+func (this *Runtime) historyPublished(env *environment, channel *historyChannel, sent bool, err error, at time.Time) {
 	if sent {
-		outcome.published++
-		return true
+		return
 	}
+	aborted := errors.Is(err, ErrPublishAborted)
+	channel.shared.mux.Lock()
 	if err != nil {
-		channel.result.LastError = err.Error()
-		//the events run in the order of the virtual clock, so the last write here
-		//is the most recent failure of the run and not merely the last channel's
-		channel.shared.lastError = err.Error()
+		if !aborted || channel.result.LastError == "" {
+			channel.result.LastError = err.Error()
+		}
+		if !aborted || channel.shared.lastError == "" {
+			channel.shared.lastError = err.Error()
+		}
 	}
-	if !channel.reported {
+	report := !aborted && !channel.reported
+	if report {
 		channel.reported = true
+	}
+	channel.shared.mux.Unlock()
+	if report {
 		util.Logger.Warn("unable to publish a reading of the history run", attributes.ErrorKey, err,
 			"environment", env.id, "channel", channel.binding.channel.Id, "at", at)
 	}
-	return false
 }
 
 // historyPublishable answers, once per channel and before the first instant,
