@@ -29,6 +29,7 @@ import (
 	"github.com/SENERGY-Platform/moses/lib/formula"
 	"github.com/SENERGY-Platform/moses/lib/repo"
 	"github.com/SENERGY-Platform/moses/lib/util"
+	"github.com/dop251/goja"
 )
 
 // environment is one running environment. There is exactly one of these per
@@ -191,6 +192,13 @@ type channelBinding struct {
 	asset   assetRef
 	channel domain.Channel
 	code    string
+
+	// script is the compiled code of a script channel, compiled once per
+	// generation. scriptErr is the compile failure instead, kept so every run
+	// reports it exactly as a syntax error surfaced when the code was compiled
+	// on every run.
+	script    *goja.Program
+	scriptErr error
 
 	// sourceInterval is how often the script runs. Zero means it runs when the
 	// channel publishes, which is the only behaviour the legacy runtime had.
@@ -465,6 +473,7 @@ func (this *generation) addAsset(envId string, zoneId string, asset domain.Asset
 		binding := channelBinding{zoneId: zoneId, asset: ref, channel: channel}
 		if script {
 			binding.code = channel.Source.Script.Code
+			binding.script, binding.scriptErr = compileScript(channel.Id, binding.code)
 		}
 		if replay {
 			binding.points = this.series[channel.Id]

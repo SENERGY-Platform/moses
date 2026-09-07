@@ -16,32 +16,34 @@
 
 package runtime
 
-// A deliberate copy of the otto runner in lib/state/jsvm.go rather than a shared
-// helper: importing the legacy package would keep it alive. Dies with lib/state.
-//
-// Two things are NOT copied verbatim, both marked below - when the interrupt
-// timer is armed and how its goroutine ends. Both are legacy bugs that only
-// became load bearing here, where one environment mutex serialises many
-// channels.
+// Channel scripts run on goja, against a program compiled once per generation
+// and a fresh vm per run, so every run sees fresh globals exactly as it did on
+// otto. The timeout is armed only after the environment mutex has been taken:
+// with one mutex per environment and many channels queueing on it, counting the
+// wait for the lock against the script's time limit would turn a busy
+// environment into a stream of spurious timeouts. lib/state keeps its own otto
+// runner until the legacy package dies.
 
 import (
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/util"
-	"github.com/robertkrimen/otto"
+	"github.com/dop251/goja"
 )
 
-// halt is the panic value the interrupt handler raises; otto offers no other
-// way to stop a running script.
-var halt = errors.New("stop")
-
 var ErrScriptTimeout = errors.New("script exceeded the js timeout")
+
+// errNoCompiledScript stands in when a binding reaches the script runner with
+// neither a program nor a compile error, which would otherwise hand a nil
+// program to the vm and take the process down.
+var errNoCompiledScript = errors.New("the channel has no compiled script")
 
 const maxCodeLogSize = 100
 
@@ -58,42 +60,40 @@ func trimCode(code string, size int) string {
 	return fmt.Sprintf("%v[...]%v", code[:size/2], code[len(code)-size/2:])
 }
 
-// run executes code with moses bound to the javascript global "moses".
+// compileScript compiles a channel script once, at generation build. The id
+// only names the script in a syntax error.
+func compileScript(id string, code string) (*goja.Program, error) {
+	return goja.Compile(id, code, false)
+}
+
+// runScript executes program with moses bound to the javascript global "moses".
 //
 // mux serialises the runs of one environment. It is held for the duration of
 // the script, which is what makes the state maps the script reads and writes
 // safe to touch without any locking of their own - and what gives a script the
 // same "nothing else changes while I run" guarantee the legacy world mutex gave.
 //
-// DEVIATION from lib/state/jsvm.go, on purpose: the timeout is armed AFTER the
-// mutex has been acquired. The legacy version armed it before, so the wait for
-// the mutex counted against the script's time limit, and, because otto's
-// interrupt channel is buffered, a script that waited too long for the lock was
-// killed in its first statement. With one mutex per environment and many
-// channels queueing on it that would turn a busy environment into a stream of
-// spurious timeouts.
-func run(code string, moses interface{}, timeout time.Duration, mux sync.Locker) (err error) {
-	defer func() {
-		if caught := recover(); caught != nil {
-			if caught == halt {
-				err = ErrScriptTimeout
-				return
-			}
-			panic(caught) // Something else happened, repanic!
-		}
-	}()
-
-	vm := otto.New()
-	vm.Interrupt = make(chan func(), 1) // The buffer prevents blocking
-
-	err = vm.Set("moses", moses)
-	if err != nil {
+// The timeout is armed after the mutex has been acquired, so the wait for the
+// lock does not count against the script's time limit. The timer is stopped on
+// every path out, including a panic, because an armed timer keeps the vm and the
+// whole api closure graph reachable until the timeout elapses; a timer that
+// fires anyway interrupts a vm nobody uses again, since every run gets its own.
+//
+// Two semantic differences to otto are accepted here: goja does not hoist a
+// function declared inside a block, so Annex B block-level function
+// declarations are only visible inside that block. And an integral number
+// arrives in Go as a float64, so a value above 2^53 is no longer exact.
+func runScript(program *goja.Program, moses interface{}, timeout time.Duration, mux sync.Locker) error {
+	vm := goja.New()
+	if err := vm.Set("moses", moses); err != nil {
 		return err
 	}
-
-	err = vm.Set("httpGet", httpGet)
-	if err != nil {
+	if err := vm.Set("httpGet", httpGet); err != nil {
 		util.Logger.Warn("unable to set up httpGet in javascript vm", attributes.ErrorKey, err)
+		return err
+	}
+	if err := vm.Set("console", scriptConsole()); err != nil {
+		util.Logger.Warn("unable to set up console in javascript vm", attributes.ErrorKey, err)
 		return err
 	}
 
@@ -102,27 +102,42 @@ func run(code string, moses interface{}, timeout time.Duration, mux sync.Locker)
 		defer mux.Unlock()
 	}
 
-	// DEVIATION from lib/state/jsvm.go, on purpose: the watchdog ends with the
-	// run instead of sleeping out its full timeout. The legacy version leaked a
-	// sleeping goroutine per execution, which a one second channel with a two
-	// second timeout keeps several of alive at all times.
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		timer := time.NewTimer(timeout)
-		defer timer.Stop()
-		select {
-		case <-timer.C:
-			//buffered, so this never blocks even if the vm is already finished
-			vm.Interrupt <- func() {
-				panic(halt)
-			}
-		case <-done:
-		}
-	}()
+	timer := time.AfterFunc(timeout, func() { vm.Interrupt(ErrScriptTimeout) })
+	defer timer.Stop()
+	_, err := vm.RunProgram(program) // Here be dragons (risky code)
 
-	_, err = vm.Run(code) // Here be dragons (risky code)
+	//goja reports the halt as an error rather than a panic; the interrupt value
+	//travels inside it, but callers match on ErrScriptTimeout alone
+	var interrupted *goja.InterruptedError
+	if errors.As(err, &interrupted) {
+		return ErrScriptTimeout
+	}
 	return err
+}
+
+// scriptConsole is the console object otto shipped and goja does not. A legacy
+// script was migrated verbatim and may call console.log, which without this
+// binding is a ReferenceError that aborts the run before its first send.
+func scriptConsole() map[string]interface{} {
+	debug := func(args ...interface{}) {
+		util.Logger.Debug("script console", "arguments", joinScriptArgs(args))
+	}
+	warn := func(args ...interface{}) {
+		util.Logger.Warn("script console", "arguments", joinScriptArgs(args))
+	}
+	return map[string]interface{}{
+		"log":   debug,
+		"info":  debug,
+		"debug": debug,
+		"warn":  warn,
+		"error": warn,
+	}
+}
+
+// joinScriptArgs renders what a script passed to console as one attribute, so
+// a call with several arguments stays one log line.
+func joinScriptArgs(args []interface{}) string {
+	return strings.TrimSuffix(fmt.Sprintln(args...), "\n")
 }
 
 // httpGet is part of the script surface a migrated script may already use.

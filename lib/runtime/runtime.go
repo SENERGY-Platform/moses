@@ -1207,12 +1207,26 @@ func (this *Runtime) executeProfile(env *environment, gen *generation, binding c
 }
 
 func (this *Runtime) execute(env *environment, gen *generation, binding channelBinding, input interface{}, send func(value interface{}), now time.Time) {
-	err := run(binding.code, this.jsApi(env, gen, binding, input, send, now), this.jsTimeout, &env.mux)
-	if err != nil {
-		util.Logger.Warn("channel script failed", attributes.ErrorKey, err,
-			"environment", env.id, "asset", binding.asset.id, "channel", binding.channel.Id,
-			"code", trimCodeDefault(binding.code))
+	if binding.script == nil {
+		//the code did not compile, so the channel fails on every run, exactly as
+		//it did while the code was compiled per run
+		err := binding.scriptErr
+		if err == nil {
+			err = errNoCompiledScript
+		}
+		this.reportScriptFailure(env, binding, err)
+		return
 	}
+	err := runScript(binding.script, this.jsApi(env, gen, binding, input, send, now), this.jsTimeout, &env.mux)
+	if err != nil {
+		this.reportScriptFailure(env, binding, err)
+	}
+}
+
+func (this *Runtime) reportScriptFailure(env *environment, binding channelBinding, err error) {
+	util.Logger.Warn("channel script failed", attributes.ErrorKey, err,
+		"environment", env.id, "asset", binding.asset.id, "channel", binding.channel.Id,
+		"code", trimCodeDefault(binding.code))
 }
 
 // publish sends what a script handed to moses.service.send().

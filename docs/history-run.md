@@ -195,13 +195,14 @@ which is why none of it is carried.
   produce ack - and where `publish_to_postgres` is on, the longer of that and
   the timescale write beside it rather than the sum of the two. The publish pool
   divides that by its workers.
-- **Since the pool, the loop's computing bounds a run, not the acks.** Measured
-  on the 69-channel demonstrator with 16 workers: 0.65 ms per simulation step,
-  about 1,500 steps and 1,150 readings a second, a year in roughly three hours —
-  where the synchronous path took 1.4 ms per step and six and a half hours. The
-  loop is one goroutine and most of a step is script execution in otto, so more
-  workers change nothing further; the next gain has to come from the compute
-  side.
+- **Since the pool, the loop's computing bounds a run, not the acks.** The loop
+  is one goroutine and a step is mostly script execution. On otto that cost
+  0.55 ms per step with a publisher that costs nothing - three quarters of it the
+  engine yielding to the scheduler on every expression while its interrupt is
+  armed - and a year of the 69-channel demonstrator took 2 h 21 min of compute.
+  On goja the same run is 0.06 ms per step and about 16 minutes, after which the
+  acks bound the run again. `TestProfileTheHistoryRunOfADocument` in
+  `lib/runtime` measures this against a rendered document.
 
 ## Operating it
 

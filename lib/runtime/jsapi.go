@@ -41,7 +41,19 @@ func (this *Runtime) jsApi(env *environment, gen *generation, binding channelBin
 	assetApi := this.jsAssetApi(env, binding.asset.id)
 	channelApi := map[string]interface{}{
 		"input": input,
-		"send":  send,
+		//through jsNumber: what a script sends has to reach the publish path, the
+		//change gate and the aggregate cache as one number type, whatever the
+		//javascript engine made of the expression
+		"send": func(value interface{}) {
+			//a missing argument, an explicit null and an explicit undefined all
+			//arrive as nil, where otto aborted the run; none of them is a
+			//reading, so nothing is published rather than a null
+			if value == nil {
+				util.Logger.Warn("the script handed no value", "environment", env.id, "field", "send")
+				return
+			}
+			send(jsNumber(value))
+		},
 	}
 	return map[string]interface{}{
 		"world":   environmentApi,
@@ -117,10 +129,29 @@ func jsStateApi(env *environment, states func() map[string]interface{}) map[stri
 			return value
 		},
 		"set": func(field string, value interface{}) {
-			states()[field] = value
+			//a missing argument, an explicit null and an explicit undefined all
+			//arrive as nil, where otto aborted the run; the key keeps whatever
+			//it holds rather than taking a nil no reader can use
+			if value == nil {
+				util.Logger.Warn("the script handed no value", "environment", env.id, "field", field)
+				return
+			}
+			states()[field] = jsNumber(value)
 			env.dirty = true
 		},
 	}
+}
+
+// jsNumber normalises a number on its way from a script into Go. A javascript
+// engine may export an integral number as int64 and a computed one as float64,
+// so without this the same script could leave two types in the state maps for
+// the same value; a javascript number is a float64 to begin with, so the
+// conversion loses nothing. Everything that is not a number passes through.
+func jsNumber(value interface{}) interface{} {
+	if number, ok := asFloat(value); ok {
+		return number
+	}
+	return value
 }
 
 // jsContextStateApi is the context scope of the script api. It differs from

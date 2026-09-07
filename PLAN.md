@@ -23,6 +23,38 @@ and the bookkeeping shape, but carries no state.
 
 ## Steps, each shippable on its own
 
+### 0. Run the scripts on goja — shipped 2026-09-07
+
+Measured 2026-09-07 on the Musterwerke document with a publisher that costs
+nothing: 0.55 ms per publish step, 2 h 21 min per year, and over 95 % of it is
+otto. Three quarters of that is not the script but the timeout: with
+`vm.Interrupt` set, otto calls `runtime.Gosched()` on every expression and
+statement node, which shows up as 40 % of the process in scheduler churn. A
+fresh `otto.New()` per run and its allocations are the next 30 %. Compiling once
+and reusing the vm does not help while the interrupt stays (4.2 ms against 4.5 ms
+on the heaviest script), and dropping the interrupt leaves a `while(true)`
+holding the environment mutex forever.
+
+goja runs the same script in 0.39 ms against 4.48 ms, the light ones in 15 µs
+against 267 µs, with the timeout kept: its `Interrupt` is a flag the vm checks
+itself, armed by `time.AfterFunc`, no goroutine per run. All 27 scripts of the
+demonstrator compile on it; two were checked value for value against otto.
+
+The change: `run` takes a `*goja.Program` compiled once per channel at
+generation build (`channelBinding.script`, next to `code`), starts a fresh
+`goja.New()` per run so every run has fresh globals exactly as today, arms the
+timeout after the mutex is taken, and maps `*goja.InterruptedError` to
+`ErrScriptTimeout`. goja hands integral numbers to Go as `int64` where otto gave
+`float64`; `state.set` and `service.send` normalise every number to `float64`,
+so state maps, `sameStateValue`, the persisted state and the payload stay as they
+are. `lib/state/jsvm.go` keeps otto until the legacy package dies, which is also
+what allows a differential test running the same scripts on both engines.
+
+New dependency: `github.com/dop251/goja` (MIT), transitively
+`dlclark/regexp2/v2` (MIT), `go-sourcemap/sourcemap` (BSD-2-Clause),
+`google/pprof` (Apache-2.0). Expected: a year in about 15 minutes of compute,
+after which the publish pool bounds the run again.
+
 ### 1. Publish in parallel, keep the order per channel
 
 The loop computes as today but hands every value to a bounded queue. A pool of
