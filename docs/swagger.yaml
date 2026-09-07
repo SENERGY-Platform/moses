@@ -58,6 +58,14 @@ definitions:
     type: object
   api.HistoryRequest:
     properties:
+      force:
+        description: |-
+          Force starts the run although the first day of the window already holds
+          readings for a device of this environment. Those rows stay and the run
+          writes its own beside them; without it such a request is answered with
+          409.
+        example: false
+        type: boolean
       from:
         example: "2026-07-01T00:00:00Z"
         type: string
@@ -1572,6 +1580,8 @@ paths:
         There is no end: the run ends at the present, and once it has simulated the window it keeps going until it has caught up with the time it spent doing so, so that no gap is left at the handover. `to` in the status is therefore where the run actually ended.
 
         The window may not start in the future, has to be at least a minute and at most 366 days long, and may not come to more than twenty million simulation steps across the channels and context sources of the environment.
+
+        **A window whose first day already holds readings is refused with 409**, naming the devices it found them for: that is either an earlier run over the same window or a window that reaches into live data, and the rows of a run cannot be deleted again. `force: true` starts the run anyway, which writes the readings of the window a second time. Only the first day from `from` is looked at, since the end of any window of an environment that has been running always holds readings. Without a configured timescale-wrapper the check is skipped. The queries run on the caller's token, and a channel it is answered a 404 for is asked again with the owner's; a channel left with a 400 or a 404 is unchecked with a warning, while every other answer - another status, an unavailable wrapper, a network error - refuses the run rather than starting it unchecked. A check that does not answer within five seconds is answered with 503.
       parameters:
       - description: environment id
         in: path
@@ -1607,11 +1617,17 @@ paths:
             type: string
         "409":
           description: a history run or a backfill of this environment is already
-            running
+            running, or the first day of the window already holds readings and force
+            is not set
           schema:
             type: string
         "500":
           description: error message
+          schema:
+            type: string
+        "503":
+          description: 'the timescale did not answer in time, so the window could
+            not be checked; retry or send force: true'
           schema:
             type: string
       security:

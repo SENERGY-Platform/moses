@@ -241,6 +241,16 @@ type recordingNotifier struct {
 	historyCancels    []string
 	historyCancelErr  error
 
+	// historyForced is the force flag of every StartHistory call, refused ones
+	// included: a body that carries it has to reach the runtime, or the refusal
+	// it lifts could never be lifted.
+	historyForced []bool
+
+	// historyTokens is the token of every StartHistory call: the occupancy check
+	// reads the timescale with it, and a device an admin added is readable with
+	// the caller's token alone.
+	historyTokens []string
+
 	// snapshot and snapshotErr are what the reading direction of the state
 	// answers with, and snapshotCalls counts the reads, so a test can pin that a
 	// caller without access never reaches the runtime at all.
@@ -287,7 +297,9 @@ func (this *recordingNotifier) BackfillStatusOf(id string) (moses_runtime.Backfi
 	return this.status, nil
 }
 
-func (this *recordingNotifier) StartHistory(id string, from time.Time) (moses_runtime.HistoryStatus, error) {
+func (this *recordingNotifier) StartHistory(id string, from time.Time, force bool, token string) (moses_runtime.HistoryStatus, error) {
+	this.historyForced = append(this.historyForced, force)
+	this.historyTokens = append(this.historyTokens, token)
 	if this.historyStartErr != nil {
 		return moses_runtime.HistoryStatus{}, this.historyStartErr
 	}

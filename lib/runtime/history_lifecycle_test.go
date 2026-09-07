@@ -216,7 +216,7 @@ func TestAHistoryRunReplacesTheStateAndFlushesItBeforeTheRunnersStart(t *testing
 	//handover makes
 	rt := startRuntimeWithEngine(t, testConfig(time.Hour), newFakeEnvironments(historyTestEnvironment(id)), states, &fakePublisher{}, engine.run)
 
-	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour)); err != nil {
+	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, ""); err != nil {
 		t.Fatalf("unable to start the history run: %v", err)
 	}
 	<-engine.entered
@@ -264,7 +264,7 @@ func TestTheRunIsDoneOnlyOnceTheSimulationRunsAgain(t *testing.T) {
 	rt := startRuntimeWithEngine(t, testConfig(time.Hour), newFakeEnvironments(historyTestEnvironment(id)), newFakeStates(), &fakePublisher{}, engine.run)
 
 	before := genOf(rt, id)
-	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour)); err != nil {
+	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, ""); err != nil {
 		t.Fatalf("unable to start the history run: %v", err)
 	}
 	waitForHistory(t, rt, id)
@@ -304,7 +304,7 @@ func TestTheEnvironmentIsHandedBackAfterEveryOutcome(t *testing.T) {
 			rt := startRuntimeWithEngine(t, testConfig(time.Hour), newFakeEnvironments(historyTestEnvironment(id)), newFakeStates(), &fakePublisher{}, engine.run)
 
 			before := genOf(rt, id)
-			if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour)); err != nil {
+			if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, ""); err != nil {
 				t.Fatalf("unable to start the history run: %v", err)
 			}
 			<-engine.entered
@@ -364,7 +364,7 @@ func TestAReloadDuringAHistoryRunIsSkippedAndTakesEffectAtItsEnd(t *testing.T) {
 	envs := newFakeEnvironments(historyTestEnvironment(id))
 	rt := startRuntimeWithEngine(t, testConfig(time.Hour), envs, newFakeStates(), &fakePublisher{}, engine.run)
 
-	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour)); err != nil {
+	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, ""); err != nil {
 		t.Fatalf("unable to start the history run: %v", err)
 	}
 	<-engine.entered
@@ -399,7 +399,7 @@ func TestRemovingAnEnvironmentEndsItsHistoryRun(t *testing.T) {
 	envs := newFakeEnvironments(historyTestEnvironment(id))
 	rt := startRuntimeWithEngine(t, testConfig(time.Hour), envs, newFakeStates(), &fakePublisher{}, engine.run)
 
-	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour)); err != nil {
+	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, ""); err != nil {
 		t.Fatalf("unable to start the history run: %v", err)
 	}
 	<-engine.entered
@@ -430,7 +430,7 @@ func TestStoppingTheRuntimeEndsAHistoryRunWithoutDeadlocking(t *testing.T) {
 	if err := rt.Start(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour)); err != nil {
+	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, ""); err != nil {
 		t.Fatalf("unable to start the history run: %v", err)
 	}
 	<-engine.entered
@@ -460,7 +460,7 @@ func TestStoppingTheRuntimeEndsAHistoryRunWithoutDeadlocking(t *testing.T) {
 		t.Error("the state the run had reached was never written")
 	}
 	//and no further run is accepted
-	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour)); !errors.Is(err, repo.ErrNotRunning) {
+	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, ""); !errors.Is(err, repo.ErrNotRunning) {
 		t.Errorf("expected a stopped runtime to refuse a run, got %v", err)
 	}
 }
@@ -474,12 +474,12 @@ func TestAHistoryRunLocksOutEverythingThatWouldMixInThePresent(t *testing.T) {
 	publisher := &fakePublisher{}
 	rt := startRuntimeWithEngine(t, testConfig(time.Hour), newFakeEnvironments(historyTestEnvironment(id)), newFakeStates(), publisher, engine.run)
 
-	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour)); err != nil {
+	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, ""); err != nil {
 		t.Fatalf("unable to start the history run: %v", err)
 	}
 	<-engine.entered
 
-	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour)); !errors.Is(err, ErrHistoryRunning) {
+	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, ""); !errors.Is(err, ErrHistoryRunning) {
 		t.Errorf("expected a second run to be refused, got %v", err)
 	}
 	if _, err := rt.StartBackfill(id, backfillFrom, backfillTo); !errors.Is(err, ErrHistoryRunning) {
@@ -529,7 +529,7 @@ func TestABackfillAndAHistoryRunExcludeEachOtherBothWays(t *testing.T) {
 	if _, err := rt.StartBackfill(id, backfillFrom, backfillTo); err != nil {
 		t.Fatalf("unable to start the backfill: %v", err)
 	}
-	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour)); !errors.Is(err, ErrBackfillRunning) {
+	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, ""); !errors.Is(err, ErrBackfillRunning) {
 		t.Errorf("expected the run to be refused while a backfill is running, got %v", err)
 	}
 	if engine.callCount() != 0 {
@@ -539,7 +539,7 @@ func TestABackfillAndAHistoryRunExcludeEachOtherBothWays(t *testing.T) {
 	waitForBackfill(t, rt, id)
 
 	//and with the job finished the run is allowed
-	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour)); err != nil {
+	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, ""); err != nil {
 		t.Errorf("expected a run after the backfill finished, got %v", err)
 	}
 	<-engine.entered
@@ -565,7 +565,7 @@ func TestARefusedHistoryWindowDoesNotTouchTheSimulation(t *testing.T) {
 		"too many steps": time.Now().Add(-360 * 24 * time.Hour),
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := rt.StartHistory(id, from)
+			_, err := rt.StartHistory(id, from, false, "")
 			rangeError := &HistoryRangeError{}
 			if !errors.As(err, &rangeError) {
 				t.Fatalf("expected a HistoryRangeError, got %v", err)
@@ -631,7 +631,7 @@ func TestAnAmbiguousGridRefusesTheRunBeforeAnythingIsStopped(t *testing.T) {
 			env.assetStates(testAssetId)["marker"] = 4711.0
 			env.mux.Unlock()
 
-			_, err := rt.StartHistory(id, time.Now().Add(-time.Hour))
+			_, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, "")
 			rangeError := &HistoryRangeError{}
 			if !errors.As(err, &rangeError) {
 				t.Fatalf("expected a HistoryRangeError, got %v", err)
@@ -663,7 +663,7 @@ func TestAnAmbiguousGridRefusesTheRunBeforeAnythingIsStopped(t *testing.T) {
 
 func TestTheHistoryRunOfAnUnknownEnvironmentIsNotRunning(t *testing.T) {
 	rt := startRuntime(t, testConfig(time.Hour), newFakeEnvironments(), newFakeStates(), &fakePublisher{})
-	if _, err := rt.StartHistory("nobody", time.Now().Add(-time.Hour)); !errors.Is(err, repo.ErrNotRunning) {
+	if _, err := rt.StartHistory("nobody", time.Now().Add(-time.Hour), false, ""); !errors.Is(err, repo.ErrNotRunning) {
 		t.Errorf("expected ErrNotRunning, got %v", err)
 	}
 	if _, err := rt.HistoryStatusOf("nobody"); !errors.Is(err, ErrNoHistory) {
@@ -683,7 +683,7 @@ func TestARunThatFinishedIsNotReportedAsCancelled(t *testing.T) {
 	engine.result = HistoryResult{Published: 7}
 	rt := startRuntimeWithEngine(t, testConfig(time.Hour), newFakeEnvironments(historyTestEnvironment(id)), newFakeStates(), &fakePublisher{}, engine.run)
 
-	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour)); err != nil {
+	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, ""); err != nil {
 		t.Fatalf("unable to start the history run: %v", err)
 	}
 	<-engine.entered
@@ -717,7 +717,7 @@ func TestAHistoryRunNamesEveryChannelThatPublishesNothing(t *testing.T) {
 	publisher := &fakePublisher{shapeErr: map[string]error{serviceRefOf(id): devices.ErrNoTimePath}}
 	rt := startRuntime(t, testConfig(time.Hour), newFakeEnvironments(testEnvironment(id, channel)), newFakeStates(), publisher)
 
-	if _, err := rt.StartHistory(id, time.Now().Add(-2*time.Minute)); err != nil {
+	if _, err := rt.StartHistory(id, time.Now().Add(-2*time.Minute), false, ""); err != nil {
 		t.Fatalf("unable to start the history run: %v", err)
 	}
 	status := waitForHistory(t, rt, id)
@@ -758,7 +758,7 @@ func TestAHistoryRunChecksTheVolumeOfTheGenerationItActuallyRuns(t *testing.T) {
 	rt.lifecycle.Lock()
 	answered := make(chan error, 1)
 	go func() {
-		_, err := rt.StartHistory(id, time.Now().Add(-360*24*time.Hour))
+		_, err := rt.StartHistory(id, time.Now().Add(-360*24*time.Hour), false, "")
 		answered <- err
 	}()
 	select {
@@ -818,7 +818,7 @@ func TestAHistoryRunWaitsForACommandInFlight(t *testing.T) {
 
 	answered := make(chan error, 1)
 	go func() {
-		_, err := rt.StartHistory(id, time.Now().Add(-time.Hour))
+		_, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, "")
 		answered <- err
 	}()
 	select {
@@ -862,7 +862,7 @@ func TestTheHandoverAlwaysWritesTheStateItHandsOver(t *testing.T) {
 	//flight and clears the flag
 	rt := startRuntimeWithEngine(t, testConfig(20*time.Millisecond), newFakeEnvironments(historyTestEnvironment(id)), states, &fakePublisher{}, engine.run)
 
-	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour)); err != nil {
+	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, ""); err != nil {
 		t.Fatalf("unable to start the history run: %v", err)
 	}
 	<-engine.entered
@@ -905,7 +905,7 @@ func TestARestartedRuntimeTakesRunsAndJobsAgain(t *testing.T) {
 	if err := rt.Start(first); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour)); err != nil {
+	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, ""); err != nil {
 		t.Fatalf("unable to start the history run: %v", err)
 	}
 	waitForHistory(t, rt, id)
@@ -934,7 +934,7 @@ func TestARestartedRuntimeTakesRunsAndJobsAgain(t *testing.T) {
 	if status.State != HistoryDone {
 		t.Errorf("expected the stored run of the previous incarnation to be done, got %v", status.State)
 	}
-	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour)); err != nil {
+	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, ""); err != nil {
 		t.Errorf("the restarted runtime refuses a history run: %v", err)
 	}
 	waitForHistory(t, rt, id)
@@ -958,7 +958,7 @@ func TestACumulativeMeterContinuesFromTheHistoryRunIntoTheLiveSimulation(t *test
 	publisher := &fakePublisher{}
 	rt := startRuntime(t, testConfig(time.Hour), newFakeEnvironments(testEnvironment(id, channel)), newFakeStates(), publisher)
 
-	if _, err := rt.StartHistory(id, time.Now().Add(-65*time.Second)); err != nil {
+	if _, err := rt.StartHistory(id, time.Now().Add(-65*time.Second), false, ""); err != nil {
 		t.Fatalf("unable to start the history run: %v", err)
 	}
 	status := waitForHistory(t, rt, id)
@@ -1003,7 +1003,7 @@ func TestTheChangeTriggerDoesNotRepublishAfterAHistoryRun(t *testing.T) {
 	publisher := &fakePublisher{}
 	rt := startRuntime(t, testConfig(time.Hour), newFakeEnvironments(testEnvironment(id, channel)), newFakeStates(), publisher)
 
-	if _, err := rt.StartHistory(id, time.Now().Add(-65*time.Second)); err != nil {
+	if _, err := rt.StartHistory(id, time.Now().Add(-65*time.Second), false, ""); err != nil {
 		t.Fatalf("unable to start the history run: %v", err)
 	}
 	if status := waitForHistory(t, rt, id); status.State != HistoryDone {
@@ -1362,7 +1362,7 @@ func TestTheTerminalRecordOfAHistoryRunIsRetried(t *testing.T) {
 	rt := startRuntimeWithJobs(t, testConfig(time.Hour), newFakeEnvironments(historyTestEnvironment(id)),
 		newFakeStates(), jobs, &fakePublisher{}, engine.run)
 
-	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour)); err != nil {
+	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, ""); err != nil {
 		t.Fatalf("unable to start the history run: %v", err)
 	}
 	status := waitForHistory(t, rt, id)
@@ -1420,7 +1420,7 @@ func TestTheRunIsStoredBeforeTheLiveRunnersPublish(t *testing.T) {
 
 	//at once, so the live runners of the start have not ticked yet: every live
 	//reading of this test belongs to the simulation the handover starts
-	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour)); err != nil {
+	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, ""); err != nil {
 		t.Fatalf("unable to start the history run: %v", err)
 	}
 	//from here on a write takes longer than the interval of the channel above, so
@@ -1477,7 +1477,7 @@ func TestAnAbortIsStoredBeforeTheRunEnds(t *testing.T) {
 	if err := rt.Start(first); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour)); err != nil {
+	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, ""); err != nil {
 		t.Fatalf("unable to start the history run: %v", err)
 	}
 	<-engine.entered
@@ -1637,7 +1637,7 @@ func TestAShutdownRacingADeletionDeletesTheRecord(t *testing.T) {
 	envs := newFakeEnvironments(historyTestEnvironment(id))
 	rt := startRuntimeWithJobs(t, testConfig(time.Hour), envs, newFakeStates(), jobs, &fakePublisher{}, engine.run)
 
-	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour)); err != nil {
+	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, ""); err != nil {
 		t.Fatalf("unable to start the history run: %v", err)
 	}
 	<-engine.entered
@@ -1733,7 +1733,7 @@ func TestAShutdownSuspendsAHistoryRunAndTheNextStartResumesIt(t *testing.T) {
 	if err := rt.Start(first); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour)); err != nil {
+	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, ""); err != nil {
 		t.Fatalf("unable to start the history run: %v", err)
 	}
 	<-engine.entered
@@ -1801,7 +1801,7 @@ func TestAnAbortedHistoryRunIsStoredAsCancelled(t *testing.T) {
 	rt := startRuntimeWithJobs(t, testConfig(time.Hour), newFakeEnvironments(historyTestEnvironment(id)),
 		newFakeStates(), jobs, &fakePublisher{}, engine.run)
 
-	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour)); err != nil {
+	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, ""); err != nil {
 		t.Fatalf("unable to start the history run: %v", err)
 	}
 	<-engine.entered
@@ -1839,7 +1839,7 @@ func TestAbortingAFinishedRunLeavesItsOutcomeAlone(t *testing.T) {
 	rt := startRuntimeWithJobs(t, testConfig(time.Hour), newFakeEnvironments(historyTestEnvironment(id)),
 		newFakeStates(), jobs, &fakePublisher{}, engine.run)
 
-	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour)); err != nil {
+	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, ""); err != nil {
 		t.Fatalf("unable to start the history run: %v", err)
 	}
 	final := waitForHistory(t, rt, id)
@@ -1952,7 +1952,7 @@ func TestTheStatusOfAHistoryRunSurvivesARestart(t *testing.T) {
 	if err := rt.Start(first); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour)); err != nil {
+	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, ""); err != nil {
 		t.Fatalf("unable to start the history run: %v", err)
 	}
 	before := waitForHistory(t, rt, id)
@@ -1998,7 +1998,7 @@ func TestRemovingAnEnvironmentDeletesItsStoredHistoryRun(t *testing.T) {
 	envs := newFakeEnvironments(historyTestEnvironment(id))
 	rt := startRuntimeWithJobs(t, testConfig(time.Hour), envs, newFakeStates(), jobs, &fakePublisher{}, engine.run)
 
-	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour)); err != nil {
+	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, ""); err != nil {
 		t.Fatalf("unable to start the history run: %v", err)
 	}
 	<-engine.entered
@@ -2034,7 +2034,7 @@ func TestAHistoryRunThatCannotBeStoredIsRefused(t *testing.T) {
 	def := testEnvironment(id, profileChannel("ch-1", serviceRefOf(id), 1, flatProfile(230, 0)))
 	rt := startRuntimeWithJobs(t, testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), jobs, publisher, engine.run)
 
-	_, err := rt.StartHistory(id, time.Now().Add(-time.Hour))
+	_, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, "")
 	if !errors.Is(err, jobs.saveErr) {
 		t.Fatalf("expected the store's error, got %v", err)
 	}
@@ -2062,7 +2062,7 @@ func TestAHistoryRunThatCannotBeStoredIsRefused(t *testing.T) {
 	jobs.mux.Lock()
 	jobs.saveErr = nil
 	jobs.mux.Unlock()
-	if _, err = rt.StartHistory(id, time.Now().Add(-time.Hour)); err != nil {
+	if _, err = rt.StartHistory(id, time.Now().Add(-time.Hour), false, ""); err != nil {
 		t.Errorf("expected the run to be accepted once the store answers, got %v", err)
 	}
 	waitForHistory(t, rt, id)

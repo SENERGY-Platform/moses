@@ -848,7 +848,7 @@ func TestABlockedHistoryRunDoesNotStopTheFlushOfAnotherEnvironment(t *testing.T)
 	//released before the runtime is stopped, which waits for the run
 	t.Cleanup(func() { close(publisher.gate) })
 
-	if _, err := rt.StartHistory(blocked, time.Now().Add(-time.Hour)); err != nil {
+	if _, err := rt.StartHistory(blocked, time.Now().Add(-time.Hour), false, ""); err != nil {
 		t.Fatalf("unable to start the history run: %v", err)
 	}
 
@@ -998,7 +998,7 @@ func TestARunThatBrokeDoesNotPublishWhatItHadStaged(t *testing.T) {
 	}
 	rt := startRuntime(t, testConfig(time.Hour), newFakeEnvironments(document), newFakeStates(), publisher)
 
-	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour)); err != nil {
+	if _, err := rt.StartHistory(id, time.Now().Add(-time.Hour), false, ""); err != nil {
 		t.Fatalf("unable to start the history run: %v", err)
 	}
 	status := waitForHistory(t, rt, id)

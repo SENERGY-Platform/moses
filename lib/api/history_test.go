@@ -19,6 +19,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -96,6 +97,7 @@ func TestTheHistoryEndpointsMapEveryRuntimeAnswer(t *testing.T) {
 		"a backfill in the way":      {moses_runtime.ErrBackfillRunning, http.StatusConflict},
 		"an environment not held":    {repo.ErrNotRunning, http.StatusNotFound},
 		"no runtime at all":          {ErrNoRuntime, http.StatusNotFound},
+		"a check out of time":        {moses_runtime.ErrHistoryCheckTimeout, http.StatusServiceUnavailable},
 	} {
 		t.Run(name, func(t *testing.T) {
 			notifier := &recordingNotifier{historyStartErr: testCase.err}
@@ -295,5 +297,111 @@ func TestReadingTheStateOfAnEnvironmentWithoutAHistoryRunSaysNothingAboutOne(t *
 	}
 	if _, present := readState(t, resp.Body.Bytes())["history_running"]; present {
 		t.Error("history_running has to be absent when no run owns the environment")
+	}
+}
+
+// TestAnOccupiedHistoryWindowIsAConflictThatNamesTheDevices: the caller has to
+// see which devices already hold readings, because the decision the 409 asks for
+// is whether to write a second set of rows for exactly those.
+func TestAnOccupiedHistoryWindowIsAConflictThatNamesTheDevices(t *testing.T) {
+	occupied := &moses_runtime.HistoryOccupiedError{Devices: []moses_runtime.OccupiedDevice{
+		{DeviceId: "urn:infai:ses:device:aa", Name: "press"},
+		{DeviceId: "urn:infai:ses:device:bb", Name: "oven"},
+	}}
+	notifier := &recordingNotifier{historyStartErr: occupied}
+	router := testRouterWithNotifier(backfillStore("user-a"), notifier)
+
+	resp := do(t, router, "POST", "/environments/env-1/history", "user-a", historyBody())
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", resp.Code, resp.Body.String())
+	}
+	lines := strings.Split(strings.TrimSpace(resp.Body.String()), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected one sentence and one line per device, got %#v", lines)
+	}
+	if !strings.Contains(lines[0], "force") {
+		t.Errorf("the first line has to say how to start anyway, it reads %q", lines[0])
+	}
+	if lines[1] != "device urn:infai:ses:device:aa (press)" {
+		t.Errorf("the first device reads %q", lines[1])
+	}
+	if lines[2] != "device urn:infai:ses:device:bb (oven)" {
+		t.Errorf("the second device reads %q", lines[2])
+	}
+	//the refusal happened in the runtime, so the flag it lifts was passed on
+	if len(notifier.historyForced) != 1 || notifier.historyForced[0] {
+		t.Errorf("a body without force has to reach the runtime as false, got %v", notifier.historyForced)
+	}
+}
+
+// TestAForcedHistoryRunIsStarted: force is the way past the 409, so the flag has
+// to reach the runtime rather than being read and dropped by the handler.
+func TestAForcedHistoryRunIsStarted(t *testing.T) {
+	notifier := &recordingNotifier{}
+	router := testRouterWithNotifier(backfillStore("user-a"), notifier)
+
+	body := map[string]interface{}{"from": testHistoryFrom.Format(time.RFC3339), "force": true}
+	resp := do(t, router, "POST", "/environments/env-1/history", "user-a", body)
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if len(notifier.historyForced) != 1 || !notifier.historyForced[0] {
+		t.Errorf("expected the run to be started with force, got %v", notifier.historyForced)
+	}
+	if len(notifier.histories) != 1 || !notifier.histories[0].From.Equal(testHistoryFrom) {
+		t.Errorf("the forced run was started with %#v", notifier.histories)
+	}
+}
+
+// TestAnUnnamedOccupiedDeviceIsStillListed: the asset name is what the document
+// carries, and a device the check found under an asset without one still has to
+// appear - a line missing from that list reads as "this device is free".
+func TestAnUnnamedOccupiedDeviceIsStillListed(t *testing.T) {
+	occupied := &moses_runtime.HistoryOccupiedError{Devices: []moses_runtime.OccupiedDevice{
+		{DeviceId: "urn:infai:ses:device:cc"},
+	}}
+	notifier := &recordingNotifier{historyStartErr: occupied}
+	router := testRouterWithNotifier(backfillStore("user-a"), notifier)
+
+	resp := do(t, router, "POST", "/environments/env-1/history", "user-a", historyBody())
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "device urn:infai:ses:device:cc") {
+		t.Errorf("the device without an asset name is missing: %q", resp.Body.String())
+	}
+}
+
+// TestTheHistoryRunIsStartedWithTheCallersToken: the occupancy check reads the
+// timescale with it, and a device an admin added to somebody's environment is
+// not readable with the owner's token - the wrapper answers 404 for it.
+func TestTheHistoryRunIsStartedWithTheCallersToken(t *testing.T) {
+	notifier := &recordingNotifier{}
+	router := testRouterWithNotifier(backfillStore("user-a"), notifier)
+
+	resp := do(t, router, "POST", "/environments/env-1/history", "user-a", historyBody())
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if len(notifier.historyTokens) != 1 || notifier.historyTokens[0] != tokenFor("user-a") {
+		t.Errorf("expected the raw authorization value to reach the runtime, got %#v", notifier.historyTokens)
+	}
+}
+
+// TestACheckThatRanOutOfTimeIsA503: nothing about the window is known, which is
+// not a fault of this request - the answer says so and says that force starts
+// the run without the check, so a caller can act on it.
+func TestACheckThatRanOutOfTimeIsA503(t *testing.T) {
+	notifier := &recordingNotifier{historyStartErr: moses_runtime.ErrHistoryCheckTimeout}
+	router := testRouterWithNotifier(backfillStore("user-a"), notifier)
+
+	resp := do(t, router, "POST", "/environments/env-1/history", "user-a", historyBody())
+	if resp.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", resp.Code, resp.Body.String())
+	}
+	for _, fragment := range []string{"in time", "force: true"} {
+		if !strings.Contains(resp.Body.String(), fragment) {
+			t.Errorf("the body has to say %q, it reads %q", fragment, resp.Body.String())
+		}
 	}
 }

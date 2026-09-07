@@ -87,12 +87,15 @@ type RuntimeNotifier interface {
 	BackfillStatusOf(id string) (moses_runtime.BackfillStatus, error)
 
 	// StartHistory runs one environment from a past instant up to now and makes
-	// the state it arrives at the live one. It reports a
-	// *runtime.HistoryRangeError for a window it will not serve,
-	// runtime.ErrHistoryRunning or runtime.ErrBackfillRunning when one of the two
-	// is already running, and repo.ErrNotRunning for an environment it does not
-	// hold.
-	StartHistory(id string, from time.Time) (moses_runtime.HistoryStatus, error)
+	// the state it arrives at the live one. token is the caller's Authorization
+	// value, with which the occupancy check reads the timescale. It reports a
+	// *runtime.HistoryRangeError for a window it will not serve, a
+	// *runtime.HistoryOccupiedError when the first day of the window already
+	// holds readings and force is false, runtime.ErrHistoryCheckTimeout when
+	// that check did not answer in time, runtime.ErrHistoryRunning or
+	// runtime.ErrBackfillRunning when one of the two is already running, and
+	// repo.ErrNotRunning for an environment it does not hold.
+	StartHistory(id string, from time.Time, force bool, token string) (moses_runtime.HistoryStatus, error)
 
 	// HistoryStatusOf follows a run. It reports runtime.ErrNoHistory when nothing
 	// is known, which is also the answer after a restart.
@@ -142,11 +145,11 @@ func snapshotState(notifier RuntimeNotifier, id string) (moses_runtime.StateSnap
 
 // The history endpoints answer rather than panic on a store only deployment, the
 // same way the backfill ones do.
-func startHistory(notifier RuntimeNotifier, id string, from time.Time) (moses_runtime.HistoryStatus, error) {
+func startHistory(notifier RuntimeNotifier, id string, from time.Time, force bool, token string) (moses_runtime.HistoryStatus, error) {
 	if notifier == nil {
 		return moses_runtime.HistoryStatus{}, ErrNoRuntime
 	}
-	return notifier.StartHistory(id, from)
+	return notifier.StartHistory(id, from, force, token)
 }
 
 func historyStatusOf(notifier RuntimeNotifier, id string) (moses_runtime.HistoryStatus, error) {

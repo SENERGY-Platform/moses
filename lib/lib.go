@@ -281,8 +281,8 @@ func (this *environmentNotifier) BackfillStatusOf(id string) (runtime.BackfillSt
 	return this.runtime.BackfillStatusOf(id)
 }
 
-func (this *environmentNotifier) StartHistory(id string, from time.Time) (runtime.HistoryStatus, error) {
-	return this.runtime.StartHistory(id, from)
+func (this *environmentNotifier) StartHistory(id string, from time.Time, force bool, token string) (runtime.HistoryStatus, error) {
+	return this.runtime.StartHistory(id, from, force, token)
 }
 
 func (this *environmentNotifier) HistoryStatusOf(id string) (runtime.HistoryStatus, error) {

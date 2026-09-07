@@ -836,7 +836,7 @@
                         "Bearer": []
                     }
                 ],
-                "description": "Simulates the environment from `from` to the present on a virtual clock and publishes every reading under the instant it was computed for. Unlike a backfill the run carries state, and the state it arrives at **becomes** the live state: a meter reading continues into the live one as one ramp rather than starting a second one next to it. Runs asynchronously; the response is the run as it stands, `GET` follows it and `DELETE` aborts it.\n\n**The live simulation of this environment is suspended for the duration of the run and its current state is discarded.** While it runs, `PATCH /environments/{id}/state`, the state snapshot and a second run are answered with 409, incoming commands are dropped, and an edit to the definition takes effect when the run ends. State `done` means the live simulation is running again on the state the run arrived at.\n\nOnly a channel whose platform service declares the attribute `senergy/time_path` can publish with a historical timestamp; every other channel is computed but sends nothing, so the environment as a whole still arrives at the right state. Every source kind is simulated, script and schedule included, which is what a backfill cannot do. Every channel that publishes nothing says why in `channels` of the status.\n\nThere is no end: the run ends at the present, and once it has simulated the window it keeps going until it has caught up with the time it spent doing so, so that no gap is left at the handover. `to` in the status is therefore where the run actually ended.\n\nThe window may not start in the future, has to be at least a minute and at most 366 days long, and may not come to more than twenty million simulation steps across the channels and context sources of the environment.",
+                "description": "Simulates the environment from `from` to the present on a virtual clock and publishes every reading under the instant it was computed for. Unlike a backfill the run carries state, and the state it arrives at **becomes** the live state: a meter reading continues into the live one as one ramp rather than starting a second one next to it. Runs asynchronously; the response is the run as it stands, `GET` follows it and `DELETE` aborts it.\n\n**The live simulation of this environment is suspended for the duration of the run and its current state is discarded.** While it runs, `PATCH /environments/{id}/state`, the state snapshot and a second run are answered with 409, incoming commands are dropped, and an edit to the definition takes effect when the run ends. State `done` means the live simulation is running again on the state the run arrived at.\n\nOnly a channel whose platform service declares the attribute `senergy/time_path` can publish with a historical timestamp; every other channel is computed but sends nothing, so the environment as a whole still arrives at the right state. Every source kind is simulated, script and schedule included, which is what a backfill cannot do. Every channel that publishes nothing says why in `channels` of the status.\n\nThere is no end: the run ends at the present, and once it has simulated the window it keeps going until it has caught up with the time it spent doing so, so that no gap is left at the handover. `to` in the status is therefore where the run actually ended.\n\nThe window may not start in the future, has to be at least a minute and at most 366 days long, and may not come to more than twenty million simulation steps across the channels and context sources of the environment.\n\n**A window whose first day already holds readings is refused with 409**, naming the devices it found them for: that is either an earlier run over the same window or a window that reaches into live data, and the rows of a run cannot be deleted again. `force: true` starts the run anyway, which writes the readings of the window a second time. Only the first day from `from` is looked at, since the end of any window of an environment that has been running always holds readings. Without a configured timescale-wrapper the check is skipped. The queries run on the caller's token, and a channel it is answered a 404 for is asked again with the owner's; a channel left with a 400 or a 404 is unchecked with a warning, while every other answer - another status, an unavailable wrapper, a network error - refuses the run rather than starting it unchecked. A check that does not answer within five seconds is answered with 503.",
                 "consumes": [
                     "application/json"
                 ],
@@ -891,13 +891,19 @@
                         }
                     },
                     "409": {
-                        "description": "a history run or a backfill of this environment is already running",
+                        "description": "a history run or a backfill of this environment is already running, or the first day of the window already holds readings and force is not set",
                         "schema": {
                             "type": "string"
                         }
                     },
                     "500": {
                         "description": "error message",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "503": {
+                        "description": "the timescale did not answer in time, so the window could not be checked; retry or send force: true",
                         "schema": {
                             "type": "string"
                         }
@@ -1280,6 +1286,11 @@
         "api.HistoryRequest": {
             "type": "object",
             "properties": {
+                "force": {
+                    "description": "Force starts the run although the first day of the window already holds\nreadings for a device of this environment. Those rows stay and the run\nwrites its own beside them; without it such a request is answered with\n409.",
+                    "type": "boolean",
+                    "example": false
+                },
                 "from": {
                     "type": "string",
                     "example": "2026-07-01T00:00:00Z"

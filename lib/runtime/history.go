@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
+	"github.com/SENERGY-Platform/moses/lib/devices"
 	"github.com/SENERGY-Platform/moses/lib/domain"
 	"github.com/SENERGY-Platform/moses/lib/repo"
 	"github.com/SENERGY-Platform/moses/lib/util"
@@ -1204,23 +1205,39 @@ func (this *Runtime) historyPublished(env *environment, channel *historyChannel,
 	}
 }
 
-// historyPublishable answers, once per channel and before the first instant,
-// whether a reading of it can reach timescale under a past timestamp. The last
-// question costs a device type read, which is why it is not asked per instant.
-func (this *Runtime) historyPublishable(binding channelBinding) (bool, string) {
+// historyChannelShape answers, once per channel, whether a reading of it can
+// reach timescale under a past timestamp, and with which shape. err is set only
+// where the lookup itself failed - a device repository that could not be read
+// says nothing about the channel, unlike a service that carries no time path -
+// so a caller that can still refuse the run may act on it.
+func (this *Runtime) historyChannelShape(binding channelBinding) (devices.TimeShape, string, bool, error) {
 	if !channelPublishes(binding.channel) {
-		return false, "the channel does not publish on a schedule, so it only computes"
+		return devices.TimeShape{}, "the channel does not publish on a schedule, so it only computes", false, nil
 	}
 	if binding.asset.externalRef == "" {
-		return false, "the asset has no platform device, so a reading has nowhere to go"
+		return devices.TimeShape{}, "the asset has no platform device, so a reading has nowhere to go", false, nil
 	}
 	if binding.channel.ExternalRef == "" {
-		return false, "the channel has no platform service, so a reading has nowhere to go"
+		return devices.TimeShape{}, "the channel has no platform service, so a reading has nowhere to go", false, nil
 	}
-	if _, err := this.publisher.TimeShapeOf(binding.asset.externalRef, binding.channel.ExternalRef); err != nil {
-		return false, err.Error()
+	shape, err := this.publisher.TimeShapeOf(binding.asset.externalRef, binding.channel.ExternalRef)
+	if errors.Is(err, devices.ErrNoTimePath) || errors.Is(err, devices.ErrUnusableTimeShape) {
+		//a property of the service, not a lookup that failed: such a channel can
+		//never publish with a timestamp, so it only computes and cannot occupy
+		return devices.TimeShape{}, err.Error(), false, nil
 	}
-	return true, ""
+	if err != nil {
+		return devices.TimeShape{}, err.Error(), false, err
+	}
+	return shape, "", true, nil
+}
+
+// historyPublishable is the same question where nothing can be refused any
+// more: the run is under way, so a lookup that failed leaves the channel
+// computing without publishing, with the reason it gave.
+func (this *Runtime) historyPublishable(binding channelBinding) (bool, string) {
+	_, reason, publishable, _ := this.historyChannelShape(binding)
+	return publishable, reason
 }
 
 // channelPublishes is the generation's own test for "this channel sends on its

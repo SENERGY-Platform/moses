@@ -92,6 +92,12 @@ type TimeShape struct {
 // only carry live data.
 var ErrNoTimePath = errors.New("the service carries no " + TimePathAttribute + " attribute, so the platform stamps its events with the arrival time")
 
+// ErrUnusableTimeShape wraps every refusal that is a property of the service's
+// declaration rather than of a lookup: such a service can never publish with a
+// timestamp, which is a different thing from a device repository that did not
+// answer.
+var ErrUnusableTimeShape = errors.New("the service cannot carry a timestamp")
+
 // ResolveTimeShape reports how a service wants an event that carries its own
 // timestamp, or why it cannot take one.
 //
@@ -120,6 +126,14 @@ var ErrNoTimePath = errors.New("the service carries no " + TimePathAttribute + "
 // converter it pins; docs/backfill.md carries the reasoning, and
 // lib/devices/ingestion_test.go pins it against the dependency.
 func ResolveTimeShape(service models.Service) (TimeShape, error) {
+	shape, err := resolveTimeShape(service)
+	if err != nil && !errors.Is(err, ErrNoTimePath) {
+		return shape, fmt.Errorf("%w: %w", ErrUnusableTimeShape, err)
+	}
+	return shape, err
+}
+
+func resolveTimeShape(service models.Service) (TimeShape, error) {
 	//first non-empty attribute wins, which is what the ingestion does
 	path := ""
 	for _, attribute := range service.Attributes {

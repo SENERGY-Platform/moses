@@ -19,6 +19,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
@@ -50,6 +51,12 @@ func HistoryEndpoints(config config.Config, environments repo.Environments, shar
 // the present, because its result is the live state.
 type HistoryRequest struct {
 	From time.Time `json:"from" example:"2026-07-01T00:00:00Z"`
+
+	// Force starts the run although the first day of the window already holds
+	// readings for a device of this environment. Those rows stay and the run
+	// writes its own beside them; without it such a request is answered with
+	// 409.
+	Force bool `json:"force" example:"false"`
 }
 
 // @Summary Run one environment from a past instant up to now
@@ -62,6 +69,8 @@ type HistoryRequest struct {
 // @Description There is no end: the run ends at the present, and once it has simulated the window it keeps going until it has caught up with the time it spent doing so, so that no gap is left at the handover. `to` in the status is therefore where the run actually ended.
 // @Description
 // @Description The window may not start in the future, has to be at least a minute and at most 366 days long, and may not come to more than twenty million simulation steps across the channels and context sources of the environment.
+// @Description
+// @Description **A window whose first day already holds readings is refused with 409**, naming the devices it found them for: that is either an earlier run over the same window or a window that reaches into live data, and the rows of a run cannot be deleted again. `force: true` starts the run anyway, which writes the readings of the window a second time. Only the first day from `from` is looked at, since the end of any window of an environment that has been running always holds readings. Without a configured timescale-wrapper the check is skipped. The queries run on the caller's token, and a channel it is answered a 404 for is asked again with the owner's; a channel left with a 400 or a 404 is unchecked with a warning, while every other answer - another status, an unavailable wrapper, a network error - refuses the run rather than starting it unchecked. A check that does not answer within five seconds is answered with 503.
 // @Tags Environment
 // @Accept json
 // @Produce json
@@ -72,8 +81,9 @@ type HistoryRequest struct {
 // @Failure 400 {string} string "the body is unreadable, or the window is in the future, too long or too dense"
 // @Failure 401 {string} string "the token carries no subject"
 // @Failure 404 {string} string "no such environment, no access to it, or it is not running here"
-// @Failure 409 {string} string "a history run or a backfill of this environment is already running"
+// @Failure 409 {string} string "a history run or a backfill of this environment is already running, or the first day of the window already holds readings and force is not set"
 // @Failure 500 {string} string "error message"
+// @Failure 503 {string} string "the timescale did not answer in time, so the window could not be checked; retry or send force: true"
 // @Router /environments/{id}/history [post]
 func postHistoryH(environments repo.Environments, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
 	return http.MethodPost, "/environments/:id/history", func(gc *gin.Context) {
@@ -92,13 +102,22 @@ func postHistoryH(environments repo.Environments, notifier RuntimeNotifier) (str
 			return
 		}
 
-		status, err := startHistory(notifier, id, request.From)
+		//the caller's raw token, as the device calls hand it on: an environment can
+		//hold a device an admin created, which the owner's token cannot read
+		status, err := startHistory(notifier, id, request.From, request.Force, token.Jwt())
 		rangeError := &moses_runtime.HistoryRangeError{}
+		occupied := &moses_runtime.HistoryOccupiedError{}
 		switch {
 		case err == nil:
 			gc.JSON(http.StatusAccepted, status)
 		case errors.As(err, &rangeError):
 			gc.String(http.StatusBadRequest, "%s", rangeError.Error())
+		case errors.As(err, &occupied):
+			gc.String(http.StatusConflict, "%s", occupiedWindowMessage(occupied))
+		case errors.Is(err, moses_runtime.ErrHistoryCheckTimeout):
+			//503 and not 500: nothing is broken here, the timescale did not answer
+			//inside the budget a waiting caller allows for
+			gc.String(http.StatusServiceUnavailable, "%s", err.Error())
 		case errors.Is(err, moses_runtime.ErrHistoryRunning), errors.Is(err, moses_runtime.ErrBackfillRunning):
 			gc.String(http.StatusConflict, "%s", err.Error())
 		case errors.Is(err, repo.ErrNotRunning), errors.Is(err, ErrNoRuntime):
@@ -111,6 +130,17 @@ func postHistoryH(environments repo.Environments, notifier RuntimeNotifier) (str
 			gc.String(http.StatusInternalServerError, "unable to start the history run")
 		}
 	}
+}
+
+// occupiedWindowMessage is the 409 body: one sentence saying what was found and
+// how to start anyway, then one line per device, so an operator can see which
+// devices they are about to write a second set of rows for.
+func occupiedWindowMessage(occupied *moses_runtime.HistoryOccupiedError) string {
+	lines := []string{"the first day of the window already holds readings for these devices, so the run would write rows a second time; send force: true to start anyway"}
+	for _, device := range occupied.Devices {
+		lines = append(lines, device.String())
+	}
+	return strings.Join(lines, "\n")
 }
 
 // @Summary The history run of one environment

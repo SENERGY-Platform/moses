@@ -164,6 +164,13 @@ func New(config config.Config, environments repo.Environments, states repo.State
 // that asked for it.
 type seriesFetcher interface {
 	Fetch(ctx context.Context, token string, deviceId string, serviceId string, column string, start time.Time, end time.Time) ([]dataset.Point, error)
+
+	// HasReadings reports whether that column already holds a reading in
+	// [start, end). It is what a history run asks before it writes into a
+	// window; ctx is the check's budget. An error refuses the run rather than
+	// starting it unchecked, except for a *timeseries.StatusError of the 4xx
+	// class, which leaves that one channel unchecked.
+	HasReadings(ctx context.Context, token string, deviceId string, serviceId string, column string, start time.Time, end time.Time) (bool, error)
 }
 
 // newRuntime is what the tests use: everything except the connector is already

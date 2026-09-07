@@ -206,7 +206,8 @@ func (this *connectorPublisher) service(deviceRef string, serviceRef string) (mo
 			return service, nil
 		}
 	}
-	return models.Service{}, fmt.Errorf("the device type %v has no service %v", device.DeviceTypeId, serviceRef)
+	//a declaration problem, not a lookup that failed: the caller treats it like a service without a time path
+	return models.Service{}, fmt.Errorf("%w: the device type %v has no service %v", devices.ErrUnusableTimeShape, device.DeviceTypeId, serviceRef)
 }
 
 // deviceStateLogger reports a simulated device as online, as the legacy

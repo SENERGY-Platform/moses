@@ -20,12 +20,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/domain"
 	"github.com/SENERGY-Platform/moses/lib/repo"
+	"github.com/SENERGY-Platform/moses/lib/timeseries"
 	"github.com/SENERGY-Platform/moses/lib/util"
 )
 
@@ -54,6 +57,40 @@ type HistoryRangeError struct {
 }
 
 func (this *HistoryRangeError) Error() string { return this.Reason }
+
+// OccupiedDevice is one platform device of the environment whose first day of
+// the window already holds readings. Name is the name of the asset it belongs
+// to, and empty where the document gives it none.
+type OccupiedDevice struct {
+	DeviceId string
+	Name     string
+}
+
+// String names one device the way every refusal names it, the api's 409 body
+// included, so the two cannot drift apart.
+func (this OccupiedDevice) String() string {
+	if this.Name == "" {
+		return "device " + this.DeviceId
+	}
+	return "device " + this.DeviceId + " (" + this.Name + ")"
+}
+
+// HistoryOccupiedError is a window whose first day already holds readings for at
+// least one device of the environment: an earlier run over the same window, or a
+// window that reaches into live data. The api turns it into a 409, and `force`
+// starts the run anyway - the rows cannot be deleted, so the decision to write
+// them a second time is the caller's.
+type HistoryOccupiedError struct {
+	Devices []OccupiedDevice
+}
+
+func (this *HistoryOccupiedError) Error() string {
+	named := make([]string, 0, len(this.Devices))
+	for _, device := range this.Devices {
+		named = append(named, device.String())
+	}
+	return "the first day of the window already holds readings for " + strings.Join(named, ", ")
+}
 
 // HistoryState is where a run stands.
 type HistoryState string
@@ -282,18 +319,28 @@ func historyRecordOf(status HistoryStatus, definition domain.Environment) repo.H
 }
 
 // StartHistory replaces the live state of one environment by the one it would
-// have if it had been running since from.
-//
-// The window, the volume and the grid identities are checked before anything is
-// stopped, so a caller that asks for an impossible run does not interrupt the
-// simulation for it.
-// Everything after that runs with the lifecycle mutex held, up to the point
-// where the run is registered and the state is replaced: a Reload or a Remove
-// arriving in between would otherwise restart the channels the run just stopped.
-func (this *Runtime) StartHistory(id string, from time.Time) (HistoryStatus, error) {
+// have if it had been running since from. The window, the volume, the grid
+// identities and whether the first day of the window already holds readings are
+// checked before anything is stopped, so a caller that asks for an impossible
+// run does not interrupt the simulation for it; force skips the occupancy check
+// alone, and token is the caller's Authorization value for it, with the owner's
+// exchanged token as the fallback. Everything from the registration on runs
+// with the lifecycle mutex held: a Reload or a Remove arriving in between would
+// otherwise restart the channels the run just stopped.
+func (this *Runtime) StartHistory(id string, from time.Time, force bool, token string) (HistoryStatus, error) {
 	from, to, err := validateHistoryWindow(from, time.Now())
 	if err != nil {
 		return HistoryStatus{}, err
+	}
+
+	//a stopped runtime is asked before the wrapper is: during a rollout a POST
+	//would otherwise spend the whole check budget on queries for an environment
+	//that cannot run, and answer 409 for it
+	this.lifecycle.Lock()
+	alive := this.running
+	this.lifecycle.Unlock()
+	if !alive {
+		return HistoryStatus{}, repo.ErrNotRunning
 	}
 
 	this.mux.RLock()
@@ -311,6 +358,26 @@ func (this *Runtime) StartHistory(id string, from time.Time) (HistoryStatus, err
 	}
 	if err = checkHistoryGrids(gen); err != nil {
 		return HistoryStatus{}, err
+	}
+	//a run or a backfill that already owns the environment is named out of the
+	//registries rather than after a fan-out whose answer nobody reads; the
+	//registration below decides it again, under lifecycle
+	if busy := this.historyExclusivity(id); busy != nil {
+		return HistoryStatus{}, busy
+	}
+	if !force {
+		//the wrapper is asked here and not again under lifecycle: it is a query
+		//per channel over the network, and holding lifecycle for that would stop
+		//every other Start, Stop, Reload and Remove for as long as it takes. The
+		//context is not derived from the runtime's, so the answer does not depend
+		//on a shutdown racing the request; the run is registered under lifecycle
+		//afterwards, which is where a stopped runtime refuses it.
+		checkCtx, cancelCheck := context.WithTimeout(context.Background(), historyOccupiedTimeout)
+		err = this.checkHistoryOccupied(checkCtx, gen, from, token)
+		cancelCheck()
+		if err != nil {
+			return HistoryStatus{}, err
+		}
 	}
 
 	this.lifecycle.Lock()
@@ -439,6 +506,28 @@ func (this *Runtime) registerHistory(record repo.HistoryJobRecord) (*historyJob,
 	this.histories[id] = job
 	this.historyWorkers.Add(1)
 	return job, nil
+}
+
+// historyExclusivity peeks what registerHistory decides, for a caller that has
+// not stopped anything yet: a run or a backfill that owns the environment is
+// named here rather than after a fan-out of wrapper queries whose answer is
+// then thrown away. It reads the same two registries in the same order and
+// takes neither decision, so a run registered in between is still refused where
+// it counts.
+func (this *Runtime) historyExclusivity(id string) error {
+	this.historyMux.Lock()
+	running, known := this.histories[id]
+	this.historyMux.Unlock()
+	if known && running.snapshot().State == HistoryRunning {
+		return ErrHistoryRunning
+	}
+	this.backfillMux.Lock()
+	backfilling, known := this.backfills[id]
+	this.backfillMux.Unlock()
+	if known && backfilling.snapshot().State == BackfillRunning {
+		return ErrBackfillRunning
+	}
+	return nil
 }
 
 // unregisterHistory takes a registered run back out, for a start that refuses it
@@ -1049,6 +1138,206 @@ func checkHistoryVolume(gen *generation, from time.Time, to time.Time) error {
 		}
 	}
 	return nil
+}
+
+// The bounds of the occupancy check: the first day from the window start is what
+// tells an earlier run over the same window from a window that reaches into live
+// data, while the end of any window of an environment that ever ran live always
+// holds readings. The queries are limit-1 reads, so the fan-out is what the
+// wrapper feels rather than the work, and the whole check has to answer inside
+// the api server's write timeout, since a caller waits on the POST for it.
+const (
+	historyOccupiedSpan    = 24 * time.Hour
+	historyOccupiedQueries = 16
+	historyOccupiedTimeout = 5 * time.Second
+)
+
+// ErrHistoryCheckTimeout is a check that did not finish inside its budget. It is
+// its own error because the api answers it with a 503: nothing is known about
+// the window, and the caller either retries or forces the run.
+var ErrHistoryCheckTimeout = errors.New("the timescale did not answer in time, so the history window could not be checked; send force: true to start the run without the check")
+
+// occupancyQuery is one channel's question, kept in the order of the generation
+// so a refusal names the devices in the order of the document.
+type occupancyQuery struct {
+	deviceId  string
+	serviceId string
+	column    string
+	assetId   string
+}
+
+// checkHistoryOccupied refuses a run whose first day already holds readings, for
+// every channel that could publish one, and only for a run somebody asked for:
+// a resume continues a run that wrote into its own window on purpose. A 400 or
+// a 404 the wrapper answers for one channel leaves that channel unchecked with a
+// WARN, since a column its validator rejects or a device the token cannot read
+// would otherwise block every run of that environment. Every other failure -
+// another status, a network error, a spent budget, a token exchange that failed
+// - refuses the run, because the check matters exactly where something was
+// written before.
+func (this *Runtime) checkHistoryOccupied(ctx context.Context, gen *generation, from time.Time, token string) error {
+	if this.fetcher == nil || (token == "" && this.ownerToken == nil) {
+		util.Logger.Warn("the history window is not checked against the timescale, no wrapper is configured",
+			"environment", gen.def.Id)
+		return nil
+	}
+
+	queries := []occupancyQuery{}
+	for _, binding := range gen.sensors {
+		shape, _, publishable, err := this.historyChannelShape(binding)
+		if err != nil {
+			//a device repository that cannot be read says nothing about this
+			//channel, and a window nobody could check is what the refusal is for
+			return fmt.Errorf("unable to check the history window against the timescale: %w", err)
+		}
+		if !publishable {
+			//a channel that cannot publish writes nothing, so nothing of it can
+			//collide - and asking about it would need a time shape it has none of
+			continue
+		}
+		queries = append(queries, occupancyQuery{
+			deviceId:  binding.asset.externalRef,
+			serviceId: binding.channel.ExternalRef,
+			//the flattened column name the ingestion writes: the root prefixes
+			//the value path, exactly as the platform origin queries it
+			column:  shape.RootName + "." + strings.Join(shape.ValuePath, "."),
+			assetId: binding.asset.id,
+		})
+	}
+	if len(queries) == 0 {
+		return nil
+	}
+
+	end := from.Add(historyOccupiedSpan)
+	ownerAsked := false
+	if token == "" {
+		//no caller token: a resume or an internal call reads with the owner's,
+		//the way the platform origin does
+		exchanged, err := this.ownerToken(gen.def.Owner)
+		if err != nil {
+			return fmt.Errorf("unable to check the history window against the timescale: %w", err)
+		}
+		token, ownerAsked = exchanged, true
+	}
+
+	occupied := make([]bool, len(queries))
+	failures := make([]error, len(queries))
+	all := make([]int, len(queries))
+	for i := range all {
+		all[i] = i
+	}
+	this.askOccupancy(ctx, queries, all, token, from, end, occupied, failures)
+
+	//a 404 is a device this token cannot read, and the devices of an environment
+	//are created with the token of whoever provisioned them - so the owner's
+	//exchanged token is the second try, exchanged once and only where a channel
+	//needs it. A second 404 leaves that channel unchecked below.
+	denied := []int{}
+	for i := range failures {
+		if wrapperStatusOf(failures[i]) == http.StatusNotFound {
+			denied = append(denied, i)
+		}
+	}
+	if len(denied) > 0 && !ownerAsked && this.ownerToken != nil {
+		exchanged, err := this.ownerToken(gen.def.Owner)
+		if err != nil {
+			return fmt.Errorf("unable to check the history window against the timescale: %w", err)
+		}
+		if exchanged != token {
+			this.askOccupancy(ctx, queries, denied, exchanged, from, end, occupied, failures)
+		}
+	}
+
+	//the first refusal in query order rather than the first to arrive, so the
+	//answer reads the same way on every run
+	var refusal error
+	for i := range failures {
+		if failures[i] == nil {
+			continue
+		}
+		status := wrapperStatusOf(failures[i])
+		switch {
+		case errors.Is(failures[i], context.DeadlineExceeded), errors.Is(failures[i], context.Canceled):
+			//a spent budget wins over every other failure: with the queries cut
+			//off nothing is known about the window, and the answer says so
+			//rather than naming one wrapper call
+			return ErrHistoryCheckTimeout
+		case status == http.StatusBadRequest, status == http.StatusNotFound:
+			util.Logger.Warn("the timescale-wrapper refused the history window query, this channel is not checked",
+				attributes.ErrorKey, failures[i], "environment", gen.def.Id,
+				"device", queries[i].deviceId, "service", queries[i].serviceId, "status", status)
+		case refusal == nil:
+			refusal = fmt.Errorf("unable to check the history window against the timescale: %w", failures[i])
+		}
+	}
+	if refusal != nil {
+		return refusal
+	}
+
+	names := assetNamesOf(gen.def)
+	result := &HistoryOccupiedError{}
+	reported := map[string]bool{}
+	for i, query := range queries {
+		//one entry per device: several channels of one device hold readings of
+		//the same device, and naming it twice says nothing more
+		if !occupied[i] || reported[query.deviceId] {
+			continue
+		}
+		reported[query.deviceId] = true
+		result.Devices = append(result.Devices, OccupiedDevice{
+			DeviceId: query.deviceId, Name: names[query.assetId],
+		})
+	}
+	if len(result.Devices) > 0 {
+		return result
+	}
+	return nil
+}
+
+// askOccupancy asks the wrapper about the queries the indices name, at most
+// historyOccupiedQueries of them at a time, and writes every answer at the
+// query's own index - so a second pass over a subset overwrites exactly those.
+// Every goroutine writes one element of its own, which is what lets the caller
+// read both slices once they have all returned.
+func (this *Runtime) askOccupancy(ctx context.Context, queries []occupancyQuery, indices []int, token string, from time.Time, end time.Time, occupied []bool, failures []error) {
+	slots := make(chan struct{}, historyOccupiedQueries)
+	waiting := sync.WaitGroup{}
+	for _, index := range indices {
+		waiting.Add(1)
+		go func(i int) {
+			defer waiting.Done()
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			query := queries[i]
+			//no pre-check of the budget: the client hands the context to the
+			//request and reports a spent one as its own error
+			occupied[i], failures[i] = this.fetcher.HasReadings(ctx, token,
+				query.deviceId, query.serviceId, query.column, from, end)
+		}(index)
+	}
+	waiting.Wait()
+}
+
+// wrapperStatusOf is the http status a wrapper answer carried, or 0 for an error
+// that is not one - a network failure or a spent budget.
+func wrapperStatusOf(err error) int {
+	status := &timeseries.StatusError{}
+	if errors.As(err, &status) {
+		return status.Status
+	}
+	return 0
+}
+
+// assetNamesOf maps asset id to asset name, so a refusal names a device in the
+// words of the document rather than by its platform id alone.
+func assetNamesOf(def domain.Environment) map[string]string {
+	result := map[string]string{}
+	for _, zone := range def.Zones {
+		for _, asset := range zone.Assets {
+			result[asset.Id] = asset.Name
+		}
+	}
+	return result
 }
 
 // historyTicksOf is how many due events one channel has over the window, on the

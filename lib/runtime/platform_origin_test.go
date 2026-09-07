@@ -33,6 +33,97 @@ type fakeFetcher struct {
 	// budgets is the context each call was handed, in call order. A real fetch
 	// of a long window needs minutes, so what bounds it is worth an assertion.
 	budgets []ctxBudget
+
+	// occupied says which service refs report a reading in the window they are
+	// asked about, readingsErr is what HasReadings reports instead, and checks
+	// records every occupancy query in call order. Written before the runtime
+	// starts and read under the mutex.
+	occupied    map[string]bool
+	readingsErr error
+	checks      []occupancyCheck
+
+	// readingsErrOf is the failure of single service refs, which is what a
+	// wrapper answering 404 for one device of an environment looks like.
+	readingsErrOf map[string]error
+
+	// readingsOf, when set, answers instead of occupied and readingsErr and sees
+	// the token: a device an admin created answers 404 for the caller's token
+	// and the truth for the owner's exchanged one.
+	readingsOf func(token string, serviceId string) (bool, error)
+
+	// readingsGate, when set, holds every occupancy query until it is closed,
+	// while inFlight and peakInFlight count the queries running at the same
+	// time: the check fans out over the channels of an environment, and how wide
+	// that fan-out gets is what the wrapper feels.
+	readingsGate chan struct{}
+	inFlight     int
+	peakInFlight int
+}
+
+// occupancyCheck is one HasReadings call as the fake saw it, window included: the
+// run is refused over the first day alone, so the window is part of the
+// behaviour rather than an implementation detail.
+type occupancyCheck struct {
+	token     string
+	deviceId  string
+	serviceId string
+	column    string
+	start     time.Time
+	end       time.Time
+}
+
+func (this *fakeFetcher) HasReadings(ctx context.Context, token string, deviceId string, serviceId string, column string, start time.Time, end time.Time) (bool, error) {
+	this.mux.Lock()
+	this.checks = append(this.checks, occupancyCheck{
+		token: token, deviceId: deviceId, serviceId: serviceId, column: column, start: start, end: end,
+	})
+	this.inFlight++
+	if this.inFlight > this.peakInFlight {
+		this.peakInFlight = this.inFlight
+	}
+	occupied := this.occupied[serviceId]
+	failure := this.readingsErr
+	if perService, found := this.readingsErrOf[serviceId]; found {
+		failure = perService
+	}
+	gate := this.readingsGate
+	answer := this.readingsOf
+	this.mux.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+		}
+	}
+	this.mux.Lock()
+	this.inFlight--
+	this.mux.Unlock()
+	//the real client passes the context to the request, so a fake that answered
+	//on a spent one would let a missing budget look healthy
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if answer != nil {
+		return answer(token, serviceId)
+	}
+	if failure != nil {
+		return false, failure
+	}
+	return occupied, nil
+}
+
+// occupancyChecks returns every occupancy query in call order.
+func (this *fakeFetcher) occupancyChecks() []occupancyCheck {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	return append([]occupancyCheck{}, this.checks...)
+}
+
+// peakOccupancyQueries is the most occupancy queries that ever ran at once.
+func (this *fakeFetcher) peakOccupancyQueries() int {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	return this.peakInFlight
 }
 
 func (this *fakeFetcher) Fetch(ctx context.Context, token string, deviceId string, serviceId string, column string, start time.Time, end time.Time) ([]dataset.Point, error) {

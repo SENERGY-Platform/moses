@@ -258,6 +258,9 @@ func TestResolveTimeShapeRefusesWhatThePlatformCannotIngest(t *testing.T) {
 			if errors.Is(err, ErrNoTimePath) {
 				t.Fatalf("expected a rejection naming the problem, got the no-time-path case")
 			}
+			if !errors.Is(err, ErrUnusableTimeShape) {
+				t.Fatalf("expected the rejection to be marked as a declaration problem, got %v", err)
+			}
 			if !strings.Contains(err.Error(), testCase.contains) {
 				t.Errorf("expected the reason to mention %q, got %q", testCase.contains, err.Error())
 			}

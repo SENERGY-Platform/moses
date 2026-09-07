@@ -215,6 +215,28 @@ had left it.
   ids - while a checkpoint could not tell the two ticks apart. Such a run is
   refused with `400` where the window is checked, before the live state is
   discarded for it.
+- **A window whose first day already holds readings is refused with `409`**,
+  naming the devices it found them for. Only the first day from `from` is looked
+  at, with one `limit: 1` query per publishable channel on the caller's token,
+  before anything is stopped: that day is what tells an earlier run over the same
+  window from a smoke run reaching into live data, while the end of any window of
+  an environment that ever ran live always holds readings. A channel the wrapper
+  answers `404` for is asked a second time with the owner's exchanged token,
+  which is also the only token where there is no caller - the devices of an
+  environment are created by whoever provisioned them, so neither token reads all
+  of them. `force: true` in the body starts the run anyway and writes its
+  readings beside the ones that are there, and a resume never asks at all, since
+  it continues a run that wrote into its own window. Without a configured
+  `timescale_wrapper_url` the check is skipped with a WARN, and a channel left
+  with a `400` or a second `404` is unchecked with a WARN naming device, service
+  and status - a `404` is a device neither token can read and a `400` a column
+  its validator rejects or a table the tableworker has not created yet, and
+  refusing over either would block every run of that environment. Every other
+  answer refuses the run rather than starting it unchecked: another status, an
+  unavailable wrapper, a network error, a token exchange that failed. The whole
+  fan-out has **five seconds**, less than the api server's write timeout, and a
+  check that does not answer inside it is a `503` saying to retry or to send
+  `force: true`.
 - Every reading is published under `Sync` qos, so one publish costs a kafka
   produce ack - and where `publish_to_postgres` is on, the longer of that and
   the timescale write beside it rather than the sum of the two. The publish pool
@@ -234,6 +256,12 @@ had left it.
 hands the environment back, which leaves the live simulation on the partial
 state — a consistent state of an earlier instant, not a rollback. `failed` and
 `cancelled` mean the same thing for the state: it is what the run had reached.
+
+A `409` naming devices means the first day of the window already holds readings.
+Start later, or repeat the request with `force: true` where writing the window a
+second time is what you want - rewriting a demo, for instance, since timescale
+rows cannot be deleted. Nothing about the run itself changes with the flag; it
+only skips the check.
 
 The run is worked in chunks of **one virtual hour**. At the first due event at
 or past a multiple of an hour on the unix clock the pool is drained, every ack is
@@ -256,6 +284,11 @@ the run continues from the last checkpoint. An edit made during the run still
 takes effect at the handover, which reads the current definition. A job whose
 environment is gone is closed as `cancelled`. A shutdown therefore costs the
 current chunk, not the run.
+
+**The resume assumes a single pod.** Every start picks up every record in state
+`running`, so two pods would resume the same run against the same window; the
+deployment therefore uses `strategy: Recreate`, which stops the old pod before
+the new one starts.
 
 **A run is resumed at most three times without reaching a chunk boundary.** Every
 resume is counted in the record once the run is registered and before it runs,
@@ -291,7 +324,9 @@ that row is written synchronously in the same call.
   for the drain a boundary itself begins with: a boundary whose drain lost
   readings is not written, so the previous one stays.
 - **A run is not idempotent.** Running the same window twice writes every row
-  twice; the `409` prevents it concurrently, not sequentially.
+  twice; the `409` prevents it unless forced. What the check reads is the first
+  day of the window, so a second run that starts later than the first and only
+  overlaps its tail is not caught.
 - **A failed reading is counted and named, not retried.**
 - **A reading an injected fault suppresses is counted as silent, never as
   failed**: nothing was attempted, so nothing could be refused
