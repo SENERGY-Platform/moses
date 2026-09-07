@@ -67,7 +67,7 @@ func TestADatasetContextSourceReplaysIntoTheContext(t *testing.T) {
 	}
 	publisher := &fakePublisher{}
 	states := newFakeStates()
-	rt := newRuntime(testConfig(50*time.Millisecond), newFakeEnvironments(env), states, store, publisher)
+	rt := newRuntime(testConfig(50*time.Millisecond), newFakeEnvironments(env), states, store, newFakeHistoryJobs(), publisher)
 	//the parsed content: two points, values 11 and 22
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)

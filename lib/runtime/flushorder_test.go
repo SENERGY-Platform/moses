@@ -89,7 +89,7 @@ func TestTwoFlushesOfOneEnvironmentDoNotOverlap(t *testing.T) {
 	store := &slowStates{delay: 200 * time.Millisecond, started: make(chan struct{})}
 	//not started: the flusher would take part in the writes and the test is about
 	//two callers of flush
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(historyTestEnvironment(id)), store, nil, &fakePublisher{})
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(historyTestEnvironment(id)), store, nil, newFakeHistoryJobs(), &fakePublisher{})
 	env := &environment{id: id, state: repo.RuntimeState{
 		EnvironmentId: id,
 		Context:       map[string]interface{}{},

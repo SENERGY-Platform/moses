@@ -291,7 +291,7 @@ func TestACumulativeProfileChangesItsSlopeWithoutAJump(t *testing.T) {
 	def := testEnvironment(id, profileChannel("ch-1", serviceRefOf(id), step,
 		domain.ProfileSource{Base: 120, Cumulative: true}))
 	def.Timeline = []domain.DatedChange{datedChange("channel.ch-1.profile.base", timelineKnick, 360)}
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, &fakePublisher{})
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), &fakePublisher{})
 	gen := newGeneration(def, nil)
 	channel := backfillChannels(def)[0]
 
@@ -622,7 +622,7 @@ func TestAGateThresholdKnickTakesEffectAtTheNextEvaluation(t *testing.T) {
 	def.Timeline = []domain.DatedChange{
 		datedChange("channel.ch-1.schedule.gate.threshold", timelineKnick, 2),
 	}
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, &fakePublisher{})
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), &fakePublisher{})
 	gen := newGeneration(def, nil)
 	env := &environment{id: id, state: repo.RuntimeState{
 		EnvironmentId: id,
@@ -708,7 +708,7 @@ func TestAFormulaReadsAGovernedContextKeyThroughTheLayer(t *testing.T) {
 	def := testEnvironment(id, formulaChannel(id, "price * 10", map[string]string{"price": "context.price"}))
 	def.Context = map[string]interface{}{"price": 0.30}
 	def.Timeline = []domain.DatedChange{datedChange("context.price", timelineKnick, 0.42)}
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, &fakePublisher{})
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), &fakePublisher{})
 	gen := newGeneration(def, nil)
 	env := &environment{id: id, state: repo.RuntimeState{EnvironmentId: id}}
 	env.seed(gen, timelineKnick.Add(-time.Hour))
@@ -743,7 +743,7 @@ func TestAScheduleChannelPublishesTheDeclaredValueOfItsStep(t *testing.T) {
 	def.Timeline = []domain.DatedChange{
 		datedChange("channel.ch-1.schedule.states.run.value", timelineKnick, 5000),
 	}
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, &fakePublisher{})
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), &fakePublisher{})
 	gen := newGeneration(def, nil)
 	env := &environment{id: id, state: repo.RuntimeState{EnvironmentId: id}}
 	env.seed(gen, timelineKnick.Add(-time.Hour))
@@ -773,7 +773,7 @@ func TestAContextSourceTickFollowsItsDatedChange(t *testing.T) {
 	def.Timeline = []domain.DatedChange{
 		datedChange("context_source.outside.profile.base", timelineKnick, 25),
 	}
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, &fakePublisher{})
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), &fakePublisher{})
 	gen := newGeneration(def, nil)
 	env := &environment{id: id, state: repo.RuntimeState{EnvironmentId: id}}
 	env.seed(gen, timelineKnick.Add(-time.Hour))
@@ -801,7 +801,7 @@ func TestAReplayingContextSourceFollowsItsScaleChange(t *testing.T) {
 	def.Timeline = []domain.DatedChange{
 		datedChange("context_source.sun.dataset.scale", timelineKnick, 3),
 	}
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, &fakePublisher{})
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), &fakePublisher{})
 	//the anchor is created on the first tick, so both ticks below replay from the
 	//same position and only the scale differs between them
 	gen := newGeneration(def, map[string][]dataset.Point{contextSeriesId("sun"): parityPoints()})

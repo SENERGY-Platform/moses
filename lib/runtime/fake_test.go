@@ -31,6 +31,8 @@ import (
 	"github.com/SENERGY-Platform/moses/lib/devices"
 	"github.com/SENERGY-Platform/moses/lib/domain"
 	"github.com/SENERGY-Platform/moses/lib/repo"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/mgocompat"
 )
 
 // The fakes below implement the real interfaces rather than mocking single
@@ -274,6 +276,363 @@ func (this *fakeStates) deletedIds() []string {
 	return append([]string{}, this.deleted...)
 }
 
+// eventClock hands out increasing numbers to more than one fake, so a test can
+// compare what the store wrote with what the publisher sent: the two happen on
+// different goroutines, and a wall clock reading of each would not order them.
+// Nil safe, because most tests need no order between the two.
+type eventClock struct {
+	mux sync.Mutex
+	n   int64
+}
+
+func (this *eventClock) next() int64 {
+	if this == nil {
+		return 0
+	}
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	this.n++
+	return this.n
+}
+
+// historyJobCheckpoint is one Checkpoint call as the fake recorded it.
+type historyJobCheckpoint struct {
+	environmentId string
+	progress      repo.HistoryJobProgress
+}
+
+// fakeHistoryJobs is the history job store in memory. It keeps every call, so a
+// test can count the checkpoints of a run and read what the last one stored.
+//
+// Records and progress are copied through bson with the registry the real store
+// uses, which is what makes the fake usable for a resume test: a run that keeps
+// mutating its maps after a checkpoint cannot change what is stored, and the
+// values come back in the types mongodb would hand back, timestamps at
+// millisecond precision included.
+type fakeHistoryJobs struct {
+	mux         sync.Mutex
+	stored      map[string]repo.HistoryJobRecord
+	saves       []repo.HistoryJobRecord
+	checkpoints []historyJobCheckpoint
+	deleted     []string
+
+	// saveSeqs is the sequence number of every Save, in lockstep with saves and
+	// zero for one that failed: it says when a record became readable, which is
+	// what a test comparing the store against the publisher needs.
+	saveSeqs []int64
+
+	// saveBudgets is the deadline every Save was called with, in lockstep with
+	// saves: the terminal write of a run happens with the lifecycle mutex held,
+	// so how long one attempt of it may take is part of the behaviour.
+	saveBudgets []time.Duration
+	clock       *eventClock
+
+	saveErr       error
+	checkpointErr error
+	loadErr       error
+	runningErr    error
+
+	// saveErrIf decides per Save whether it fails, which saveErr alone cannot:
+	// a test that lets the abort's own write through and fails only the terminal
+	// one needs the record and the number of the call, counted from one.
+	saveErrIf func(record repo.HistoryJobRecord, n int) error
+
+	// saveDelay is how long a Save takes before the record is readable,
+	// runningGate, when set, holds Running until it is closed, and resumeGate
+	// does the same for the Save that counts a resume - the window between an
+	// environment being built and its run taking it over. All three are how a
+	// test widens a window in the start that is otherwise microseconds long.
+	// Written before the runtime starts and read under the mutex.
+	saveDelay   time.Duration
+	runningGate chan struct{}
+	resumeGate  chan struct{}
+
+	// onCheckpoint is called with the number of the checkpoint, counted from
+	// one, after it has been stored: a hook that stops the run therefore leaves
+	// the boundary it fired at persisted, which is what a resume continues from.
+	// It is set before the run starts and read under the mutex, but called
+	// without it, so a hook may call back into the fake.
+	onCheckpoint func(n int) error
+}
+
+func newFakeHistoryJobs() *fakeHistoryJobs {
+	return &fakeHistoryJobs{stored: map[string]repo.HistoryJobRecord{}}
+}
+
+func (this *fakeHistoryJobs) Save(ctx context.Context, record repo.HistoryJobRecord) error {
+	copied, err := copyHistoryJobRecord(record)
+	if err != nil {
+		return err
+	}
+	budget := time.Duration(0)
+	if deadline, bounded := ctx.Deadline(); bounded {
+		budget = time.Until(deadline)
+	}
+	this.mux.Lock()
+	delay := this.saveDelay
+	number := len(this.saves) + 1
+	decide := this.saveErrIf
+	failure := this.saveErr
+	gate := this.resumeGate
+	this.mux.Unlock()
+	if gate != nil && copied.Resumes > 0 {
+		//the write of a resume count, held until the test lets it through: the
+		//environment is built by then and the run has not taken it over yet
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if delay > 0 {
+		//the record becomes readable only after this, which is what makes the
+		//sequence number below say when the write landed rather than when it began
+		time.Sleep(delay)
+	}
+	if failure == nil && decide != nil {
+		failure = decide(copied, number)
+	}
+
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	this.saves = append(this.saves, copied)
+	this.saveBudgets = append(this.saveBudgets, budget)
+	if failure != nil {
+		this.saveSeqs = append(this.saveSeqs, 0)
+		return failure
+	}
+	//set by the store, as the real one does
+	copied.UpdatedAtUnix = time.Now().Unix()
+	this.stored[record.EnvironmentId] = copied
+	this.saveSeqs = append(this.saveSeqs, this.clock.next())
+	return nil
+}
+
+func (this *fakeHistoryJobs) Checkpoint(ctx context.Context, environmentId string, progress repo.HistoryJobProgress) error {
+	copied, err := copyHistoryJobProgress(progress)
+	if err != nil {
+		return err
+	}
+	this.mux.Lock()
+	this.checkpoints = append(this.checkpoints, historyJobCheckpoint{environmentId: environmentId, progress: copied})
+	number := len(this.checkpoints)
+	hook := this.onCheckpoint
+	stored, exists := this.stored[environmentId]
+	failure := this.checkpointErr
+	if failure == nil && exists {
+		//the same fields the real Checkpoint sets, and no other: a checkpoint
+		//never rewrites the definition of the run
+		stored.Published = copied.Published
+		stored.Failed = copied.Failed
+		stored.LastError = copied.LastError
+		if !copied.Checkpoint.Position.IsZero() {
+			//the same rule as the real store: a checkpoint without an instant is
+			//not a chunk boundary, so the stored one stays
+			checkpoint := copied.Checkpoint
+			stored.Checkpoint = &checkpoint
+		}
+		if copied.Position.IsZero() {
+			stored.Position = nil
+		} else {
+			position := copied.Position
+			stored.Position = &position
+		}
+		if copied.AtBoundary {
+			//the same rule as the real store: a run that reached a boundary has
+			//got going, so the resume count starts over
+			stored.Resumes = 0
+		}
+		stored.UpdatedAtUnix = time.Now().Unix()
+		this.stored[environmentId] = stored
+	}
+	this.mux.Unlock()
+
+	if hook != nil {
+		if hookErr := hook(number); hookErr != nil {
+			return hookErr
+		}
+	}
+	if failure != nil {
+		return failure
+	}
+	if !exists {
+		return fmt.Errorf("%w: history job of %v", repo.ErrNotFound, environmentId)
+	}
+	return nil
+}
+
+func (this *fakeHistoryJobs) Load(ctx context.Context, environmentId string) (repo.HistoryJobRecord, error) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	if this.loadErr != nil {
+		return repo.HistoryJobRecord{}, this.loadErr
+	}
+	stored, ok := this.stored[environmentId]
+	if !ok {
+		return repo.HistoryJobRecord{}, fmt.Errorf("%w: history job of %v", repo.ErrNotFound, environmentId)
+	}
+	//copied and initialised exactly as the real Load hands a record out, so a
+	//resume driven by the fake meets the same record it would in production
+	result, err := copyHistoryJobRecord(stored)
+	if err != nil {
+		return repo.HistoryJobRecord{}, err
+	}
+	result.Checkpoint.Initialise()
+	return result, nil
+}
+
+// Running returns the running records in environment id order: nothing may
+// depend on the order, and a random one would make a failure flaky.
+func (this *fakeHistoryJobs) Running(ctx context.Context) ([]repo.HistoryJobRecord, error) {
+	this.mux.Lock()
+	gate := this.runningGate
+	this.mux.Unlock()
+	if gate != nil {
+		//a store that answers slowly, which is what widens the window between the
+		//environments being built and their runs being resumed
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	if this.runningErr != nil {
+		return nil, this.runningErr
+	}
+	ids := []string{}
+	for id, record := range this.stored {
+		if record.State == repo.HistoryJobRunning {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	result := []repo.HistoryJobRecord{}
+	for _, id := range ids {
+		record, err := copyHistoryJobRecord(this.stored[id])
+		if err != nil {
+			return nil, err
+		}
+		record.Checkpoint.Initialise()
+		result = append(result, record)
+	}
+	return result, nil
+}
+
+func (this *fakeHistoryJobs) Delete(ctx context.Context, environmentId string) error {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	this.deleted = append(this.deleted, environmentId)
+	delete(this.stored, environmentId)
+	return nil
+}
+
+// recordFor is what a test reads to see the stored run.
+func (this *fakeHistoryJobs) recordFor(environmentId string) (repo.HistoryJobRecord, bool) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	stored, ok := this.stored[environmentId]
+	return stored, ok
+}
+
+// checkpointCount counts every Checkpoint call, the refused ones included.
+func (this *fakeHistoryJobs) checkpointCount() int {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	return len(this.checkpoints)
+}
+
+// checkpointsOf returns the progress of every checkpoint of one environment, in
+// call order.
+func (this *fakeHistoryJobs) checkpointsOf(environmentId string) []repo.HistoryJobProgress {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	result := []repo.HistoryJobProgress{}
+	for _, call := range this.checkpoints {
+		if call.environmentId == environmentId {
+			result = append(result, call.progress)
+		}
+	}
+	return result
+}
+
+// savesOf returns every record written by Save for one environment, in call
+// order, so a test can tell the write at the start from the one at the end.
+func (this *fakeHistoryJobs) savesOf(environmentId string) []repo.HistoryJobRecord {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	result := []repo.HistoryJobRecord{}
+	for _, record := range this.saves {
+		if record.EnvironmentId == environmentId {
+			result = append(result, record)
+		}
+	}
+	return result
+}
+
+// saveSeqOfState is when the first successful Save of one environment that
+// stored the given state became readable, or 0 for none. It is comparable with
+// the sequence of a published event where both fakes share an eventClock.
+func (this *fakeHistoryJobs) saveSeqOfState(environmentId string, state HistoryState) int64 {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	for i, record := range this.saves {
+		if record.EnvironmentId != environmentId || record.State != string(state) {
+			continue
+		}
+		if i < len(this.saveSeqs) && this.saveSeqs[i] != 0 {
+			return this.saveSeqs[i]
+		}
+	}
+	return 0
+}
+
+// saveBudgetsOfState is the deadline every Save of one environment that carried
+// the given state was called with, failed attempts included.
+func (this *fakeHistoryJobs) saveBudgetsOfState(environmentId string, state HistoryState) []time.Duration {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	result := []time.Duration{}
+	for i, record := range this.saves {
+		if record.EnvironmentId != environmentId || record.State != string(state) {
+			continue
+		}
+		if i < len(this.saveBudgets) {
+			result = append(result, this.saveBudgets[i])
+		}
+	}
+	return result
+}
+
+func (this *fakeHistoryJobs) deletedJobIds() []string {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	return append([]string{}, this.deleted...)
+}
+
+func copyHistoryJobRecord(record repo.HistoryJobRecord) (repo.HistoryJobRecord, error) {
+	result := repo.HistoryJobRecord{}
+	err := copyThroughBson(record, &result)
+	return result, err
+}
+
+func copyHistoryJobProgress(progress repo.HistoryJobProgress) (repo.HistoryJobProgress, error) {
+	result := repo.HistoryJobProgress{}
+	err := copyThroughBson(progress, &result)
+	return result, err
+}
+
+// copyThroughBson is the copy the real store makes when it writes and reads a
+// document, mgo compatible registry included.
+func copyThroughBson(from interface{}, into interface{}) error {
+	encoded, err := bson.MarshalWithRegistry(mgocompat.Registry, from)
+	if err != nil {
+		return fmt.Errorf("unable to encode %T: %w", from, err)
+	}
+	return bson.UnmarshalWithRegistry(mgocompat.Registry, encoded, into)
+}
+
 type publishedEvent struct {
 	deviceRef  string
 	serviceRef string
@@ -284,6 +643,9 @@ type publishedEvent struct {
 	at time.Time
 	// live tells the two apart without having to reason about the clock.
 	live bool
+	// seq is the publisher's eventClock reading, 0 when no clock is set: it is
+	// what orders a reading against a write of another fake.
+	seq int64
 }
 
 type fakePublisher struct {
@@ -316,6 +678,10 @@ type fakePublisher struct {
 	// without the pool the peak is one.
 	inFlight int
 	peak     int
+
+	// clock, when set, stamps every event with a sequence number the fake store
+	// shares, so a test can order a live reading against a stored record.
+	clock *eventClock
 }
 
 func (this *fakePublisher) PublishEvent(externalDeviceRef string, externalServiceRef string, value interface{}) error {
@@ -323,7 +689,7 @@ func (this *fakePublisher) PublishEvent(externalDeviceRef string, externalServic
 	defer this.mux.Unlock()
 	this.events = append(this.events, publishedEvent{
 		deviceRef: externalDeviceRef, serviceRef: externalServiceRef, value: value,
-		at: time.Now(), live: true,
+		at: time.Now(), live: true, seq: this.clock.next(),
 	})
 	return this.err
 }
@@ -353,6 +719,7 @@ func (this *fakePublisher) PublishEventAt(externalDeviceRef string, externalServ
 	}
 	this.events = append(this.events, publishedEvent{
 		deviceRef: externalDeviceRef, serviceRef: externalServiceRef, value: value, at: at,
+		seq: this.clock.next(),
 	})
 	return this.err
 }
@@ -411,6 +778,33 @@ func (this *fakePublisher) backfilled(serviceRef string) []publishedEvent {
 	result := []publishedEvent{}
 	for _, event := range this.events {
 		if event.serviceRef == serviceRef && !event.live {
+			result = append(result, event)
+		}
+	}
+	return result
+}
+
+// liveEvents and timestampedEvents split what the publisher saw: a live reading
+// of the present against one of a run or a job, which is the difference a test
+// about the handover turns on.
+func (this *fakePublisher) liveEvents() []publishedEvent {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	result := []publishedEvent{}
+	for _, event := range this.events {
+		if event.live {
+			result = append(result, event)
+		}
+	}
+	return result
+}
+
+func (this *fakePublisher) timestampedEvents() []publishedEvent {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	result := []publishedEvent{}
+	for _, event := range this.events {
+		if !event.live {
 			result = append(result, event)
 		}
 	}
@@ -519,7 +913,7 @@ func startRuntime(t *testing.T, cfg config.Config, envs *fakeEnvironments, state
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	rt := newRuntime(cfg, envs, states, nil, publisher)
+	rt := newRuntime(cfg, envs, states, nil, newFakeHistoryJobs(), publisher)
 	if err := rt.Start(ctx); err != nil {
 		t.Fatalf("unable to start the runtime: %v", err)
 	}

@@ -430,7 +430,7 @@ func TestAnOutageSuppressesTheSendWithoutStoppingTheOtherFaults(t *testing.T) {
 // A document without faults is not touched by any of this, which is what keeps
 // every stored document byte identical to what it produced before.
 func TestAChannelWithoutFaultsIsNotTouched(t *testing.T) {
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(), newFakeStates(), nil, &fakePublisher{})
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(), newFakeStates(), nil, newFakeHistoryJobs(), &fakePublisher{})
 	env := &environment{id: "env-nofault"}
 	binding := channelBinding{channel: faultedChannel()}
 	if len(binding.faults.list) != 0 {
@@ -448,7 +448,7 @@ func TestAChannelWithoutFaultsIsNotTouched(t *testing.T) {
 // A string or a boolean has no magnitude to freeze, scale or offset, so only an
 // outage can act on it: it either goes out as it is or not at all.
 func TestAValueThatIsNotANumberCanOnlyFallSilent(t *testing.T) {
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(), newFakeStates(), nil, &fakePublisher{})
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(), newFakeStates(), nil, newFakeHistoryJobs(), &fakePublisher{})
 	env := &environment{id: "env-string"}
 	channel := faultedChannel(
 		domain.Fault{Kind: domain.FaultSpike, From: faultBegin, To: faultEnd, Factor: 12},
@@ -473,7 +473,7 @@ func TestAValueThatIsNotANumberCanOnlyFallSilent(t *testing.T) {
 // exactly when it captured one - and never otherwise, or every tick of every
 // faulted channel would write the state out again.
 func TestCapturingAMeterOffsetMarksTheStateDirtyOnce(t *testing.T) {
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(), newFakeStates(), nil, &fakePublisher{})
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(), newFakeStates(), nil, newFakeHistoryJobs(), &fakePublisher{})
 	env := &environment{id: "env-exchange"}
 	channel := faultedChannel(domain.Fault{Kind: domain.FaultMeterExchange, From: faultBegin, ResetTo: 0})
 	faults, _ := newChannelFaults(faultSeed, channel, faultStep)

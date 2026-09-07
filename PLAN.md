@@ -67,22 +67,44 @@ is asserted by a test. The backfill gets the same pool. No change to the
 connector lib. Expected: a year in 20 to 40 minutes, bounded by ack latency times
 parallelism.
 
-### 2. Compute in chunks, checkpoint after each
+### 2. Compute in chunks, checkpoint after each — shipped 2026-09-07
 
-The window is worked in chunks of one virtual hour: compute the chunk, publish
-it, wait for every ack, then write a checkpoint. The checkpoint is a document in
-a new collection `history_jobs`, one per environment: window, started at, state,
-position, counters per channel, plus the simulation state at that position as a
-snapshot separate from the live state document. On service start, jobs in state
-`running` are resumed: environment put under history, state loaded from the
-snapshot, heap rebuilt from definition and position, run continues. `GET` serves
-the document after a restart, `DELETE` marks it cancelled. A parity test shows
-that a run interrupted at an arbitrary chunk boundary and resumed produces the
-same series bit for bit as an uninterrupted one.
+The window is worked in chunks of one virtual hour: compute the chunk, wait for
+every ack (`pool.Drain`, `historySettleAll`, exactly as at the end of a pass),
+then write a checkpoint. Everything is quiescent at that boundary, which is what
+makes the checkpoint complete.
+
+**One document per environment in a new collection `history_jobs`**, behind a
+repository interface next to `States`: the status as `GET` serves it, the
+definition the run was started against (written once), and per checkpoint the
+position, the tick of every grid keyed by identity (`context:<key>`,
+`<channel id>`, `<channel id>:publish`) rather than by index, the per-channel
+memory the state does not carry (the `pending` value of a split channel, the
+heartbeat gap of a change-trigger channel, the frozen holds of its faults, the
+three counters), the value cache behind formulas and aggregates, and the state
+snapshot. The flusher keeps writing `states` as it does today; for a resume only
+the checkpoint counts.
+
+**On service start**, after the environments are up, every job in state
+`running` is resumed: the environment is put under history exactly as
+`StartHistory` does, the generation is built from the stored definition (the
+datasets are loaded fresh), state, cache and channel memory come from the
+checkpoint, the heap is rebuilt from the ticks, and the run continues. The
+handover at the end reads the current definition, so an edit made during the
+run still takes effect there. A job whose environment is gone is closed as
+cancelled. `GET` and `DELETE` fall back to the document when the registry knows
+nothing; the document is deleted with the environment.
+
+A parity test shows that a run interrupted at an arbitrary chunk boundary and
+resumed produces the same series, reading for reading, and the same end state
+as an uninterrupted one. The engine takes an optional resume point and a
+checkpoint function so a test can interrupt after the n-th checkpoint.
 
 Known gap, documented: timescale has no uniqueness on time, so a crash inside a
 chunk republishes that chunk on resume - at most one virtual hour of duplicates.
-Deleting rows is not available (SNRGY-4663).
+Deleting rows is not available (SNRGY-4663). The drain per chunk costs the run
+some minutes over a year; measured with the profile test, the chunk size stays a
+constant until that measurement says otherwise.
 
 ### 3. Refuse an occupied window
 

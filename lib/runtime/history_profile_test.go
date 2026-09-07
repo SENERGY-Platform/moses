@@ -27,6 +27,7 @@ import (
 	"github.com/SENERGY-Platform/moses/lib/devices"
 	"github.com/SENERGY-Platform/moses/lib/domain"
 	"github.com/SENERGY-Platform/moses/lib/repo"
+	"go.mongodb.org/mongo-driver/bson"
 )
 
 // A measurement of the compute side of a history run, skipped unless a
@@ -123,14 +124,30 @@ func TestProfileTheHistoryRunOfADocument(t *testing.T) {
 	from := time.Date(2025, 9, 8, 0, 0, 0, 0, time.UTC)
 	to := from.Add(time.Duration(days) * 24 * time.Hour)
 
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, discardingPublisher{})
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), discardingPublisher{})
 	gen := newGeneration(def, series)
 	env := &environment{id: def.Id, gen: gen, state: repo.RuntimeState{EnvironmentId: def.Id}}
 	env.resetForHistory()
 	env.seed(gen, from)
 
+	//MOSES_PROFILE_CHECKPOINTS=1 measures the chunk boundaries too: the drain, the
+	//snapshot and the size of the document a store would receive
+	checkpoints := 0
+	checkpointBytes := 0
+	var checkpoint historyCheckpointFunc
+	if os.Getenv("MOSES_PROFILE_CHECKPOINTS") != "" {
+		checkpoint = func(progress repo.HistoryJobProgress) error {
+			checkpoints++
+			encoded, err := bson.Marshal(progress.Checkpoint)
+			if err != nil {
+				return err
+			}
+			checkpointBytes += len(encoded)
+			return nil
+		}
+	}
 	started := time.Now()
-	result, err := rt.runHistory(t.Context(), env, gen, from, to, keepTheWindow, nil)
+	result, err := rt.runHistory(t.Context(), env, gen, from, to, keepTheWindow, nil, nil, checkpoint)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,4 +167,7 @@ func TestProfileTheHistoryRunOfADocument(t *testing.T) {
 	t.Logf("window %d days in %v: %.0f publish steps/s, %.3f ms per step",
 		days, elapsed.Round(time.Millisecond), float64(steps)/elapsed.Seconds(), float64(elapsed.Microseconds())/float64(steps)/1000)
 	t.Logf("a year at this rate: %v", (elapsed * 365 / time.Duration(days)).Round(time.Minute))
+	if checkpoints > 0 {
+		t.Logf("checkpoints %d, %d KB each", checkpoints, checkpointBytes/checkpoints/1024)
+	}
 }

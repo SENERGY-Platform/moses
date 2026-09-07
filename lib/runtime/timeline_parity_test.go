@@ -117,12 +117,12 @@ func parityReference(def domain.Environment, from time.Time, steps int64) map[st
 func parityHistory(t *testing.T, def domain.Environment, series map[string][]dataset.Point, from time.Time, to time.Time) map[string][]float64 {
 	t.Helper()
 	publisher := &fakePublisher{}
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, publisher)
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), publisher)
 	gen := newGeneration(def, series)
 	env := &environment{id: def.Id, gen: gen, state: repo.RuntimeState{EnvironmentId: def.Id}}
 	env.resetForHistory()
 	env.seed(gen, from)
-	if _, err := rt.runHistory(t.Context(), env, gen, from, to, keepTheWindow, nil); err != nil {
+	if _, err := rt.runHistory(t.Context(), env, gen, from, to, keepTheWindow, nil, nil, nil); err != nil {
 		t.Fatalf("the history run failed: %v", err)
 	}
 	return map[string][]float64{
@@ -138,7 +138,7 @@ func parityHistory(t *testing.T, def domain.Environment, series map[string][]dat
 func parityBackfill(t *testing.T, def domain.Environment, series map[string][]dataset.Point, from time.Time, to time.Time) map[string][]float64 {
 	t.Helper()
 	publisher := &fakePublisher{}
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, publisher)
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), publisher)
 	gen := newGeneration(def, series)
 	job := &backfillJob{done: make(chan struct{}), status: BackfillStatus{EnvironmentId: def.Id}}
 	//one pool for every channel, as the job has it: with one per channel the

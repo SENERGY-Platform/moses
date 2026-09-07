@@ -40,7 +40,7 @@ func covFixture(t *testing.T, channel domain.Channel) (*Runtime, *environment, c
 	def := testEnvironment("env-fault-cov", channel)
 	def.Seed = faultParitySeed
 	publisher := &fakePublisher{}
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, publisher)
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), publisher)
 	gen := newGeneration(def, nil)
 	if len(gen.sensors) != 1 {
 		t.Fatalf("the fixture is meant to carry one ticking channel, got %d", len(gen.sensors))
@@ -247,12 +247,12 @@ func TestAFormulaOverAFaultedChannelPublishesTheUndisturbedValue(t *testing.T) {
 	}
 
 	publisher := &fakePublisher{}
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, publisher)
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), publisher)
 	gen := newGeneration(def, nil)
 	env := &environment{id: def.Id, gen: gen, state: repo.RuntimeState{EnvironmentId: def.Id}}
 	env.resetForHistory()
 	env.seed(gen, from)
-	if _, err := rt.runHistory(t.Context(), env, gen, from, to, keepTheWindow, nil); err != nil {
+	if _, err := rt.runHistory(t.Context(), env, gen, from, to, keepTheWindow, nil, nil, nil); err != nil {
 		t.Fatalf("the history run failed: %v", err)
 	}
 
@@ -320,12 +320,12 @@ func TestAHistoryRunHandsOverTheCapturedMeterOffset(t *testing.T) {
 	def.Seed = faultParitySeed
 
 	publisher := &fakePublisher{}
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, publisher)
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), publisher)
 	gen := newGeneration(def, nil)
 	env := &environment{id: def.Id, gen: gen, state: repo.RuntimeState{EnvironmentId: def.Id}}
 	env.resetForHistory()
 	env.seed(gen, from)
-	if _, err := rt.runHistory(t.Context(), env, gen, from, to, keepTheWindow, nil); err != nil {
+	if _, err := rt.runHistory(t.Context(), env, gen, from, to, keepTheWindow, nil, nil, nil); err != nil {
 		t.Fatalf("the history run failed: %v", err)
 	}
 
@@ -372,7 +372,7 @@ func TestABackfillNeverTouchesTheLiveMeterOffsets(t *testing.T) {
 	def.Seed = faultParitySeed
 
 	publisher := &fakePublisher{}
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, publisher)
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), publisher)
 	gen := newGeneration(def, nil)
 	live := map[string]float64{"sentinel": 17}
 	env := &environment{id: id, gen: gen, state: repo.RuntimeState{EnvironmentId: id, MeterExchanges: live}}
@@ -452,7 +452,7 @@ func TestACapturedOffsetIsPrunedWhenTheFaultIsGone(t *testing.T) {
 // raised by an edit that touched something else entirely.
 func TestDeletingAFaultAheadOfAnExchangeLeavesTheRegisterAlone(t *testing.T) {
 	const id = "env-fault-shift"
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(), newFakeStates(), nil, &fakePublisher{})
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(), newFakeStates(), nil, newFakeHistoryJobs(), &fakePublisher{})
 
 	before := profileChannel("ch-exchange", serviceRefOf(id), 600,
 		domain.ProfileSource{Base: 120, Cumulative: true})

@@ -73,6 +73,7 @@ type Runtime struct {
 	environments  repo.Environments
 	states        repo.States
 	datasets      repo.Datasets
+	historyJobs   repo.HistoryJobs
 	fetcher       seriesFetcher
 	ownerToken    func(userId string) (string, error)
 	publisher     eventPublisher
@@ -140,8 +141,8 @@ type runningChannel struct {
 	binding channelBinding
 }
 
-func New(config config.Config, environments repo.Environments, states repo.States, datasets repo.Datasets, connector *platform_connector_lib.Connector, stateLogger deviceStateLogger) *Runtime {
-	result := newRuntime(config, environments, states, datasets, &connectorPublisher{
+func New(config config.Config, environments repo.Environments, states repo.States, datasets repo.Datasets, historyJobs repo.HistoryJobs, connector *platform_connector_lib.Connector, stateLogger deviceStateLogger) *Runtime {
+	result := newRuntime(config, environments, states, datasets, historyJobs, &connectorPublisher{
 		connector:   connector,
 		segmentName: config.ProtocolSegmentName,
 	})
@@ -167,7 +168,7 @@ type seriesFetcher interface {
 
 // newRuntime is what the tests use: everything except the connector is already
 // an interface.
-func newRuntime(config config.Config, environments repo.Environments, states repo.States, datasets repo.Datasets, publisher eventPublisher) *Runtime {
+func newRuntime(config config.Config, environments repo.Environments, states repo.States, datasets repo.Datasets, historyJobs repo.HistoryJobs, publisher eventPublisher) *Runtime {
 	jsTimeout := config.JsTimeout
 	if jsTimeout <= 0 {
 		util.Logger.Warn("no js timeout configured, using the default", "default", defaultJsTimeout)
@@ -194,6 +195,7 @@ func newRuntime(config config.Config, environments repo.Environments, states rep
 		environments:   environments,
 		states:         states,
 		datasets:       datasets,
+		historyJobs:    historyJobs,
 		publisher:      publisher,
 		jsTimeout:      jsTimeout,
 		flushInterval:  flushInterval,
@@ -243,13 +245,28 @@ func (this *Runtime) Start(ctx context.Context) error {
 	this.backfillsStopped = false
 	this.backfillMux.Unlock()
 
+	//the stored runs are read before the environments are built: an environment
+	//whose run is resumed below must not start its live runners at all, or it
+	//would publish readings of the present until the resume takes it away - and
+	//both the start and the resume load their series with a budget of minutes
+	resumable := this.resumableHistories(ctx)
+	underHistory := make(map[string]bool, len(resumable))
+	for _, record := range resumable {
+		underHistory[record.EnvironmentId] = true
+	}
+
 	started := 0
 	for _, def := range defs {
-		if this.startEnvironment(ctx, def) {
+		if this.prepareEnvironment(ctx, def, underHistory[def.Id]) {
 			started++
 		}
 	}
 	this.rebuildIndex()
+
+	//after the environments and before the flusher: a resumed run takes its
+	//environment over, and a flush in between would write the live state the run
+	//is about to replace
+	this.resumeHistories(ctx, resumable)
 
 	this.flusher.Add(1)
 	go this.flushLoop()
@@ -405,6 +422,16 @@ func (this *Runtime) ExternalDeviceRefs() []string {
 // separate budgets, for the reason seriesLoadTimeout gives, and a deadline
 // handed in here would silently cap both.
 func (this *Runtime) startEnvironment(ctx context.Context, def domain.Environment) bool {
+	return this.prepareEnvironment(ctx, def, false)
+}
+
+// prepareEnvironment is startEnvironment with one difference for a resumed run:
+// underHistory builds the environment and its generation but starts no runner
+// and marks it as owned by a run, since a runner started before the resume takes
+// it over would publish the present into the window. The state is still read, so
+// an environment whose state cannot be read stays unstarted and its run stays
+// in the store.
+func (this *Runtime) prepareEnvironment(ctx context.Context, def domain.Environment, underHistory bool) bool {
 	if def.Id == "" {
 		util.Logger.Warn("environment without an id is not started", "name", def.Name)
 		return false
@@ -437,6 +464,11 @@ func (this *Runtime) startEnvironment(ctx context.Context, def domain.Environmen
 		}
 		env = &environment{id: def.Id, state: state}
 	}
+	if underHistory {
+		//before the environment is published: from here on nothing may take it for
+		//a live one, and the run that is about to be resumed owns it
+		env.markUnderHistory()
+	}
 
 	//the live start seeds the governed context keys with the value of now; a
 	//history run seeds them with the value of its own window start instead
@@ -455,6 +487,12 @@ func (this *Runtime) startEnvironment(ctx context.Context, def domain.Environmen
 	this.mux.Unlock()
 
 	this.reportDevicesOnline(gen)
+
+	if underHistory {
+		//no runners and no environment context: the resume stops the runners of an
+		//environment it takes over, and there are none to stop here
+		return true
+	}
 
 	envCtx, cancel := context.WithCancel(this.ctx)
 	env.cancel = cancel
@@ -557,6 +595,13 @@ func (this *Runtime) deleteStateIfDefinitionIsGone(id string) {
 		if err != nil {
 			util.Logger.Error("unable to delete the runtime state of the removed environment",
 				attributes.ErrorKey, err, "environment", id)
+		}
+		//and the history run, for the same reason: a checkpoint written while the
+		//environment was being deleted leaves a document behind that the next start
+		//would resume against a definition that no longer exists
+		if jobErr := this.historyJobs.Delete(ctx, id); jobErr != nil {
+			util.Logger.Error("unable to delete the history run of the removed environment",
+				attributes.ErrorKey, jobErr, "environment", id)
 		}
 	case err != nil:
 		util.Logger.Warn("unable to check whether the definition is gone, the runtime state is kept",

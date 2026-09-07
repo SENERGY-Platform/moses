@@ -42,8 +42,10 @@ import (
 // are harder to diagnose than a rejected call.
 var ErrMissingId = errors.New("id must not be empty")
 
-// defaultShareCollectionName is used when the config names none.
+// defaultShareCollectionName and defaultHistoryJobCollectionName are used when
+// the config names none.
 const defaultShareCollectionName = "environment_shares"
+const defaultHistoryJobCollectionName = "history_jobs"
 
 // mongoTimeout is used for single document database operations
 const mongoTimeout = 10 * time.Second
@@ -82,6 +84,7 @@ type Mongo struct {
 	stateCollectionName       string
 	datasetCollectionName     string
 	shareCollectionName       string
+	historyJobCollectionName  string
 	datasetBucket             *gridfs.Bucket
 }
 
@@ -107,11 +110,16 @@ func NewMongo(config config.Config) (result *Mongo, err error) {
 		stateCollectionName:       config.StateCollectionName,
 		datasetCollectionName:     config.DatasetCollectionName,
 		shareCollectionName:       config.ShareCollectionName,
+		historyJobCollectionName:  config.HistoryJobCollectionName,
 	}
 	if result.shareCollectionName == "" {
 		//defaulted rather than demanded: the field is younger than the
 		//deployments, and a mounted config from before it must not fail startup
 		result.shareCollectionName = defaultShareCollectionName
+	}
+	if result.historyJobCollectionName == "" {
+		//same reason as the share collection above
+		result.historyJobCollectionName = defaultHistoryJobCollectionName
 	}
 	if result.environmentCollectionName == "" || result.stateCollectionName == "" || result.datasetCollectionName == "" {
 		return nil, errors.New("environment_collection_name, state_collection_name and dataset_collection_name must be configured")
@@ -182,6 +190,13 @@ func (this *Mongo) ensureIndexes(ctx context.Context) error {
 		Keys:    bson.D{{Key: "environment_id", Value: 1}},
 		Options: options.Index().SetName("share_environment_id_index").SetUnique(true),
 	})
+	if err != nil {
+		return err
+	}
+	_, err = this.historyJobCollection().Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "environment_id", Value: 1}},
+		Options: options.Index().SetName("history_job_environment_id_index").SetUnique(true),
+	})
 	return err
 }
 
@@ -233,6 +248,10 @@ func (this *Mongo) stateCollection() *mongo.Collection {
 
 func (this *Mongo) shareCollection() *mongo.Collection {
 	return this.client.Database(this.database).Collection(this.shareCollectionName)
+}
+
+func (this *Mongo) historyJobCollection() *mongo.Collection {
+	return this.client.Database(this.database).Collection(this.historyJobCollectionName)
 }
 
 // Put writes without a concurrency check and creates the document if it is not
@@ -496,6 +515,13 @@ func (this *Mongo) Delete(ctx context.Context, id string) error {
 	_, err = this.shareCollection().DeleteMany(ctx, bson.M{"environment_id": id})
 	if err != nil {
 		util.Logger.Error("unable to delete the share set of an environment", attributes.ErrorKey, err, "id", id)
+		return err
+	}
+	//and the history run, or a restart would resume a run against a definition
+	//that no longer exists
+	_, err = this.historyJobCollection().DeleteMany(ctx, bson.M{"environment_id": id})
+	if err != nil {
+		util.Logger.Error("unable to delete the history job of an environment", attributes.ErrorKey, err, "id", id)
 	}
 	return err
 }

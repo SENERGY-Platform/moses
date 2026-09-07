@@ -713,7 +713,7 @@ func TestAnOpenRunWithoutAPassSaltAdoptsItsAnchorOnce(t *testing.T) {
 		domain.ScheduleState{Name: "b", DurationSeconds: 1, Value: 2},
 	)
 	source.Gate = &domain.ScheduleGate{ContextKey: "shift"}
-	runtime := newRuntime(testConfig(time.Hour), newFakeEnvironments(), newFakeStates(), nil, &fakePublisher{})
+	runtime := newRuntime(testConfig(time.Hour), newFakeEnvironments(), newFakeStates(), nil, newFakeHistoryJobs(), &fakePublisher{})
 	env := &environment{id: envId, state: repo.RuntimeState{
 		Context:      map[string]interface{}{"shift": 1.0},
 		ScheduleRuns: map[string]repo.ScheduleRun{"ch-1": {StartUnix: scheduleT.Unix(), Open: true}},
@@ -915,7 +915,7 @@ func TestWritingAStateValueThatDidNotChangeIsNotAChange(t *testing.T) {
 // not a change either, or every schedule of a site would rewrite its whole
 // state document on every flush interval.
 func TestStoringAnUnchangedRunDoesNotDirtyTheEnvironment(t *testing.T) {
-	runtime := newRuntime(testConfig(time.Hour), newFakeEnvironments(), newFakeStates(), nil, &fakePublisher{})
+	runtime := newRuntime(testConfig(time.Hour), newFakeEnvironments(), newFakeStates(), nil, newFakeHistoryJobs(), &fakePublisher{})
 	env := &environment{id: "env-1"}
 	run := repo.ScheduleRun{StartUnix: scheduleT.Unix(), Open: true}
 

@@ -219,7 +219,7 @@ func TestABackfillDoesNotMoveTheAnchorOfTheLiveSimulation(t *testing.T) {
 	}
 
 	publisher := &fakePublisher{}
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), states, store, publisher)
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), states, store, newFakeHistoryJobs(), publisher)
 	if err := rt.Start(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -519,7 +519,7 @@ func TestAPanickingBackfillFailsTheJobInsteadOfTheService(t *testing.T) {
 func TestStoppingTheRuntimeEndsAnyRunningBackfill(t *testing.T) {
 	env := testEnvironment("env-bf-stop", profileChannel("ch-1", serviceRefOf("env-bf-stop"), 60, hourlyProfile()))
 	publisher := &fakePublisher{gate: make(chan struct{})}
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), nil, publisher)
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), nil, newFakeHistoryJobs(), publisher)
 	if err := rt.Start(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -952,7 +952,7 @@ func TestABackfillAndTheLiveChannelAgreeOverASampleThatIsNotANumber(t *testing.T
 	env := testEnvironment(id, channel)
 
 	publisher := &fakePublisher{}
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), store, publisher)
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), store, newFakeHistoryJobs(), publisher)
 	if err := rt.Start(t.Context()); err != nil {
 		t.Fatal(err)
 	}

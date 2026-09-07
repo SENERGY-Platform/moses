@@ -47,7 +47,7 @@ func TestTheSeriesLoadAndTheStateReadHaveSeparateBudgets(t *testing.T) {
 	env.Owner = "owner-42"
 	states := newFakeStates()
 	publisher := &fakePublisher{}
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), states, nil, publisher)
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), states, nil, newFakeHistoryJobs(), publisher)
 	rt.fetcher = fetcher
 	rt.ownerToken = func(userId string) (string, error) { return "Bearer " + userId, nil }
 	ctx, cancel := context.WithCancel(context.Background())
@@ -116,7 +116,7 @@ func TestReloadGivesTheWholeSeriesLoadItsOwnBudget(t *testing.T) {
 	}
 
 	publisher := &fakePublisher{}
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), store, publisher)
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), store, newFakeHistoryJobs(), publisher)
 	rt.fetcher = fetcher
 	rt.ownerToken = func(userId string) (string, error) { return "Bearer " + userId, nil }
 	ctx, cancel := context.WithCancel(context.Background())
@@ -184,7 +184,7 @@ func TestFetchSeriesToleratesANilCache(t *testing.T) {
 		meta:    repo.DatasetMeta{Id: "d1", Owner: "user-a", Name: "Lastgang", Timezone: "Europe/Berlin"},
 		content: []byte(csv),
 	}
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(), newFakeStates(), store, &fakePublisher{})
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(), newFakeStates(), store, newFakeHistoryJobs(), &fakePublisher{})
 	source := replaySource(domain.ResampleHold, domain.AnchorLoop)
 
 	points, err := rt.fetchSeries(context.Background(), "user-a", &source, nil)

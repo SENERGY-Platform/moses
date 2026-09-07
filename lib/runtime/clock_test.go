@@ -55,7 +55,7 @@ func TestATickResolvesEverySourceAgainstTheInstantItWasGiven(t *testing.T) {
 		//would be a different number
 		profile := flatProfile(230, 10)
 		def := testEnvironment(id, profileChannel("ch-1", serviceRefOf(id), 30, profile))
-		rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, &fakePublisher{})
+		rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), &fakePublisher{})
 		gen, env, binding := bindingFor(t, def, nil)
 
 		var got interface{}
@@ -70,7 +70,7 @@ func TestATickResolvesEverySourceAgainstTheInstantItWasGiven(t *testing.T) {
 	t.Run("a looping replay anchors and plays at the same instant", func(t *testing.T) {
 		const id = "env-clock-replay"
 		def := testEnvironment(id, datasetChannel(id, replaySource(domain.ResampleHold, domain.AnchorLoop)))
-		rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, &fakePublisher{})
+		rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), &fakePublisher{})
 		gen, env, binding := bindingFor(t, def, map[string][]dataset.Point{"ch-1": replayPoints})
 
 		var got interface{}
@@ -97,7 +97,7 @@ func TestCovGateBooksThePublishAtTheInstantItWasGiven(t *testing.T) {
 	channel := profileChannel("ch-1", serviceRefOf(id), 2, flatProfile(230, 0))
 	channel.PublishOnChange = &domain.ChangeTrigger{Absolute: 5, EvaluateIntervalSeconds: 1}
 	def := testEnvironment(id, channel)
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, &fakePublisher{})
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), &fakePublisher{})
 	_, env, binding := bindingFor(t, def, nil)
 	if binding.cov == nil {
 		t.Fatal("expected a resolved change trigger")
@@ -143,7 +143,7 @@ func TestPublishAtCarriesTheInstantItWasGiven(t *testing.T) {
 	const id = "env-clock-publish-at"
 	def := testEnvironment(id, profileChannel("ch-1", serviceRefOf(id), 30, flatProfile(230, 0)))
 	publisher := &fakePublisher{}
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, publisher)
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), publisher)
 	_, env, binding := bindingFor(t, def, nil)
 
 	sent, err := rt.publishAt(env, binding, 230.0, true, clockT)

@@ -151,10 +151,12 @@ belonging to nothing, and the register would restart at `reset_to` on the next
 reading. A backwards step in a cumulative counter *is* the signal "the meter was
 exchanged", so that edit would have fabricated a second exchange nobody wrote.
 
-A **freeze** keeps no persisted memory. A restart in the middle of a freeze
-therefore takes the held value again, from the reading of the first evaluation
-after the restart. The known gap is deliberate: it is one value inside one
-occurrence, against a fourth stored map and a migration.
+A **freeze** keeps no persisted memory of the live simulation. A restart in the
+middle of a freeze therefore takes the held value again, from the reading of the
+first evaluation after the restart. The known gap is deliberate: it is one value
+inside one occurrence, against a fourth stored map and a migration. A history run
+is the exception - its checkpoints carry the holds of every channel, because a
+resumed run has to hold what the interrupted one held.
 
 The **backfill keeps its own offsets**, like its own replay anchor and its own
 meter counter: a reconstructed window never moves the register the live

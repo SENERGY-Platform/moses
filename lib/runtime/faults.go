@@ -84,9 +84,11 @@ type frozenHold struct {
 }
 
 // faultRun is the memory the faults of one running channel keep, for the
-// lifetime of one runner, one history channel or one backfill loop. It is
-// deliberately not persisted: a restart in the middle of a freeze takes the held
-// value again, which is a documented gap rather than a fourth stored map.
+// lifetime of one runner, one history channel or one backfill loop. A live
+// runner and a backfill do not persist it - a restart in the middle of a freeze
+// takes the held value again, a documented gap - while a history run carries it
+// in its checkpoints, because a resumed run has to hold what the interrupted one
+// held.
 //
 // No lock, and none is needed: a channel's faults are only ever evaluated by the
 // one goroutine that drives it.

@@ -228,12 +228,12 @@ func faultParityReference(def domain.Environment, from time.Time, withFaults boo
 func faultParityRun(t *testing.T, def domain.Environment, from time.Time, to time.Time) *fakePublisher {
 	t.Helper()
 	publisher := &fakePublisher{}
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, publisher)
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), publisher)
 	gen := newGeneration(def, nil)
 	env := &environment{id: def.Id, gen: gen, state: repo.RuntimeState{EnvironmentId: def.Id}}
 	env.resetForHistory()
 	env.seed(gen, from)
-	if _, err := rt.runHistory(t.Context(), env, gen, from, to, keepTheWindow, nil); err != nil {
+	if _, err := rt.runHistory(t.Context(), env, gen, from, to, keepTheWindow, nil, nil, nil); err != nil {
 		t.Fatalf("the history run failed: %v", err)
 	}
 	return publisher
@@ -245,7 +245,7 @@ func faultParityRun(t *testing.T, def domain.Environment, from time.Time, to tim
 func faultParityJob(t *testing.T, def domain.Environment, from time.Time, to time.Time) *fakePublisher {
 	t.Helper()
 	publisher := &fakePublisher{}
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, publisher)
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), publisher)
 	gen := newGeneration(def, nil)
 	job := &backfillJob{done: make(chan struct{}), status: BackfillStatus{EnvironmentId: def.Id}}
 	//one pool for every channel, as the job has it: with one per channel the
@@ -423,12 +423,12 @@ func TestASuppressedReadingIsBookedAsSilentOnBothPaths(t *testing.T) {
 	steps := backfillTicks(faultCovStep, from, to)
 
 	publisher := &fakePublisher{}
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, publisher)
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), publisher)
 	gen := newGeneration(def, nil)
 	env := &environment{id: def.Id, gen: gen, state: repo.RuntimeState{EnvironmentId: def.Id}}
 	env.resetForHistory()
 	env.seed(gen, from)
-	result, err := rt.runHistory(t.Context(), env, gen, from, to, keepTheWindow, nil)
+	result, err := rt.runHistory(t.Context(), env, gen, from, to, keepTheWindow, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("the history run failed: %v", err)
 	}

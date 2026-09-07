@@ -20,6 +20,7 @@ import (
 	"container/heap"
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"sort"
 	"sync"
@@ -27,6 +28,7 @@ import (
 
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/domain"
+	"github.com/SENERGY-Platform/moses/lib/repo"
 	"github.com/SENERGY-Platform/moses/lib/util"
 )
 
@@ -39,6 +41,13 @@ import (
 
 // historyProgressEvery is how many due events pass between two progress reports.
 const historyProgressEvery = 1000
+
+// historyChunkSeconds is the length of one chunk of virtual time. The run drains
+// its pool at every multiple of it on the unix clock and writes a checkpoint
+// there, so a crash inside a chunk republishes at most this much of the window
+// when the run is resumed. It stays a constant until the profile test says
+// otherwise; see docs/history-run.md.
+const historyChunkSeconds = 3600
 
 // chaseTheClock and keepTheWindow are what the chase parameter of the engine
 // means at a call site: a run whose end was the present when it was asked for
@@ -80,8 +89,16 @@ func historyChasesOn(gap time.Duration, lastGap time.Duration) bool {
 // failed are the running totals over every channel.
 type historyProgress func(at time.Time, published int64, failed int64, lastError string)
 
+// historyCheckpointFunc stores where a run stands at a chunk boundary, complete
+// enough to continue from. A nil function means the run is not remembered, which
+// is what the engine's own tests pass.
+type historyCheckpointFunc func(progress repo.HistoryJobProgress) error
+
 // historyEngineFunc is the seam between the run and the lifecycle around it.
-type historyEngineFunc func(ctx context.Context, env *environment, gen *generation, from time.Time, to time.Time, chase bool, progress historyProgress) (HistoryResult, error)
+// resume is nil for a fresh run and otherwise the checkpoint the run continues
+// from, whose state and value cache the caller has already put into the
+// environment.
+type historyEngineFunc func(ctx context.Context, env *environment, gen *generation, from time.Time, to time.Time, chase bool, progress historyProgress, resume *repo.HistoryCheckpoint, checkpoint historyCheckpointFunc) (HistoryResult, error)
 
 // HistoryChannelStatus is what became of one channel of the run.
 //
@@ -132,6 +149,21 @@ type historyShared struct {
 
 	mux       sync.Mutex
 	lastError string
+
+	// dropped counts the readings the pool accepted and never sent, which an
+	// abort or a shutdown leaves behind. Their steps are booked as silent and
+	// their grids have moved on, so a checkpoint at the abort position would
+	// claim they were covered - see the abort in runHistory.
+	dropped int64
+}
+
+// droppedCount is how many readings the pool has failed without sending. A
+// caller that has drained and settled reads a number that cannot move again
+// until the next submit.
+func (this *historyShared) droppedCount() int64 {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	return this.dropped
 }
 
 // historyClass orders the events that fall on the same instant. The live
@@ -163,7 +195,12 @@ func historyClassOf(channel domain.Channel) int {
 // historyGrid is one cadence of the run - a context source, a channel, or the
 // publish half of a split channel. tick is the next step that has not run yet,
 // which is what lets a grid be picked up again when the run chases the clock.
+//
+// id is the identity a checkpoint keys the tick by - "context:<key>",
+// "<channel id>" or "<channel id>:publish" - rather than the position in the
+// slice, which an edit to the document would shift.
 type historyGrid struct {
+	id    string
 	class int
 	order int
 	step  int64
@@ -355,7 +392,13 @@ func (this *historyStep) book() {
 // It must be called with the environment reset and seeded and with its live
 // runners stopped: it holds no lock of its own, and the executors it drives take
 // the environment mutex themselves.
-func (this *Runtime) runHistory(ctx context.Context, env *environment, gen *generation, from time.Time, to time.Time, chase bool, progress historyProgress) (HistoryResult, error) {
+//
+// resume continues an interrupted run: the caller has put its state and value
+// cache into the environment, the engine takes ticks and channel memory from it,
+// and from and to have to be the original window since a tick counts from from.
+// checkpoint is called at every chunk boundary and at an abort with everything
+// quiescent; a failure is logged once and the run goes on unremembered.
+func (this *Runtime) runHistory(ctx context.Context, env *environment, gen *generation, from time.Time, to time.Time, chase bool, progress historyProgress, resume *repo.HistoryCheckpoint, checkpoint historyCheckpointFunc) (HistoryResult, error) {
 	result := HistoryResult{Channels: []HistoryChannelStatus{}}
 
 	//the end is fixed here rather than read per event: inside one pass the
@@ -372,13 +415,7 @@ func (this *Runtime) runHistory(ctx context.Context, env *environment, gen *gene
 		return result, nil
 	}
 
-	keys := make([]string, 0, len(gen.def.ContextSources))
-	for key := range gen.def.ContextSources {
-		keys = append(keys, key)
-	}
-	//sorted, so that two context sources due at the same instant move in the same
-	//order on every run
-	sort.Strings(keys)
+	keys := historyContextKeys(gen)
 
 	// due is the k-th instant of one grid, and whether it still lies inside the
 	// window. The whole seconds are compared first, and not only because they are
@@ -424,14 +461,10 @@ func (this *Runtime) runHistory(ctx context.Context, env *environment, gen *gene
 
 	channels := make([]*historyChannel, len(gen.sensors))
 	shared := &historyShared{pool: pool}
-	grids := []historyGrid{}
-	addGrid := func(class int, order int, step int64) {
-		grids = append(grids, historyGrid{class: class, order: order, step: step})
-	}
+	//from the same function the refusal in StartHistory checks: two lists of
+	//grids could drift, and a run would then stand on one nothing looked at
+	grids := historyGridsOf(gen, keys)
 
-	for i, key := range keys {
-		addGrid(historyClassContext, i, gen.def.ContextSources[key].IntervalSeconds)
-	}
 	for i, binding := range gen.sensors {
 		publishable, reason := this.historyPublishable(binding)
 		if !publishable {
@@ -458,20 +491,22 @@ func (this *Runtime) runHistory(ctx context.Context, env *environment, gen *gene
 				Reason:      reason,
 			},
 		}
-		switch {
-		case binding.cov != nil:
-			//the evaluation grid carries the heartbeat too, exactly as it does
-			//live: a heartbeat lands on the first grid instant at which the gap
-			//has run
-			addGrid(historyClassOf(binding.channel), i, binding.cov.evalSeconds)
-		case binding.sourceInterval > 0:
-			addGrid(historyClassOf(binding.channel), i, binding.sourceInterval)
-			if channelPublishes(binding.channel) {
-				addGrid(historyClassPublish, i, binding.channel.IntervalSeconds)
-			}
-		default:
-			addGrid(historyClassOf(binding.channel), i, binding.channel.IntervalSeconds)
+	}
+
+	position := from
+	if resume != nil || checkpoint != nil {
+		//the lifecycle refuses such a document before it stops anything, so this
+		//is the belt of that brace: only a run that is remembered depends on the
+		//identities being unique, and the check is one pass over the grids.
+		if err := historyDistinctGrids(grids); err != nil {
+			return result, err
 		}
+	}
+	if resume != nil {
+		if err := historyResume(grids, channels, shared, baseUnix, resume); err != nil {
+			return result, err
+		}
+		position = resume.Position
 	}
 
 	queue := &historyQueue{}
@@ -492,25 +527,85 @@ func (this *Runtime) runHistory(ctx context.Context, env *environment, gen *gene
 	}
 	admit()
 
-	position := from
 	processed := int64(0)
 	//lastGap is what the previous pass had left to close; see historyChasesOn
 	lastGap := time.Duration(math.MaxInt64)
 
+	//the first chunk boundary that has not been written yet. A resumed run
+	//continues after the boundary it stood at rather than rewriting the ones
+	//before it.
+	nextBoundary := historyChunkAfter(baseUnix)
+	if resume != nil {
+		nextBoundary = historyChunkAfter(resume.Position.Unix())
+	}
+	//once per run: a store that is unreachable would otherwise write a line per
+	//virtual hour
+	checkpointReported := false
+	remember := func(progress repo.HistoryJobProgress) {
+		if checkpoint == nil {
+			return
+		}
+		if err := checkpoint(progress); err != nil && !checkpointReported {
+			checkpointReported = true
+			util.Logger.Error("unable to remember the history run, it goes on unremembered",
+				attributes.ErrorKey, err, "environment", gen.def.Id, "at", progress.Position)
+		}
+	}
+
+	//abort ends the run where it stands. Everything is booked before the counters
+	//are read, or the three of them would not add up to the steps the run took.
+	abort := func(err error) (HistoryResult, error) {
+		pool.Drain()
+		this.historySettleAll(env, channels)
+		result.Channels = historyResults(channels, shared)
+		result.Published, result.Failed, result.LastError = historyTotals(channels, shared)
+		//the end of an aborted run is the last instant it actually simulated: a
+		//chase round that was cut short had already raised end, and reporting
+		//that would claim a span the run never covered
+		result.Position, result.End = position, position
+		if checkpoint != nil {
+			//asked for only where it is stored: building it copies the whole
+			//state, which a run nobody remembers has no use for
+			remember(this.historyAbortedAt(env, grids, channels, shared, position))
+		}
+		return result, err
+	}
+
 	for round := 0; ; round++ {
 		for queue.Len() > 0 {
 			if err := ctx.Err(); err != nil {
-				//booked before the counters are read, or the three of them would
-				//not add up to the steps the run took
-				pool.Drain()
-				this.historySettleAll(env, channels)
-				result.Channels = historyResults(channels, shared)
-				result.Published, result.Failed, result.LastError = historyTotals(channels, shared)
-				//the end of an aborted run is the last instant it actually
-				//simulated: a chase round that was cut short had already raised
-				//end, and reporting that would claim a span the run never covered
-				result.Position, result.End = position, position
-				return result, err
+				return abort(err)
+			}
+			//the whole seconds of the next event decide, the same clock the heap is
+			//ordered on: an event due exactly at a boundary belongs to the chunk
+			//that starts there, so everything before the boundary is computed and
+			//acked when the checkpoint is written.
+			if checkpoint != nil {
+				if reached := historyChunkOf((*queue)[0].dueUnix); reached >= nextBoundary {
+					//an abort inside this drain drops the staged readings while their
+					//grids have moved on, so a boundary written over that would lose
+					//them for good: it is written only for a drain that lost nothing.
+					//The dropped count is asked as well as the cancel because the panic
+					//path stops the pool without one.
+					droppedBefore := shared.droppedCount()
+					pool.Drain()
+					this.historySettleAll(env, channels)
+					if ctx.Err() == nil && shared.droppedCount() == droppedBefore {
+						progress := this.historyCheckpointAt(env, grids, channels, shared, time.Unix(reached, 0).In(time.Local))
+						//a boundary, so the store starts the resume count over: this
+						//run has got going since it was picked up
+						progress.AtBoundary = true
+						remember(progress)
+					}
+					//several boundaries at once when no due event fell between them:
+					//the run stands at the same instant at each of them, so one write
+					//says it
+					nextBoundary = reached + historyChunkSeconds
+					//back to the top rather than on to the event: an abort that
+					//arrived while the boundary was being written ends the run here,
+					//with nothing staged
+					continue
+				}
 			}
 			event := heap.Pop(queue).(historyEvent)
 			at := event.at
@@ -547,13 +642,33 @@ func (this *Runtime) runHistory(ctx context.Context, env *environment, gen *gene
 		//the backlog is part of the time the run has lost: a gap taken with
 		//readings in flight would end the chase against a clock the run has not
 		//caught up with
+		droppedInDrain := shared.droppedCount()
 		pool.Drain()
 		this.historySettleAll(env, channels)
+		//what makes this pass incomplete is that the drain lost readings, not that
+		//the context is done: a cancel arriving after the last ack leaves a whole
+		//window, and reporting that as cancelled would have a shutdown resume a run
+		//that is over and simulate its last chunk again.
+		if shared.droppedCount() != droppedInDrain {
+			//the pool derives its context from this one, so only an end of this run
+			//drops a reading; the fallback is for the pool aborting itself
+			err := ctx.Err()
+			if err == nil {
+				err = context.Canceled
+			}
+			return abort(err)
+		}
 
 		//the window is drained; a long run has meanwhile lost the time it spent
 		//simulating, and handing the environment over across that hole would put
 		//the step back that the mode exists to avoid
 		if !chase || round >= historyCatchUpRounds {
+			break
+		}
+		//the window is complete and the chase is what closes the seam of a run
+		//that is going on: a cancelled run stops here rather than turning a whole
+		//window into a cancelled one over the seam
+		if ctx.Err() != nil {
 			break
 		}
 		gap := time.Since(end)
@@ -599,6 +714,253 @@ func historyTotals(channels []*historyChannel, shared *historyShared) (published
 		failed += channel.result.Failed
 	}
 	return published, failed, shared.lastError
+}
+
+// historyChunkOf is the boundary at or below one instant, and historyChunkAfter
+// the first one strictly above it. Both floor towards the epoch rather than
+// towards zero, so a window before 1970 does not skip the boundaries between it
+// and the epoch.
+func historyChunkOf(unix int64) int64 {
+	chunks := unix / historyChunkSeconds
+	if unix%historyChunkSeconds != 0 && unix < 0 {
+		chunks--
+	}
+	return chunks * historyChunkSeconds
+}
+
+func historyChunkAfter(unix int64) int64 {
+	return historyChunkOf(unix) + historyChunkSeconds
+}
+
+// historyContextKeys is the context sources of one generation, sorted: two
+// sources due at the same instant have to move in the same order on every run.
+func historyContextKeys(gen *generation) []string {
+	keys := make([]string, 0, len(gen.def.ContextSources))
+	for key := range gen.def.ContextSources {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// historyGridsOf is every cadence a run of this generation drives, with the
+// identity a checkpoint keys its tick by; one function for the engine and the
+// refusal in StartHistory, so the two lists cannot drift. order is the position
+// in keys or in gen.sensors, the heap's tie-break.
+func historyGridsOf(gen *generation, keys []string) []historyGrid {
+	grids := make([]historyGrid, 0, len(keys)+2*len(gen.sensors))
+	add := func(id string, class int, order int, step int64) {
+		grids = append(grids, historyGrid{id: id, class: class, order: order, step: step})
+	}
+	for i, key := range keys {
+		add("context:"+key, historyClassContext, i, gen.def.ContextSources[key].IntervalSeconds)
+	}
+	for i, binding := range gen.sensors {
+		switch {
+		case binding.cov != nil:
+			//the evaluation grid carries the heartbeat too, exactly as it does
+			//live: a heartbeat lands on the first grid instant at which the gap
+			//has run
+			add(binding.channel.Id, historyClassOf(binding.channel), i, binding.cov.evalSeconds)
+		case binding.sourceInterval > 0:
+			add(binding.channel.Id, historyClassOf(binding.channel), i, binding.sourceInterval)
+			if channelPublishes(binding.channel) {
+				add(binding.channel.Id+":publish", historyClassPublish, i, binding.channel.IntervalSeconds)
+			}
+		default:
+			add(binding.channel.Id, historyClassOf(binding.channel), i, binding.channel.IntervalSeconds)
+		}
+	}
+	return grids
+}
+
+// historyDistinctGrids refuses a set of grids two of which a checkpoint could
+// not tell apart: remembering such a run would give both the tick of whichever
+// was written last. Unique channel ids are not enough for that - a channel
+// called "context:k" next to a context source k, or "X:publish" next to a split
+// channel X, collides on the identity while the document validates.
+func historyDistinctGrids(grids []historyGrid) error {
+	seen := make(map[string]bool, len(grids))
+	for i := range grids {
+		if seen[grids[i].id] {
+			return fmt.Errorf("two grids of this environment are both called %v, so a checkpoint of it could not be resumed", grids[i].id)
+		}
+		seen[grids[i].id] = true
+	}
+	return nil
+}
+
+// historyMaxTick is the largest tick of a grid of this step that due can still
+// compute: baseUnix + tick*step has to stay an int64, and beyond that the
+// comparison against the end of the window would wrap rather than refuse.
+func historyMaxTick(baseUnix int64, step int64) int64 {
+	limit := int64(math.MaxInt64)
+	if baseUnix > 0 {
+		limit -= baseUnix
+	}
+	if step > 1 {
+		limit /= step
+	}
+	return limit
+}
+
+// historyResume puts a checkpoint back into the grids and the channels; state
+// and value cache are the caller's job, as seeding is for a fresh run. A grid or
+// channel the checkpoint says nothing about is an error: continuing it at tick
+// zero would replay its whole window.
+func historyResume(grids []historyGrid, channels []*historyChannel, shared *historyShared, baseUnix int64, resume *repo.HistoryCheckpoint) error {
+	for i := range grids {
+		tick, known := resume.Ticks[grids[i].id]
+		if !known {
+			return fmt.Errorf("the checkpoint knows no tick for %v, so it was not written for the definition of this run", grids[i].id)
+		}
+		//bounded so that the multiplication in due cannot overflow, rather than by
+		//the step cap of a run: that cap is over every grid of the environment and
+		//the chase adds steps outside it, so one fine grid legitimately carries
+		//more ticks than it.
+		if tick < 0 || tick > historyMaxTick(baseUnix, grids[i].step) {
+			return fmt.Errorf("the checkpoint carries the tick %d for %v, which is not a step of a grid of a run", tick, grids[i].id)
+		}
+		grids[i].tick = tick
+	}
+	lastError := ""
+	for _, channel := range channels {
+		id := channel.binding.channel.Id
+		memory, known := resume.Channels[id]
+		if !known {
+			return fmt.Errorf("the checkpoint remembers nothing about the channel %v, so it was not written for the definition of this run", id)
+		}
+		if memory.PendingSet {
+			channel.pending.put(memory.Pending)
+		}
+		channel.lastAttemptUnix = memory.LastAttemptUnix
+		if len(memory.Held) > 0 {
+			channel.faultMemory.held = make(map[int]frozenHold, len(memory.Held))
+			for _, hold := range memory.Held {
+				channel.faultMemory.held[hold.Index] = frozenHold{beginUnix: hold.BeginUnix, value: hold.Value}
+			}
+		}
+		//the counters are the totals of the whole run, so the three of them keep
+		//adding up to the steps it has taken over both halves. Written under the
+		//run's mutex, which is the discipline of these fields wherever they are
+		//touched.
+		shared.mux.Lock()
+		channel.result.Published = memory.Published
+		channel.result.Silent = memory.Silent
+		channel.result.Failed = memory.Failed
+		channel.result.LastError = memory.LastError
+		shared.mux.Unlock()
+		if memory.LastError != "" {
+			lastError = memory.LastError
+		}
+	}
+	//no message of its own is stored for the run, so the last one in document
+	//order stands for it: a resumed run that reported a refusal must not report
+	//"nothing went wrong" at its next boundary while the counters still say it did
+	shared.mux.Lock()
+	shared.lastError = lastError
+	shared.mux.Unlock()
+	return nil
+}
+
+// historyCheckpointAt is where the run stands, for a caller that has drained the
+// pool and settled every ack: only then are the ticks, the channel memory and the
+// state one instant.
+//
+// The store is called with none of these mutexes held, which is why the whole
+// checkpoint is built here rather than read by the caller of the write.
+func (this *Runtime) historyCheckpointAt(env *environment, grids []historyGrid, channels []*historyChannel, shared *historyShared, position time.Time) repo.HistoryJobProgress {
+	memory := make(map[string]repo.HistoryChannelMemory, len(channels))
+	for _, channel := range channels {
+		entry := repo.HistoryChannelMemory{LastAttemptUnix: channel.lastAttemptUnix, Held: frozenHolds(channel.faultMemory)}
+		if value, known := channel.pending.get(); known {
+			entry.Pending, entry.PendingSet = value, true
+		}
+		memory[channel.binding.channel.Id] = entry
+	}
+	//the counters and the message belong to the pool's workers, so they are read
+	//in one pass under the run's mutex: the totals and the per channel numbers of
+	//one checkpoint have to be the same instant
+	published, failed := int64(0), int64(0)
+	shared.mux.Lock()
+	for _, channel := range channels {
+		entry := memory[channel.binding.channel.Id]
+		entry.Published = channel.result.Published
+		entry.Silent = channel.result.Silent
+		entry.Failed = channel.result.Failed
+		entry.LastError = channel.result.LastError
+		memory[channel.binding.channel.Id] = entry
+		published += channel.result.Published
+		failed += channel.result.Failed
+	}
+	lastError := shared.lastError
+	shared.mux.Unlock()
+
+	ticks := make(map[string]int64, len(grids))
+	for i := range grids {
+		ticks[grids[i].id] = grids[i].tick
+	}
+
+	env.mux.Lock()
+	state := env.snapshot()
+	lastValues := make(map[string]float64, len(env.lastValues))
+	for id, value := range env.lastValues {
+		lastValues[id] = value
+	}
+	env.mux.Unlock()
+
+	return repo.HistoryJobProgress{
+		Position:  position,
+		Published: published,
+		Failed:    failed,
+		LastError: lastError,
+		Checkpoint: repo.HistoryCheckpoint{
+			Position:   position,
+			Ticks:      ticks,
+			Channels:   memory,
+			LastValues: lastValues,
+			State:      state,
+		},
+	}
+}
+
+// historyAbortedAt is what an abort or a shutdown remembers: not a boundary, so
+// AtBoundary stays false. An abort drops what the pool still held staged while
+// their grids have moved on, so a run that dropped any is remembered without a
+// checkpoint of its own and the resume replays the last chunk instead of losing
+// them.
+func (this *Runtime) historyAbortedAt(env *environment, grids []historyGrid, channels []*historyChannel, shared *historyShared, position time.Time) repo.HistoryJobProgress {
+	progress := this.historyCheckpointAt(env, grids, channels, shared, position)
+	dropped := shared.droppedCount()
+	if dropped == 0 {
+		return progress
+	}
+	util.Logger.Warn("the abort dropped readings this run had staged, so it is remembered at its last chunk boundary instead",
+		"environment", env.id, "dropped", dropped, "at", position)
+	//a progress whose checkpoint carries no instant leaves the stored one alone,
+	//which is the rule the store states
+	progress.Checkpoint = repo.HistoryCheckpoint{}
+	return progress
+}
+
+// frozenHolds is what the freezes of one channel hold, in the order of the faults
+// in the document: two checkpoints of the same instant have to be the same
+// document.
+func frozenHolds(run *faultRun) []repo.FrozenHold {
+	if run == nil || len(run.held) == 0 {
+		return nil
+	}
+	indexes := make([]int, 0, len(run.held))
+	for index := range run.held {
+		indexes = append(indexes, index)
+	}
+	sort.Ints(indexes)
+	result := make([]repo.FrozenHold, 0, len(indexes))
+	for _, index := range indexes {
+		hold := run.held[index]
+		result = append(result, repo.FrozenHold{Index: index, BeginUnix: hold.beginUnix, Value: hold.value})
+	}
+	return result
 }
 
 // historyChannelDue runs one channel at one virtual instant, in whichever of the
@@ -818,6 +1180,11 @@ func (this *Runtime) historyPublished(env *environment, channel *historyChannel,
 	}
 	aborted := errors.Is(err, ErrPublishAborted)
 	channel.shared.mux.Lock()
+	if aborted {
+		//counted, because a checkpoint at the abort position would claim the step
+		//of this reading was covered; see historyAbortedAt
+		channel.shared.dropped++
+	}
 	if err != nil {
 		if !aborted || channel.result.LastError == "" {
 			channel.result.LastError = err.Error()

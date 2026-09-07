@@ -235,7 +235,7 @@ func TestADatasetChannelReplaysItsUpload(t *testing.T) {
 
 	publisher := &fakePublisher{}
 	states := newFakeStates()
-	rt := newRuntime(testConfig(50*time.Millisecond), newFakeEnvironments(env), states, store, publisher)
+	rt := newRuntime(testConfig(50*time.Millisecond), newFakeEnvironments(env), states, store, newFakeHistoryJobs(), publisher)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	if err := rt.Start(ctx); err != nil {
@@ -283,7 +283,7 @@ func TestAChannelWhoseDatasetIsGoneDoesNotStopTheEnvironment(t *testing.T) {
 
 	publisher := &fakePublisher{}
 	store := &fakeRuntimeDatasets{meta: repo.DatasetMeta{Id: "other"}}
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), store, publisher)
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), store, newFakeHistoryJobs(), publisher)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	if err := rt.Start(ctx); err != nil {

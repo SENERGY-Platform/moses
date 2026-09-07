@@ -61,7 +61,7 @@ func TestLoadSeriesFetchesASharedUploadOnce(t *testing.T) {
 				Resample: domain.ResampleHold, Anchor: domain.AnchorLoop}},
 	}
 
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), store, &fakePublisher{})
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), store, newFakeHistoryJobs(), &fakePublisher{})
 	result := rt.loadSeries(context.Background(), env)
 
 	if got := store.contentCallsFor("d1"); got != 1 {
@@ -95,7 +95,7 @@ func TestLoadSeriesFetchesTwoDatasetsEachOnce(t *testing.T) {
 		datasetChannelWithColumn("ch-b", envId, "d2", ""),
 	)
 
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), store, &fakePublisher{})
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), store, newFakeHistoryJobs(), &fakePublisher{})
 	result := rt.loadSeries(context.Background(), env)
 
 	if got := store.contentCallsFor("d1"); got != 1 {
@@ -129,7 +129,7 @@ func TestReloadRefetchesTheUpload(t *testing.T) {
 	env := testEnvironment(envId, datasetChannel(envId, source))
 
 	publisher := &fakePublisher{}
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), store, publisher)
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), store, newFakeHistoryJobs(), publisher)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	if err := rt.Start(ctx); err != nil {

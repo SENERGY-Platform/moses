@@ -19,8 +19,10 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -40,12 +42,31 @@ var historyFrom = time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 // StartHistory does, and no live runners to collide with.
 func historyFixture(t *testing.T, def domain.Environment, series map[string][]dataset.Point, publisher *fakePublisher) (*Runtime, *environment, *generation) {
 	t.Helper()
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, publisher)
+	return historyFixtureAt(t, def, series, publisher, newFakeHistoryJobs(), historyFrom)
+}
+
+// historyFixtureAt is the same for a window that does not start at historyFrom,
+// and with a job store the caller can read: a resume test needs both.
+func historyFixtureAt(t *testing.T, def domain.Environment, series map[string][]dataset.Point, publisher *fakePublisher, jobs repo.HistoryJobs, from time.Time) (*Runtime, *environment, *generation) {
+	t.Helper()
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, jobs, publisher)
 	gen := newGeneration(def, series)
 	env := &environment{id: def.Id, gen: gen, state: repo.RuntimeState{EnvironmentId: def.Id}}
 	env.resetForHistory()
 	//seeded with the window start, exactly as StartHistory does
-	env.seed(gen, historyFrom)
+	env.seed(gen, from)
+	return rt, env, gen
+}
+
+// historyResumeFixture is the environment a resumed run gets: reset and then
+// filled from the checkpoint, with no seeding, exactly as the lifecycle does it.
+func historyResumeFixture(t *testing.T, def domain.Environment, publisher *fakePublisher, checkpoint repo.HistoryCheckpoint) (*Runtime, *environment, *generation) {
+	t.Helper()
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), publisher)
+	gen := newGeneration(def, nil)
+	env := &environment{id: def.Id, gen: gen, state: repo.RuntimeState{EnvironmentId: def.Id}}
+	env.resetForHistory()
+	env.restoreForHistory(checkpoint)
 	return rt, env, gen
 }
 
@@ -64,7 +85,7 @@ func runEngineChasing(t *testing.T, rt *Runtime, env *environment, gen *generati
 
 func runEngineWith(t *testing.T, rt *Runtime, env *environment, gen *generation, from time.Time, to time.Time, chase bool) HistoryResult {
 	t.Helper()
-	result, err := rt.runHistory(t.Context(), env, gen, from, to, chase, nil)
+	result, err := rt.runHistory(t.Context(), env, gen, from, to, chase, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("the history run failed: %v", err)
 	}
@@ -302,7 +323,7 @@ func TestAHistoryRunDiscardsTheStateItStartedFrom(t *testing.T) {
 	def := testEnvironment(id, channel)
 	publisher := &fakePublisher{}
 
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, publisher)
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), publisher)
 	gen := newGeneration(def, nil)
 	env := &environment{id: id, gen: gen, state: repo.RuntimeState{
 		EnvironmentId: id,
@@ -675,7 +696,7 @@ func TestAHistoryRunStopsWhenItsContextIsCancelled(t *testing.T) {
 		}
 		return nil
 	}
-	result, err := rt.runHistory(ctx, env, gen, historyFrom, historyFrom.Add(time.Hour), keepTheWindow, nil)
+	result, err := rt.runHistory(ctx, env, gen, historyFrom, historyFrom.Add(time.Hour), keepTheWindow, nil, nil, nil)
 	cancel()
 	//the engine names the abort itself rather than leaving it to be read off the
 	//context afterwards, where a run that had just finished would look cancelled
@@ -872,6 +893,877 @@ func TestAHistoryWindowThatCannotBeRunIsRefused(t *testing.T) {
 			}
 			if !strings.Contains(rangeError.Error(), testCase.contains) {
 				t.Errorf("expected the reason to mention %q, got %q", testCase.contains, rangeError.Error())
+			}
+		})
+	}
+}
+
+// TestAHistoryWindowIsTruncatedToWhatTheStoreKeeps: a bson datetime keeps
+// milliseconds. A window carrying a finer fraction would run on one set of
+// instants and be resumed on another, off by exactly the fraction the store
+// dropped - so the window is truncated where it is validated, before anything
+// runs against it.
+func TestAHistoryWindowIsTruncatedToWhatTheStoreKeeps(t *testing.T) {
+	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
+	from, to, err := validateHistoryWindow(now.Add(-time.Hour).Add(1234567*time.Nanosecond), now)
+	if err != nil {
+		t.Fatalf("expected the window to be accepted, got %v", err)
+	}
+	if from.Nanosecond()%int(time.Millisecond) != 0 {
+		t.Errorf("from is %v, expected it truncated to whole milliseconds", from)
+	}
+	if !to.Equal(now) {
+		t.Errorf("the end has to be the present, got %v", to)
+	}
+	//and this is the window that comes back out of the store, instant for instant
+	stored, err := copyHistoryJobRecord(repo.HistoryJobRecord{EnvironmentId: "env-hist-window", From: from})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stored.From.Equal(from) {
+		t.Errorf("the stored window starts at %v, the run at %v", stored.From, from)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// chunks, checkpoints and the resume
+// ---------------------------------------------------------------------------
+
+// historyResumeFrom starts exactly on a chunk boundary, so the boundaries of a
+// run from here are the whole hours after it.
+var historyResumeFrom = time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+
+// historyResumeDocument carries one channel of every shape whose memory the
+// environment state does not hold, with cadences that deliberately do not divide
+// the chunk length. Every piece of that memory is therefore load-bearing across a
+// boundary, and a resume that dropped one of them publishes a different series:
+//
+//   - ch-split publishes every 300 s from a source that runs every 70 s, so what
+//     the publish half sends at 3600 was computed at 3570, before the cut
+//   - ch-cov beats every 1000 s on a value that never moves, so the gap that
+//     decides whether the boundary instant owes a heartbeat began before the cut
+//     and is not yet run out - which a lost heartbeat moment turns into an extra
+//     reading
+//   - ch-frozen is frozen from 40 min to 2 h 30 min, across the first two
+//     boundaries, and holds the value of the instant the window opened
+//   - ch-meter is a cumulative counter and ch-total the aggregate over two more,
+//     which is the state and the value cache
+//   - ch-formula reads what ch-script produced at 3500 and the context of 3500,
+//     both of them from the chunk before
+func historyResumeDocument(id string) domain.Environment {
+	split := scriptChannel("ch-split", domain.Sensor, 300, serviceOf(id, "split"),
+		"var n = moses.asset.state.get('n') + 1; moses.asset.state.set('n', n); moses.channel.send(n);")
+	split.Source.IntervalSeconds = 70
+
+	cov := profileChannel("ch-cov", serviceOf(id, "cov"), 1000, flatProfile(230, 0))
+	cov.PublishOnChange = &domain.ChangeTrigger{Absolute: 5, EvaluateIntervalSeconds: 60}
+
+	frozen := profileChannel("ch-frozen", serviceOf(id, "frozen"), 60, hourlyProfile())
+	frozen.Faults = []domain.Fault{{
+		Kind: domain.FaultFrozen,
+		From: historyResumeFrom.Add(40 * time.Minute),
+		To:   historyResumeFrom.Add(2*time.Hour + 30*time.Minute),
+	}}
+
+	meter := profileChannel("ch-meter", serviceOf(id, "meter"), 300,
+		domain.ProfileSource{Base: 3600, Cumulative: true})
+
+	script := scriptChannel("ch-script", domain.Sensor, 500, serviceOf(id, "script"),
+		"var m = moses.asset.state.get('m') + 2; moses.asset.state.set('m', m); moses.channel.send(m);")
+
+	formula := domain.Channel{
+		Id: "ch-formula", Name: "ch-formula", Direction: domain.Sensor,
+		ExternalRef: serviceOf(id, "formula"), IntervalSeconds: 400,
+		Source: domain.Source{Kind: domain.SourceFormula, Formula: &domain.FormulaSource{
+			Expression: "2 * a + c",
+			Inputs:     map[string]string{"a": "channel.ch-script", "c": "context.shift"},
+		}},
+	}
+
+	def := treeEnvironment(id,
+		treeAsset{id: "a-main", channels: []domain.Channel{split, cov, frozen, meter, script, formula}},
+		treeAsset{id: "a-total", channels: []domain.Channel{
+			aggregateChannel("ch-total", serviceOf(id, "total"), 300, energyCharacteristic)}},
+		treeAsset{id: "a-sub-1", submeteredBy: "a-total", channels: []domain.Channel{
+			cumulativeChannel("ch-sub-1", serviceOf(id, "sub-1"), 300, energyCharacteristic, 3600)}},
+		treeAsset{id: "a-sub-2", submeteredBy: "a-total", channels: []domain.Channel{
+			cumulativeChannel("ch-sub-2", serviceOf(id, "sub-2"), 300, energyCharacteristic, 7200)}},
+	)
+	def.Seed = 4711
+	def.ContextSources = map[string]domain.Source{
+		//every 500 s, so the value a formula reads at a boundary was written
+		//before it
+		"shift": {Kind: domain.SourceProfile, IntervalSeconds: 500, Profile: profilePointer(hourlyProfile())},
+	}
+	return def
+}
+
+// historyEventKeys is what one service received, as instant and value in publish
+// order. Per service, because two channels are published by two workers and the
+// order between them is not fixed - inside one channel it is.
+func historyEventKeys(publisher *fakePublisher, serviceRef string) []string {
+	result := []string{}
+	for _, event := range publisher.backfilled(serviceRef) {
+		result = append(result, fmt.Sprintf("%d|%v", event.at.UnixNano(), event.value))
+	}
+	return result
+}
+
+func historyServices(publisher *fakePublisher) []string {
+	seen := map[string]bool{}
+	result := []string{}
+	for _, event := range publisher.all() {
+		if !seen[event.serviceRef] {
+			seen[event.serviceRef] = true
+			result = append(result, event.serviceRef)
+		}
+	}
+	sort.Strings(result)
+	return result
+}
+
+// firstDifference names where two series part, so a failure says what went wrong
+// rather than printing two long lists.
+func firstDifference(want []string, got []string) string {
+	for i := range want {
+		if i >= len(got) {
+			return fmt.Sprintf("reading %d is missing, expected %v", i, want[i])
+		}
+		if want[i] != got[i] {
+			return fmt.Sprintf("reading %d is %v, expected %v", i, got[i], want[i])
+		}
+	}
+	if len(got) > len(want) {
+		return fmt.Sprintf("reading %d is %v and was not expected at all", len(want), got[len(want)])
+	}
+	return "nowhere"
+}
+
+// assertHistoryResumeMemory checks that the cut really carried every kind of
+// memory. Without it a resume that dropped one of them could still pass the
+// series comparison, on a fixture that happened to need none of it.
+func assertHistoryResumeMemory(t *testing.T, checkpoint repo.HistoryCheckpoint) {
+	t.Helper()
+	if !checkpoint.Channels["ch-split"].PendingSet {
+		t.Error("the checkpoint carries no pending value of the split channel")
+	}
+	if checkpoint.Channels["ch-cov"].LastAttemptUnix == 0 {
+		t.Error("the checkpoint carries no heartbeat moment of the change trigger")
+	}
+	if len(checkpoint.Channels["ch-frozen"].Held) == 0 {
+		t.Error("the checkpoint carries no frozen hold")
+	}
+	if len(checkpoint.LastValues) == 0 {
+		t.Error("the checkpoint carries no value cache")
+	}
+	if len(checkpoint.State.Context) == 0 {
+		t.Error("the checkpoint carries no context state")
+	}
+	if checkpoint.Ticks["context:shift"] == 0 || checkpoint.Ticks["ch-split:publish"] == 0 {
+		t.Errorf("the checkpoint has no tick for the context source or for the publish half: %v", checkpoint.Ticks)
+	}
+}
+
+// TestAnInterruptedHistoryRunResumesIntoTheSameSeries is what makes a run
+// restart-safe: cut at a chunk boundary and continued from what was stored
+// there, it publishes the same readings under the same instants as an
+// uninterrupted one and arrives at the same state.
+func TestAnInterruptedHistoryRunResumesIntoTheSameSeries(t *testing.T) {
+	const id = "env-hist-resume"
+	def := historyResumeDocument(id)
+	if err := domain.Validate(def); err != nil {
+		t.Fatalf("the fixture has to be a storable document: %v", err)
+	}
+	from := historyResumeFrom
+	to := from.Add(4 * time.Hour)
+
+	whole := &fakePublisher{}
+	rt, env, gen := historyFixtureAt(t, def, nil, whole, newFakeHistoryJobs(), from)
+	wholeResult := runEngine(t, rt, env, gen, from, to)
+	env.mux.Lock()
+	wholeState := env.snapshot()
+	env.mux.Unlock()
+	if services := historyServices(whole); wholeResult.Published == 0 || len(services) < 7 {
+		t.Fatalf("the fixture published %d readings on %d services, so a comparison against it would prove little",
+			wholeResult.Published, len(services))
+	}
+
+	//the first two boundaries and the last one of the window
+	for _, cut := range []int{1, 2, 4} {
+		t.Run(fmt.Sprintf("cut at boundary %d", cut), func(t *testing.T) {
+			jobs := newFakeHistoryJobs()
+			if err := jobs.Save(t.Context(), repo.HistoryJobRecord{
+				EnvironmentId: id, State: repo.HistoryJobRunning, From: from, To: to,
+				StartedAt: from, Definition: def,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			jobs.onCheckpoint = func(n int) error {
+				if n >= cut {
+					//ended at the boundary it has just written, which is what a
+					//shutdown does in the middle of a window
+					cancel()
+				}
+				return nil
+			}
+
+			first := &fakePublisher{}
+			firstRt, firstEnv, firstGen := historyFixtureAt(t, def, nil, first, jobs, from)
+			_, err := firstRt.runHistory(ctx, firstEnv, firstGen, from, to, keepTheWindow, nil, nil,
+				func(progress repo.HistoryJobProgress) error {
+					return jobs.Checkpoint(context.Background(), id, progress)
+				})
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("expected the interrupted run to report the cancellation, got %v", err)
+			}
+
+			written := jobs.checkpointsOf(id)
+			if len(written) != cut+1 {
+				t.Fatalf("expected %d boundaries and the one of the abort, got %d", cut, len(written))
+			}
+			boundary := from.Add(time.Duration(cut) * time.Hour)
+			if !written[cut-1].Checkpoint.Position.Equal(boundary) {
+				t.Errorf("boundary %d stands at %v, expected %v", cut, written[cut-1].Checkpoint.Position, boundary)
+			}
+			//the abort is remembered at the last instant the run really simulated,
+			//with the ticks the boundary had: nothing was processed in between, so
+			//a resume from it repeats nothing and skips nothing
+			aborted := written[cut]
+			if !aborted.Checkpoint.Position.Before(boundary) || aborted.Checkpoint.Position.Before(boundary.Add(-time.Hour)) {
+				t.Errorf("the abort was remembered at %v, expected the last instant before %v",
+					aborted.Checkpoint.Position, boundary)
+			}
+			if !reflect.DeepEqual(aborted.Checkpoint.Ticks, written[cut-1].Checkpoint.Ticks) {
+				t.Errorf("the abort moved the ticks of the boundary:\n%v\nagainst\n%v",
+					aborted.Checkpoint.Ticks, written[cut-1].Checkpoint.Ticks)
+			}
+
+			stored, err := jobs.Load(t.Context(), id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored.Checkpoint == nil {
+				t.Fatal("the interrupted run stored no checkpoint")
+			}
+			resume := stored.Checkpoint
+			assertHistoryResumeMemory(t, *resume)
+
+			second := &fakePublisher{}
+			secondRt, secondEnv, secondGen := historyResumeFixture(t, def, second, *resume)
+			if _, err = secondRt.runHistory(t.Context(), secondEnv, secondGen, from, to, keepTheWindow, nil, resume, nil); err != nil {
+				t.Fatalf("the resumed run failed: %v", err)
+			}
+
+			//both halves have to carry something, or the comparison would hold for
+			//a resume that simply repeated the whole window
+			if first.count() == 0 || second.count() == 0 {
+				t.Fatalf("the cut published %d readings and the resume %d", first.count(), second.count())
+			}
+			for _, service := range historyServices(whole) {
+				want := historyEventKeys(whole, service)
+				got := append(historyEventKeys(first, service), historyEventKeys(second, service)...)
+				if !reflect.DeepEqual(want, got) {
+					t.Errorf("%v: the run and its resume published %d readings, the uninterrupted one %d - %v",
+						service, len(got), len(want), firstDifference(want, got))
+				}
+				//nothing twice: an instant that went out before the cut must not
+				//come again after it
+				before := map[int64]bool{}
+				for _, event := range first.backfilled(service) {
+					before[event.at.UnixNano()] = true
+				}
+				for _, event := range second.backfilled(service) {
+					if before[event.at.UnixNano()] {
+						t.Errorf("%v: the resume published %v a second time", service, event.at)
+					}
+				}
+			}
+
+			secondEnv.mux.Lock()
+			endState := secondEnv.snapshot()
+			secondEnv.mux.Unlock()
+			if !reflect.DeepEqual(wholeState, endState) {
+				t.Errorf("the resumed run ended in another state than the uninterrupted one:\n%#v\nagainst\n%#v",
+					endState, wholeState)
+			}
+		})
+	}
+}
+
+// TestAHistoryRunCheckpointsAtEveryVirtualHour pins the boundary itself: it is a
+// multiple of the chunk length on the unix clock, and the readings before it are
+// out when it is written.
+func TestAHistoryRunCheckpointsAtEveryVirtualHour(t *testing.T) {
+	const id = "env-hist-boundaries"
+	def := testEnvironment(id, profileChannel("ch-1", serviceRefOf(id), 600, flatProfile(230, 0)))
+	jobs := newFakeHistoryJobs()
+	if err := jobs.Save(t.Context(), repo.HistoryJobRecord{
+		EnvironmentId: id, State: repo.HistoryJobRunning, From: historyFrom, Definition: def,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	publisher := &fakePublisher{}
+	rt, env, gen := historyFixtureAt(t, def, nil, publisher, jobs, historyFrom)
+
+	result, err := rt.runHistory(t.Context(), env, gen, historyFrom, historyFrom.Add(3*time.Hour),
+		keepTheWindow, nil, nil, func(progress repo.HistoryJobProgress) error {
+			return jobs.Checkpoint(context.Background(), id, progress)
+		})
+	if err != nil {
+		t.Fatalf("the run failed: %v", err)
+	}
+
+	written := jobs.checkpointsOf(id)
+	if len(written) != 3 {
+		t.Fatalf("expected a checkpoint at each of the three whole hours, got %d", len(written))
+	}
+	for i, progress := range written {
+		want := historyFrom.Add(time.Duration(i+1) * time.Hour)
+		if !progress.Checkpoint.Position.Equal(want) || !progress.Position.Equal(want) {
+			t.Errorf("checkpoint %d stands at %v / %v, expected %v", i, progress.Position, progress.Checkpoint.Position, want)
+		}
+		//everything before the boundary is acked when it is written, which is what
+		//makes the checkpoint complete: the six readings of every hour up to it,
+		//and not the one due at the boundary itself
+		if want := int64((i + 1) * 6); progress.Published != want {
+			t.Errorf("checkpoint %d counted %d published steps, expected %d", i, progress.Published, want)
+		}
+		//and it says it is a boundary, which is what clears the resume count of a
+		//run that has got going again
+		if !progress.AtBoundary {
+			t.Errorf("checkpoint %d does not report itself as a chunk boundary", i)
+		}
+	}
+	if result.Published != 19 {
+		t.Errorf("the run published %d steps, expected the 19 of the window", result.Published)
+	}
+}
+
+// TestAHistoryRunWritesOneCheckpointForSeveralEmptyHours: a run whose grids are
+// coarser than a chunk crosses several boundaries between two due events. It
+// stands at the same instant at each of them, so one write says it - the
+// alternative is a store write per virtual hour of a window nothing happens in.
+func TestAHistoryRunWritesOneCheckpointForSeveralEmptyHours(t *testing.T) {
+	const id = "env-hist-empty-chunks"
+	def := testEnvironment(id, profileChannel("ch-1", serviceRefOf(id), 4*3600, flatProfile(230, 0)))
+	jobs := newFakeHistoryJobs()
+	if err := jobs.Save(t.Context(), repo.HistoryJobRecord{
+		EnvironmentId: id, State: repo.HistoryJobRunning, From: historyFrom, Definition: def,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	publisher := &fakePublisher{}
+	rt, env, gen := historyFixtureAt(t, def, nil, publisher, jobs, historyFrom)
+
+	if _, err := rt.runHistory(t.Context(), env, gen, historyFrom, historyFrom.Add(12*time.Hour),
+		keepTheWindow, nil, nil, func(progress repo.HistoryJobProgress) error {
+			return jobs.Checkpoint(context.Background(), id, progress)
+		}); err != nil {
+		t.Fatalf("the run failed: %v", err)
+	}
+
+	written := jobs.checkpointsOf(id)
+	if len(written) != 3 {
+		t.Fatalf("expected one checkpoint per due event past the first, got %d", len(written))
+	}
+	for i, progress := range written {
+		want := historyFrom.Add(time.Duration(i+1) * 4 * time.Hour)
+		if !progress.Checkpoint.Position.Equal(want) {
+			t.Errorf("checkpoint %d stands at %v, expected the boundary the run reached at %v", i, progress.Checkpoint.Position, want)
+		}
+	}
+}
+
+// TestAHistoryRunGoesOnWhenItCannotBeRemembered: a store that is unreachable
+// makes the run unresumable, not wrong. It publishes the whole window either way,
+// and the failure is one line rather than one per virtual hour.
+func TestAHistoryRunGoesOnWhenItCannotBeRemembered(t *testing.T) {
+	const id = "env-hist-checkpoint-fails"
+	def := testEnvironment(id, profileChannel("ch-1", serviceRefOf(id), 600, flatProfile(230, 0)))
+	jobs := newFakeHistoryJobs()
+	if err := jobs.Save(t.Context(), repo.HistoryJobRecord{
+		EnvironmentId: id, State: repo.HistoryJobRunning, From: historyFrom, Definition: def,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	jobs.checkpointErr = errors.New("the store is unreachable")
+	publisher := &fakePublisher{}
+	rt, env, gen := historyFixtureAt(t, def, nil, publisher, jobs, historyFrom)
+
+	result, err := rt.runHistory(t.Context(), env, gen, historyFrom, historyFrom.Add(3*time.Hour),
+		keepTheWindow, nil, nil, func(progress repo.HistoryJobProgress) error {
+			return jobs.Checkpoint(context.Background(), id, progress)
+		})
+	if err != nil {
+		t.Fatalf("a checkpoint that could not be written must not end the run, got %v", err)
+	}
+	if result.Published != 19 {
+		t.Errorf("the run published %d steps, expected the 19 of the window", result.Published)
+	}
+	if jobs.checkpointCount() != 3 {
+		t.Errorf("expected the run to keep offering its boundaries, got %d", jobs.checkpointCount())
+	}
+	if stored, _ := jobs.recordFor(id); stored.Checkpoint != nil {
+		t.Error("nothing was stored, so the record must carry no checkpoint")
+	}
+}
+
+// TestAResumeAgainstAnotherDefinitionIsRefused: the ticks are keyed by the
+// identity of a grid, and a checkpoint that knows nothing about one of them
+// cannot say where that grid stands - continuing it at zero would replay its
+// whole window.
+func TestAResumeAgainstAnotherDefinitionIsRefused(t *testing.T) {
+	const id = "env-hist-resume-mismatch"
+	def := testEnvironment(id, profileChannel("ch-1", serviceRefOf(id), 600, flatProfile(230, 0)))
+	publisher := &fakePublisher{}
+	rt, env, gen := historyFixtureAt(t, def, nil, publisher, newFakeHistoryJobs(), historyFrom)
+
+	checkpoint := &repo.HistoryCheckpoint{
+		Position: historyFrom.Add(time.Hour),
+		Ticks:    map[string]int64{"ch-other": 6},
+		Channels: map[string]repo.HistoryChannelMemory{"ch-other": {}},
+	}
+	_, err := rt.runHistory(t.Context(), env, gen, historyFrom, historyFrom.Add(2*time.Hour),
+		keepTheWindow, nil, checkpoint, nil)
+	if err == nil || !strings.Contains(err.Error(), "ch-1") {
+		t.Fatalf("expected the resume to be refused naming the grid it knows nothing about, got %v", err)
+	}
+	if publisher.count() != 0 {
+		t.Errorf("the refused resume published %d readings", publisher.count())
+	}
+}
+
+// TestAnAbortThatDroppedReadingsResumesFromTheLastBoundary is the other half of
+// the abort rule. An abort drops what the pool still held staged and books those
+// steps as silent, so their grids have moved on: remembering the run where it
+// stopped would lose exactly those readings. It is remembered at the last
+// boundary instead - an hour of the window goes out twice, and nothing is
+// missing.
+func TestAnAbortThatDroppedReadingsResumesFromTheLastBoundary(t *testing.T) {
+	const id = "env-hist-resume-dropped"
+	//a minute grid over two hours, so the loop computes far faster than the pool
+	//can publish and the abort really has readings to drop
+	def := testEnvironment(id, profileChannel("ch-1", serviceRefOf(id), 60,
+		domain.ProfileSource{Base: 3600, Cumulative: true}))
+	from := historyResumeFrom
+	to := from.Add(2 * time.Hour)
+
+	whole := &fakePublisher{}
+	rt, env, gen := historyFixtureAt(t, def, nil, whole, newFakeHistoryJobs(), from)
+	runEngine(t, rt, env, gen, from, to)
+	env.mux.Lock()
+	wholeState := env.snapshot()
+	env.mux.Unlock()
+
+	jobs := newFakeHistoryJobs()
+	if err := jobs.Save(t.Context(), repo.HistoryJobRecord{
+		EnvironmentId: id, State: repo.HistoryJobRunning, From: from, To: to,
+		StartedAt: from, Definition: def,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	//the abort lands in the middle of the second chunk, with the queue of the
+	//worker full behind it
+	published := 0
+	first := &fakePublisher{
+		latency: func() time.Duration { return 2 * time.Millisecond },
+		failAt: func(at time.Time) error {
+			published++
+			if published == 75 {
+				cancel()
+			}
+			return nil
+		},
+	}
+	firstRt, firstEnv, firstGen := historyFixtureAt(t, def, nil, first, jobs, from)
+	_, err := firstRt.runHistory(ctx, firstEnv, firstGen, from, to, keepTheWindow, nil, nil,
+		func(progress repo.HistoryJobProgress) error {
+			return jobs.Checkpoint(context.Background(), id, progress)
+		})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected the interrupted run to report the cancellation, got %v", err)
+	}
+
+	written := jobs.checkpointsOf(id)
+	if len(written) != 2 {
+		t.Fatalf("expected the first boundary and the abort, got %d checkpoints", len(written))
+	}
+	if !written[1].Checkpoint.Position.IsZero() {
+		t.Errorf("an abort that dropped readings must not be remembered at its own position, got %v",
+			written[1].Checkpoint.Position)
+	}
+	//an abort is not a boundary: it proves nothing about the run, so it leaves
+	//the resume count where it stands
+	if written[1].AtBoundary {
+		t.Error("the write of the abort reports itself as a chunk boundary")
+	}
+	if !written[0].AtBoundary {
+		t.Error("the write of the first hour does not report itself as a chunk boundary")
+	}
+	stored, err := jobs.Load(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Checkpoint == nil || !stored.Checkpoint.Position.Equal(from.Add(time.Hour)) {
+		t.Fatalf("expected the run to be remembered at the boundary of the first hour, got %#v", stored.Checkpoint)
+	}
+	//the position of the record still says how far the run got, which is what a
+	//reader of the status wants
+	if written[1].Position.Before(from.Add(time.Hour)) {
+		t.Errorf("the abort reported the position %v, expected the instant it had reached", written[1].Position)
+	}
+
+	second := &fakePublisher{}
+	secondRt, secondEnv, secondGen := historyResumeFixture(t, def, second, *stored.Checkpoint)
+	if _, err = secondRt.runHistory(t.Context(), secondEnv, secondGen, from, to, keepTheWindow, nil, stored.Checkpoint, nil); err != nil {
+		t.Fatalf("the resumed run failed: %v", err)
+	}
+
+	service := serviceRefOf(id)
+	got := map[int64]int{}
+	for _, event := range first.backfilled(service) {
+		got[event.at.UnixNano()]++
+	}
+	for _, event := range second.backfilled(service) {
+		got[event.at.UnixNano()]++
+	}
+	missing := 0
+	twice := 0
+	for _, event := range whole.backfilled(service) {
+		switch got[event.at.UnixNano()] {
+		case 0:
+			missing++
+		case 1:
+		default:
+			twice++
+		}
+	}
+	if missing != 0 {
+		t.Errorf("%d readings of the window are missing after the resume", missing)
+	}
+	if twice == 0 {
+		t.Fatal("nothing was published twice, so this run did not exercise the replay of a chunk")
+	}
+	//and the state is the one of the uninterrupted run: the replayed chunk starts
+	//from the boundary the state belongs to, so the meter does not count it twice
+	secondEnv.mux.Lock()
+	endState := secondEnv.snapshot()
+	secondEnv.mux.Unlock()
+	if !reflect.DeepEqual(wholeState, endState) {
+		t.Errorf("the resumed run ended in another state than the uninterrupted one:\n%#v\nagainst\n%#v",
+			endState, wholeState)
+	}
+}
+
+// TestABoundaryWhoseDrainDroppedReadingsIsNotRemembered is the other side of the
+// abort rule, at the boundary itself: the drain a boundary begins with is where
+// an abort strands the readings the pool still held. Their steps are booked as
+// silent and their grids have moved on, so a boundary written after such a drain
+// would claim they went out and lose them for good - the abort that follows
+// suppresses its own checkpoint precisely because they are gone.
+func TestABoundaryWhoseDrainDroppedReadingsIsNotRemembered(t *testing.T) {
+	const id = "env-hist-boundary-dropped"
+	//a minute grid over two hours, so the loop computes far faster than the pool
+	//publishes and the drain of the first boundary is where the readings of that
+	//hour actually go out
+	def := testEnvironment(id, profileChannel("ch-1", serviceRefOf(id), 60,
+		domain.ProfileSource{Base: 3600, Cumulative: true}))
+	from := historyResumeFrom
+	to := from.Add(2 * time.Hour)
+	service := serviceRefOf(id)
+
+	whole := &fakePublisher{}
+	rt, env, gen := historyFixtureAt(t, def, nil, whole, newFakeHistoryJobs(), from)
+	runEngine(t, rt, env, gen, from, to)
+
+	jobs := newFakeHistoryJobs()
+	if err := jobs.Save(t.Context(), repo.HistoryJobRecord{
+		EnvironmentId: id, State: repo.HistoryJobRunning, From: from, To: to,
+		StartedAt: from, Definition: def,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	published := 0
+	first := &fakePublisher{
+		latency: func() time.Duration { return 2 * time.Millisecond },
+		failAt: func(at time.Time) error {
+			published++
+			//the throttle lets the loop run at most 32 readings ahead of the pool,
+			//so of the 60 readings of the first hour about half go out inside the
+			//drain of the boundary at 3600: this one is in the middle of it
+			if published == 40 {
+				cancel()
+			}
+			return nil
+		},
+	}
+	firstRt, firstEnv, firstGen := historyFixtureAt(t, def, nil, first, jobs, from)
+	_, err := firstRt.runHistory(ctx, firstEnv, firstGen, from, to, keepTheWindow, nil, nil,
+		func(progress repo.HistoryJobProgress) error {
+			return jobs.Checkpoint(context.Background(), id, progress)
+		})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected the interrupted run to report the cancellation, got %v", err)
+	}
+
+	if sent := len(first.backfilled(service)); sent == 0 || sent >= 60 {
+		t.Fatalf("the run published %d of the 60 readings of the first hour, so nothing was dropped in that drain", sent)
+	}
+	written := jobs.checkpointsOf(id)
+	if len(written) != 1 {
+		positions := []time.Time{}
+		for _, progress := range written {
+			positions = append(positions, progress.Checkpoint.Position)
+		}
+		t.Fatalf("expected the abort alone to be remembered, got %d checkpoints at %v", len(written), positions)
+	}
+	if !written[0].Checkpoint.Position.IsZero() {
+		t.Errorf("the abort was remembered at %v although it dropped readings", written[0].Checkpoint.Position)
+	}
+	stored, err := jobs.Load(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Checkpoint != nil {
+		t.Fatalf("the boundary was stored at %v although its own drain dropped readings", stored.Checkpoint.Position)
+	}
+
+	//nothing is remembered, so the resume is the run again from the window start -
+	//and the union of the two halves holds every reading of the window
+	second := &fakePublisher{}
+	secondRt, secondEnv, secondGen := historyFixtureAt(t, def, nil, second, newFakeHistoryJobs(), from)
+	runEngine(t, secondRt, secondEnv, secondGen, from, to)
+
+	got := map[int64]int{}
+	for _, event := range first.backfilled(service) {
+		got[event.at.UnixNano()]++
+	}
+	for _, event := range second.backfilled(service) {
+		got[event.at.UnixNano()]++
+	}
+	missing := 0
+	for _, event := range whole.backfilled(service) {
+		if got[event.at.UnixNano()] == 0 {
+			missing++
+		}
+	}
+	if missing != 0 {
+		t.Errorf("%d readings of the window are missing after the resume", missing)
+	}
+}
+
+// TestACancelInTheFinalDrainDoesNotReportTheRunAsDone: the drain at the end of a
+// pass fails what the pool still held, so a cancel that lands in it leaves the
+// window short by those readings. Reporting nothing would store the run as done
+// and lose them without a word; the run names the cancellation instead, which
+// the lifecycle turns into cancelled - the outcome
+// TestTheEnvironmentIsHandedBackAfterEveryOutcome pins.
+//
+// What the run reads is the readings the drain dropped, not the context: the
+// cancel here therefore has to land while the pool still holds most of the
+// window, which the latency of the publisher makes certain.
+func TestACancelInTheFinalDrainDoesNotReportTheRunAsDone(t *testing.T) {
+	const id = "env-hist-final-drain-cancel"
+	//a minute grid over half an hour: the 31 readings all fit into what one
+	//worker may hold staged, so the loop reaches the end of the pass with the
+	//whole window still in flight
+	def := testEnvironment(id, profileChannel("ch-1", serviceRefOf(id), 60, flatProfile(230, 0)))
+	from := historyResumeFrom
+	to := from.Add(30 * time.Minute)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	published := 0
+	publisher := &fakePublisher{
+		//5 ms a reading, so the 31 of them take a sixth of a second: the cancel
+		//below lands in the middle of the drain rather than after it
+		latency: func() time.Duration { return 5 * time.Millisecond },
+		failAt: func(at time.Time) error {
+			published++
+			if published == 5 {
+				cancel()
+			}
+			return nil
+		},
+	}
+	rt, env, gen := historyFixtureAt(t, def, nil, publisher, newFakeHistoryJobs(), from)
+
+	result, err := rt.runHistory(ctx, env, gen, from, to, keepTheWindow, nil, nil, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected the run to report the cancellation of its last drain, got %v", err)
+	}
+	if result.Published >= 31 {
+		t.Errorf("the cancelled run counted %d of the 31 steps as published", result.Published)
+	}
+	if sent := len(publisher.backfilled(serviceRefOf(id))); sent >= 31 {
+		t.Fatalf("every reading went out, so the cancel did not land in the final drain (%d)", sent)
+	}
+	//the readings the drain dropped are the reason this run is not done: their
+	//steps were attempted by nobody and are therefore booked as silent
+	if channel := resultFor(t, result, "ch-1"); channel.Silent == 0 {
+		t.Errorf("no step was booked silent, so this cancel dropped no reading: %#v", channel)
+	}
+}
+
+// TestACancelAfterTheLastAckStillReportsTheRunAsDone is the other side of it. A
+// cancel that arrives once the last reading is acked leaves a whole window, and
+// reporting it as cancelled would suspend a run that is over - the next start
+// would resume it and publish its last chunk a second time.
+func TestACancelAfterTheLastAckStillReportsTheRunAsDone(t *testing.T) {
+	const id = "env-hist-final-drain-late-cancel"
+	def := testEnvironment(id, profileChannel("ch-1", serviceRefOf(id), 60, flatProfile(230, 0)))
+	from := historyResumeFrom
+	to := from.Add(30 * time.Minute)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	published := 0
+	publisher := &fakePublisher{
+		latency: func() time.Duration { return 2 * time.Millisecond },
+		failAt: func(at time.Time) error {
+			published++
+			//inside the publish of the last of the 31 readings: the 30 before it
+			//are acked and nothing is left staged behind it, so the drain this
+			//cancel lands in loses nothing
+			if published == 31 {
+				cancel()
+			}
+			return nil
+		},
+	}
+	rt, env, gen := historyFixtureAt(t, def, nil, publisher, newFakeHistoryJobs(), from)
+
+	result, err := rt.runHistory(ctx, env, gen, from, to, keepTheWindow, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("a cancel that dropped no reading leaves a complete window, got %v", err)
+	}
+	if result.Published != 31 {
+		t.Errorf("the run counted %d of the 31 steps as published", result.Published)
+	}
+	if sent := len(publisher.backfilled(serviceRefOf(id))); sent != 31 {
+		t.Errorf("%d of the 31 readings went out, so the cancel did not land after the last ack", sent)
+	}
+	if channel := resultFor(t, result, "ch-1"); channel.Silent != 0 || channel.Failed != 0 {
+		t.Errorf("a complete window books every step as published: %#v", channel)
+	}
+	if !result.Position.Equal(to) {
+		t.Errorf("the run stands at %v, expected the end of its window %v", result.Position, to)
+	}
+}
+
+// TestAResumeBoundsTheTickAgainstOverflowNotAgainstTheStepCap: the cap of a run
+// counts the steps of every grid together and the chase adds steps outside it,
+// so one fine grid legitimately carries more ticks than the cap. What a stored
+// tick may not do is make the multiplication of the due date overflow, which
+// would wrap the comparison against the end of the window instead of refusing.
+func TestAResumeBoundsTheTickAgainstOverflowNotAgainstTheStepCap(t *testing.T) {
+	base := historyFrom.Unix()
+	resume := func(tick int64) error {
+		grids := []historyGrid{{id: "ch-1", step: 1}}
+		err := historyResume(grids, nil, &historyShared{}, base, &repo.HistoryCheckpoint{
+			Ticks:    map[string]int64{"ch-1": tick},
+			Channels: map[string]repo.HistoryChannelMemory{},
+		})
+		if err == nil && grids[0].tick != tick {
+			t.Errorf("the resume took the tick %d as %d", tick, grids[0].tick)
+		}
+		return err
+	}
+
+	//a one second grid over 231 days is past the cap of a whole run on its own,
+	//and the chase writes ticks above whatever the pass reached
+	if err := resume(maxHistoryTicks + 1); err != nil {
+		t.Errorf("a tick above the step cap of a run is a step of a fine grid, got %v", err)
+	}
+	if err := resume(historyMaxTick(base, 1)); err != nil {
+		t.Errorf("the largest tick the due date can still be computed for was refused: %v", err)
+	}
+	for name, tick := range map[string]int64{
+		"a negative tick":       -1,
+		"one past the last one": historyMaxTick(base, 1) + 1,
+		"the largest int64":     math.MaxInt64,
+		"the smallest int64":    math.MinInt64,
+	} {
+		if err := resume(tick); err == nil {
+			t.Errorf("%v (%d) was taken as a step of a grid", name, tick)
+		}
+	}
+
+	//and the bound itself is the overflow: base + tick*step is computable at the
+	//limit and is not one tick further
+	fits := func(base int64, step int64, tick int64) bool {
+		product := tick * step
+		if step != 0 && product/step != tick {
+			return false
+		}
+		//the addition wrapped if the sum moved against the sign of the product
+		sum := base + product
+		return (product >= 0) == (sum >= base)
+	}
+	for name, testCase := range map[string]struct {
+		base int64
+		step int64
+	}{
+		"a real window on a one second grid": {historyFrom.Unix(), 1},
+		"an hourly grid":                     {historyFrom.Unix(), 3600},
+		"the coarsest grid there is":         {historyFrom.Unix(), maxIntervalSeconds},
+		"the epoch itself":                   {0, 60},
+		"a window before the epoch":          {-3600, 60},
+	} {
+		t.Run(name, func(t *testing.T) {
+			limit := historyMaxTick(testCase.base, testCase.step)
+			if limit <= 0 {
+				t.Fatalf("the bound of base %d and step %d is %d", testCase.base, testCase.step, limit)
+			}
+			if !fits(testCase.base, testCase.step, limit) {
+				t.Errorf("the due date of the largest allowed tick %d does not fit an int64", limit)
+			}
+			if fits(testCase.base, testCase.step, limit+1) {
+				t.Errorf("the tick %d past the bound still fits, so the bound is not the overflow", limit+1)
+			}
+		})
+	}
+}
+
+// TestTheChunkBoundariesAreMultiplesOfTheChunkLength pins the arithmetic the
+// checkpoints stand on: the boundary at or below an instant, and the first one
+// strictly above it. The negative cases are not reachable through a window this
+// service accepts, and are here because integer division truncates towards zero
+// rather than towards the epoch - which would skip every boundary between such an
+// instant and 1970.
+func TestTheChunkBoundariesAreMultiplesOfTheChunkLength(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		unix  int64
+		of    int64
+		after int64
+	}{
+		"the epoch itself":            {0, 0, 3600},
+		"one second into an hour":     {1, 0, 3600},
+		"exactly on a boundary":       {3600, 3600, 7200},
+		"one second before one":       {3599, 0, 3600},
+		"a real instant":              {1_780_272_000 + 1234, 1_780_272_000, 1_780_272_000 + 3600},
+		"one second before the epoch": {-1, -3600, 0},
+		"exactly one hour before it":  {-3600, -3600, 0},
+		"an hour and a second before": {-3601, -7200, -3600},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := historyChunkOf(testCase.unix); got != testCase.of {
+				t.Errorf("the boundary at or below %d is %d, expected %d", testCase.unix, got, testCase.of)
+			}
+			if got := historyChunkAfter(testCase.unix); got != testCase.after {
+				t.Errorf("the boundary after %d is %d, expected %d", testCase.unix, got, testCase.after)
+			}
+			if of := historyChunkOf(testCase.unix); of%historyChunkSeconds != 0 {
+				t.Errorf("%d is not a multiple of the chunk length", of)
+			}
+			if after := historyChunkAfter(testCase.unix); after <= testCase.unix {
+				t.Errorf("the boundary after %d is %d, which is not after it", testCase.unix, after)
 			}
 		})
 	}

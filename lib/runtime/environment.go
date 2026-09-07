@@ -701,6 +701,25 @@ func (this *environment) resetForHistory() {
 	this.dirty = true
 }
 
+// restoreForHistory puts the state and the value cache of a checkpoint back into
+// the environment, for a run that is being continued after a restart. It is what
+// seeding is for a fresh run, and it runs after resetForHistory has thrown the
+// live state away.
+//
+// The state is copied deeply, so nothing the run writes can reach the checkpoint
+// the store handed out.
+func (this *environment) restoreForHistory(checkpoint repo.HistoryCheckpoint) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	this.underHistory = true
+	this.state = snapshotState(this.id, checkpoint.State)
+	this.lastValues = make(map[string]float64, len(checkpoint.LastValues))
+	for id, value := range checkpoint.LastValues {
+		this.lastValues[id] = value
+	}
+	this.dirty = true
+}
+
 // endHistory releases the environment again. It runs whatever became of the run,
 // so that a failed or cancelled one cannot leave the environment refusing every
 // state change forever.
@@ -896,45 +915,53 @@ func (this *environment) assetStates(assetId string) map[string]interface{} {
 //
 // It must be called with mux held.
 func (this *environment) snapshot() repo.RuntimeState {
+	return snapshotState(this.id, this.state)
+}
+
+// snapshotState is that copy of any state, so that reading one out of the
+// environment and putting a stored one back cannot drift apart when the state
+// gains a field. The three maps of the result are always there, the rest only
+// where the source has something.
+func snapshotState(id string, state repo.RuntimeState) repo.RuntimeState {
 	result := repo.RuntimeState{
-		EnvironmentId: this.id,
-		Context:       copyStates(this.state.Context),
-		Zones:         make(map[string]map[string]interface{}, len(this.state.Zones)),
-		Assets:        make(map[string]map[string]interface{}, len(this.state.Assets)),
+		EnvironmentId: id,
+		Context:       copyStates(state.Context),
+		Zones:         make(map[string]map[string]interface{}, len(state.Zones)),
+		Assets:        make(map[string]map[string]interface{}, len(state.Assets)),
 	}
-	for id, states := range this.state.Zones {
+	for id, states := range state.Zones {
 		result.Zones[id] = copyStates(states)
 	}
-	for id, states := range this.state.Assets {
+	for id, states := range state.Assets {
 		result.Assets[id] = copyStates(states)
 	}
-	if len(this.state.Anchors) > 0 {
-		result.Anchors = make(map[string]int64, len(this.state.Anchors))
-		for id, anchor := range this.state.Anchors {
+	if len(state.Anchors) > 0 {
+		result.Anchors = make(map[string]int64, len(state.Anchors))
+		for id, anchor := range state.Anchors {
 			result.Anchors[id] = anchor
 		}
 	}
-	if len(this.state.LastPublished) > 0 {
-		result.LastPublished = make(map[string]repo.PublishedValue, len(this.state.LastPublished))
-		for id, published := range this.state.LastPublished {
+	if len(state.LastPublished) > 0 {
+		result.LastPublished = make(map[string]repo.PublishedValue, len(state.LastPublished))
+		for id, published := range state.LastPublished {
 			result.LastPublished[id] = published
 		}
 	}
-	if len(this.state.ScheduleRuns) > 0 {
-		result.ScheduleRuns = make(map[string]repo.ScheduleRun, len(this.state.ScheduleRuns))
-		for id, run := range this.state.ScheduleRuns {
+	if len(state.ScheduleRuns) > 0 {
+		result.ScheduleRuns = make(map[string]repo.ScheduleRun, len(state.ScheduleRuns))
+		for id, run := range state.ScheduleRuns {
 			result.ScheduleRuns[id] = run
 		}
 	}
-	if len(this.state.MeterExchanges) > 0 {
-		result.MeterExchanges = make(map[string]float64, len(this.state.MeterExchanges))
-		for key, offset := range this.state.MeterExchanges {
+	if len(state.MeterExchanges) > 0 {
+		result.MeterExchanges = make(map[string]float64, len(state.MeterExchanges))
+		for key, offset := range state.MeterExchanges {
 			result.MeterExchanges[key] = offset
 		}
 	}
-	if len(this.state.Approaching) > 0 {
-		result.Approaching = make(map[string]map[string]repo.Approach, len(this.state.Approaching))
-		for zoneId, running := range this.state.Approaching {
+	if len(state.Approaching) > 0 {
+		result.Approaching = make(map[string]map[string]repo.Approach, len(state.Approaching))
+		for zoneId, running := range state.Approaching {
 			copied := make(map[string]repo.Approach, len(running))
 			for key, approach := range running {
 				copied[key] = approach

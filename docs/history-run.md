@@ -148,13 +148,20 @@ Everything the runtime keeps for the environment:
 | a context key the timeline governs | seeded with the value it stands at at `from`, and read against the virtual instant from there (`docs/dated-changes.md`) |
 
 A value that survived from the live simulation would be a value from the future,
-which is why none of it is carried.
+which is why none of it is carried. A **resumed** run does not seed again: it
+continues from its checkpoint, which holds all of this as the interrupted run
+had left it.
 
 ## Invariants
 
 - **State `done` means the live simulation is running again**, on the state the
-  run arrived at. The handover flushes that state, reads the definition again,
-  starts the channels and only then turns the status.
+  run arrived at. The handover flushes that state, stores the outcome, reads the
+  definition again, starts the channels and only then turns the status. The
+  outcome is stored **before** the handover, which can take minutes: a record
+  left `running` for that long is picked up by the next start as a run that is in
+  fact over. That write is attempted three times, and an abort is additionally
+  stored where it is decided - so a write that still fails cannot leave a
+  stopped run resumable.
 - **One run per environment**, and a run and a backfill exclude each other in
   both directions. Both are `409`.
 - **The state the run arrived at is on disk before a live tick can move it.** The
@@ -165,6 +172,15 @@ which is why none of it is carried.
   end state**, with the order above. The same limits as the backfill apply:
   `httpGet` in a script and `time.Local` are outside it, and so is how far the
   run chases the clock at the end.
+- **A run cut at a chunk boundary and continued from what was stored there
+  produces the same series and the same end state as an uninterrupted one.** The
+  ticks are keyed by the identity of a grid (`context:<key>`, `<channel id>`,
+  `<channel id>:publish`), not by its position, and a checkpoint that knows
+  nothing about a grid of the definition is refused rather than continued at
+  zero. `TestAnInterruptedHistoryRunResumesIntoTheSameSeries` in `lib/runtime`
+  is that comparison.
+- **A run is stored before the live channels are stopped for it.** A store that
+  will not take it is a refusal, not a run nothing can resume.
 
 ## While a run is going
 
@@ -175,14 +191,16 @@ which is why none of it is carried.
 | a second run, or a backfill | `409` |
 | a device command | dropped, with a WARN. A command already in flight when the run starts is waited for, since it does not run on the environment context |
 | an edit to the definition | accepted and stored; it takes effect when the run ends, since the handover reads the definition again |
-| deleting the environment | aborts the run, and it is not restarted |
-| shutting the service down | aborts the run; the partial state is flushed |
+| deleting the environment | aborts the run, and it is not restarted; its record goes with the environment |
+| shutting the service down | suspends the run: the partial state is flushed, the record and the status stay `running`, and the next start continues it from the last checkpoint. A shutdown that arrives once the window is drained and nothing was lost ends the run as `done` instead - there is nothing left to continue |
 
 ## Limits
 
 - **`from` must lie in the past**, at least **one minute** and not more than
   **366 days** ago. The lower bound is there because the operation is
-  destructive: nobody discards a live state to reconstruct a second of it.
+  destructive: nobody discards a live state to reconstruct a second of it. It is
+  truncated to whole milliseconds, the precision the store keeps, so a resumed
+  run lands on the instants of the run it continues.
 - **Twenty million simulation steps** per run, counted across every channel and
   context source of the environment before anything is stopped, and asked again
   against the definition that is actually going to be run. A channel publishing
@@ -191,6 +209,12 @@ which is why none of it is carried.
   start later, or widen the intervals. The steps the run adds while it chases
   the clock are not counted, and are bounded instead by the halving above: at
   most about twice the pass they follow.
+- **Two grids of one environment may not share an identity.** A channel called
+  `context:<key>` next to a context source `<key>`, or `<id>:publish` next to the
+  split channel `<id>`, is a document validation takes - it only asks for unique
+  ids - while a checkpoint could not tell the two ticks apart. Such a run is
+  refused with `400` where the window is checked, before the live state is
+  discarded for it.
 - Every reading is published under `Sync` qos, so one publish costs a kafka
   produce ack - and where `publish_to_postgres` is on, the longer of that and
   the timescale write beside it rather than the sum of the two. The publish pool
@@ -211,8 +235,40 @@ hands the environment back, which leaves the live simulation on the partial
 state — a consistent state of an earlier instant, not a rollback. `failed` and
 `cancelled` mean the same thing for the state: it is what the run had reached.
 
-The run registry lives in memory. A restart forgets every run and `GET` then
-answers `404`, exactly as it does for a backfill.
+The run is worked in chunks of **one virtual hour**. At the first due event at
+or past a multiple of an hour on the unix clock the pool is drained, every ack is
+settled and a checkpoint is written: the position, the tick of every grid, the
+memory each channel keeps outside the state, the value cache and the state
+itself. Everything is quiescent at that boundary, which is what makes the
+checkpoint complete. Several boundaries the run crosses without a due event in
+between collapse into one write at the last of them, since the run stands at the
+same instant at each. A checkpoint that cannot be written is one ERROR line and
+the run goes on unremembered.
+
+**A restart resumes the run.** One document per environment in `history_jobs`
+holds it, and every
+job still in state `running` is picked up when the service starts: the records
+are read **before** the environments are built, so an environment whose run is
+resumed starts no live runner at all rather than publishing readings of the
+present until the resume takes it away. The generation is built from **the
+definition the run was started against** while the datasets are loaded fresh, and
+the run continues from the last checkpoint. An edit made during the run still
+takes effect at the handover, which reads the current definition. A job whose
+environment is gone is closed as `cancelled`. A shutdown therefore costs the
+current chunk, not the run.
+
+**A run is resumed at most three times without reaching a chunk boundary.** Every
+resume is counted in the record once the run is registered and before it runs,
+and the fourth start closes the run as `failed` instead: a run that takes the
+service down while it is being picked up would otherwise come back with every
+start. Reaching a boundary clears the count, because a run that got that far has
+got going - so a long run is not given up on over the shutdowns it survived. A
+resume the registry refuses spends nothing: its environment goes to the live
+simulation and the record stays as it was.
+
+`GET` and `DELETE` answer out of that document once the registry no longer knows
+the run - after a restart that is how the outcome of an earlier run is still
+readable, and `404` now means "there never was one here".
 
 Kafka retention applies as it does to a backfill: a record carrying a historical
 timestamp may be considered expired at once. The destination is timescale, and
@@ -225,9 +281,15 @@ that row is written synchronously in the same call.
   never would; `position` in the status then says how much of it is still open,
   and the live simulation starts there. Widening the intervals or shortening the
   window is the way to a seam that closes.
-- **No resume after a crash.** The flusher keeps writing during the run, so a
-  crash leaves the live simulation on the virtual state of the last flush — a
-  consistent state of an earlier instant. Starting the run again is the way back.
+- **A crash inside a chunk republishes that chunk.** The resume continues from
+  the last checkpoint, so up to one virtual hour of readings goes out a second
+  time; timescale has no uniqueness on time and the rows cannot be deleted
+  (SNRGY-4663). A shutdown that ends the run cleanly is remembered at the last
+  instant it simulated and repeats nothing - unless it dropped readings the pool
+  still held staged, in which case it is remembered at the last boundary instead,
+  because repeating an hour is better than losing those readings. The same holds
+  for the drain a boundary itself begins with: a boundary whose drain lost
+  readings is not written, so the previous one stays.
 - **A run is not idempotent.** Running the same window twice writes every row
   twice; the `409` prevents it concurrently, not sequentially.
 - **A failed reading is counted and named, not retried.**

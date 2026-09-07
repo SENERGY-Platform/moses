@@ -116,7 +116,7 @@ func postHistoryH(environments repo.Environments, notifier RuntimeNotifier) (str
 // @Summary The history run of one environment
 // @Description Where the run stands: running, done, failed or cancelled, which virtual instant it has reached, how many publish steps went out or were refused, and per channel what became of it — including the reason a channel published nothing at all. `done` means the live simulation is running again on the state the run arrived at; `failed` and `cancelled` mean it is running again on the partial state the run had reached, which is a consistent state of an earlier instant and not a rollback.
 // @Description
-// @Description The registry is held in memory only. A restart forgets every run, and this then answers 404 rather than claiming a state it cannot know.
+// @Description A run is stored, so a restart does not forget it: a run that was still going is resumed from its last checkpoint - written at every virtual hour - and continues to be followed here, and the outcome of a run that is over stays readable. 404 therefore means that no run of this environment is known at all.
 // @Tags Environment
 // @Produce json
 // @Security Bearer

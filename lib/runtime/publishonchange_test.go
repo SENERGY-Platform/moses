@@ -563,7 +563,7 @@ func TestADueEvaluationIsRunBeforeTheHeartbeatIsServed(t *testing.T) {
 	def := testEnvironment(id, channel)
 
 	publisher := &fakePublisher{}
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, publisher)
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), publisher)
 	gen := newGeneration(def, nil)
 	env := &environment{id: id, gen: gen, state: repo.RuntimeState{EnvironmentId: id}}
 	if len(gen.sensors) != 1 || gen.sensors[0].cov == nil {

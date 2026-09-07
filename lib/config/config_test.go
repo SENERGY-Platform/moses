@@ -414,6 +414,7 @@ func TestConfigFieldsMapToTheExpectedEnvironmentVariableNames(t *testing.T) {
 		"StateCollectionName":       "STATE_COLLECTION_NAME",
 		"DatasetCollectionName":     "DATASET_COLLECTION_NAME",
 		"ShareCollectionName":       "SHARE_COLLECTION_NAME",
+		"HistoryJobCollectionName":  "HISTORY_JOB_COLLECTION_NAME",
 		"TimescaleWrapperUrl":       "TIMESCALE_WRAPPER_URL",
 		"StateFlushInterval":        "STATE_FLUSH_INTERVAL",
 		"SyncCompression":           "SYNC_COMPRESSION",

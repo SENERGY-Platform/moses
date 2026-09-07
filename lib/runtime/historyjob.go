@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
+	"github.com/SENERGY-Platform/moses/lib/domain"
 	"github.com/SENERGY-Platform/moses/lib/repo"
 	"github.com/SENERGY-Platform/moses/lib/util"
 )
@@ -42,8 +43,7 @@ var (
 	ErrHistoryRunning = errors.New("a history run of this environment is in progress")
 
 	// ErrNoHistory is returned when nothing is known about a history run of this
-	// environment. The registry is in memory, so this is also the honest answer
-	// after a restart.
+	// environment: neither the registry in memory nor the store has one.
 	ErrNoHistory = errors.New("nothing is known about a history run of this environment")
 )
 
@@ -108,18 +108,81 @@ type HistoryStatus struct {
 	Channels []HistoryChannelStatus `json:"channels,omitempty"`
 }
 
-// historyJob is one run. status is guarded by mux; everything else is written
-// once before the goroutine starts.
+// historyJob is one run. status and abortAsked are guarded by mux; everything
+// else is written once before the goroutine starts.
 type historyJob struct {
 	mux    sync.Mutex
 	status HistoryStatus
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	// record is what the store holds for this run: what Save wrote at the start,
+	// or what a resume was built from. The definition is in there, so finishing
+	// can write the whole document again without reading it back.
+	record repo.HistoryJobRecord
+
+	// abortAsked tells an abort somebody asked for from the cancellation a
+	// shutdown causes. Only the second one suspends the run for a resume.
+	abortAsked bool
+
+	// removed says the environment of this run is being deleted, which decides
+	// what becomes of its record: it is deleted rather than written back.
+	removed bool
+}
+
+// beginAbort marks a run somebody asked to stop, so a shutdown arriving
+// afterwards does not store it as suspended and resume it on the next start, and
+// reports whether it was still running. Both under the one mutex, so a run that
+// ended in between is reported as it ended rather than being stored as cancelled
+// over its own outcome.
+func (this *historyJob) beginAbort() (HistoryStatus, bool) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	if this.status.State != HistoryRunning {
+		return this.statusCopy(), false
+	}
+	this.abortAsked = true
+	return this.statusCopy(), true
+}
+
+func (this *historyJob) aborted() bool {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	return this.abortAsked
+}
+
+// markRemovedWithEnvironment is the deletion path's mark: the run is aborted and
+// its record goes with the environment. Without it a shutdown racing the
+// deletion would upsert the record, definition and all, for an environment that
+// is not there any more.
+func (this *historyJob) markRemovedWithEnvironment() {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	this.abortAsked = true
+	this.removed = true
+}
+
+func (this *historyJob) removedWithEnvironment() bool {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	return this.removed
+}
+
+func (this *historyJob) definition() domain.Environment {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	return this.record.Definition
 }
 
 func (this *historyJob) snapshot() HistoryStatus {
 	this.mux.Lock()
 	defer this.mux.Unlock()
+	return this.statusCopy()
+}
+
+// statusCopy is the copy itself, for a caller that holds mux: nothing of it may
+// share a slice or a pointer with the run that keeps going.
+func (this *historyJob) statusCopy() HistoryStatus {
 	result := this.status
 	result.Channels = append([]HistoryChannelStatus{}, this.status.Channels...)
 	if this.status.Position != nil {
@@ -139,11 +202,91 @@ func (this *historyJob) update(change func(status *HistoryStatus)) {
 	change(&this.status)
 }
 
+// historyStatusOfRecord and historyRecordOf are the mapping between the run in
+// memory and the run in the store, one function each way and nowhere else: a GET
+// after a restart is served out of the record, and everything a run reports about
+// itself is stored through the same shape.
+func historyStatusOfRecord(record repo.HistoryJobRecord) HistoryStatus {
+	result := HistoryStatus{
+		EnvironmentId: record.EnvironmentId,
+		State:         HistoryState(record.State),
+		From:          record.From,
+		To:            record.To,
+		StartedAt:     record.StartedAt,
+		Published:     record.Published,
+		Failed:        record.Failed,
+		LastError:     record.LastError,
+		Error:         record.Error,
+	}
+	if record.FinishedAt != nil {
+		finished := *record.FinishedAt
+		result.FinishedAt = &finished
+	}
+	if record.Position != nil {
+		position := *record.Position
+		result.Position = &position
+	}
+	for _, channel := range record.Channels {
+		result.Channels = append(result.Channels, HistoryChannelStatus{
+			ChannelId:   channel.ChannelId,
+			AssetId:     channel.AssetId,
+			Name:        channel.Name,
+			Publishable: channel.Publishable,
+			Reason:      channel.Reason,
+			Published:   channel.Published,
+			Silent:      channel.Silent,
+			Failed:      channel.Failed,
+			LastError:   channel.LastError,
+		})
+	}
+	return result
+}
+
+// historyRecordOf carries no checkpoint: it is the shape of a run that is over,
+// and a finished run has nothing left to resume from.
+func historyRecordOf(status HistoryStatus, definition domain.Environment) repo.HistoryJobRecord {
+	result := repo.HistoryJobRecord{
+		EnvironmentId: status.EnvironmentId,
+		State:         string(status.State),
+		From:          status.From,
+		To:            status.To,
+		StartedAt:     status.StartedAt,
+		Published:     status.Published,
+		Failed:        status.Failed,
+		LastError:     status.LastError,
+		Error:         status.Error,
+		Definition:    definition,
+	}
+	if status.FinishedAt != nil {
+		finished := *status.FinishedAt
+		result.FinishedAt = &finished
+	}
+	if status.Position != nil {
+		position := *status.Position
+		result.Position = &position
+	}
+	for _, channel := range status.Channels {
+		result.Channels = append(result.Channels, repo.HistoryChannelRecord{
+			ChannelId:   channel.ChannelId,
+			AssetId:     channel.AssetId,
+			Name:        channel.Name,
+			Publishable: channel.Publishable,
+			Reason:      channel.Reason,
+			Published:   channel.Published,
+			Silent:      channel.Silent,
+			Failed:      channel.Failed,
+			LastError:   channel.LastError,
+		})
+	}
+	return result
+}
+
 // StartHistory replaces the live state of one environment by the one it would
 // have if it had been running since from.
 //
-// The window and the volume are checked before anything is stopped, so a caller
-// that asks for an impossible run does not interrupt the simulation for it.
+// The window, the volume and the grid identities are checked before anything is
+// stopped, so a caller that asks for an impossible run does not interrupt the
+// simulation for it.
 // Everything after that runs with the lifecycle mutex held, up to the point
 // where the run is registered and the state is replaced: a Reload or a Remove
 // arriving in between would otherwise restart the channels the run just stopped.
@@ -164,6 +307,9 @@ func (this *Runtime) StartHistory(id string, from time.Time) (HistoryStatus, err
 		return HistoryStatus{}, repo.ErrNotRunning
 	}
 	if err = checkHistoryVolume(gen, from, to); err != nil {
+		return HistoryStatus{}, err
+	}
+	if err = checkHistoryGrids(gen); err != nil {
 		return HistoryStatus{}, err
 	}
 
@@ -190,29 +336,60 @@ func (this *Runtime) StartHistory(id string, from time.Time) (HistoryStatus, err
 	if err = checkHistoryVolume(gen, from, to); err != nil {
 		return HistoryStatus{}, err
 	}
-
-	job, err := this.registerHistory(id, from, to)
-	if err != nil {
+	if err = checkHistoryGrids(gen); err != nil {
 		return HistoryStatus{}, err
 	}
 
-	//the gate closes first, then the two kinds of work in flight are waited for:
-	//the tickers, which end with the environment context, and the command
-	//dispatches, which do not run on it at all. Only then is the state replaced,
-	//so nothing of the present can land in the state the run starts from.
-	env.markUnderHistory()
-	this.stopRunners(id)
-	env.commands.Wait()
-	env.resetForHistory()
-	//seeded with the window start, not with now: the run stands at from, and a
-	//governed context key seeded from today would put the future into its first
-	//tick
-	env.seed(gen, from)
+	record := repo.HistoryJobRecord{
+		EnvironmentId: id,
+		State:         string(HistoryRunning),
+		From:          from,
+		To:            to,
+		StartedAt:     time.Now(),
+		Definition:    gen.def,
+	}
+	job, err := this.registerHistory(record)
+	if err != nil {
+		return HistoryStatus{}, err
+	}
+	//stored before anything is stopped, and the run is refused if that fails: a
+	//run the store does not know cannot be resumed, and at this point the live
+	//simulation is still running, so refusing costs nothing
+	storeCtx, cancelStore := context.WithTimeout(context.Background(), storeTimeout)
+	err = this.historyJobs.Save(storeCtx, record)
+	cancelStore()
+	if err != nil {
+		this.unregisterHistory(id, job)
+		return HistoryStatus{}, err
+	}
 
 	util.Logger.Info("history run started", "environment", id, "from", from, "to", to,
 		"channels", len(gen.sensors), "context_sources", len(gen.def.ContextSources))
-	go this.runHistoryJob(job, env, gen, from, to)
+	this.beginHistoryRun(job, env, gen, from, to, nil)
 	return job.snapshot(), nil
+}
+
+// beginHistoryRun takes the environment away from the live simulation and starts
+// the run on it, for a request as for a resume. Must be called with lifecycle
+// held, the run registered and its record stored. The gate closes first, then
+// the tickers and the command dispatches in flight are waited for, and only then
+// is the state replaced, so nothing of the present lands in it.
+func (this *Runtime) beginHistoryRun(job *historyJob, env *environment, gen *generation, from time.Time, to time.Time, resume *repo.HistoryCheckpoint) {
+	env.markUnderHistory()
+	this.stopRunners(env.id)
+	env.commands.Wait()
+	env.resetForHistory()
+	if resume != nil {
+		//the checkpoint carries the seeded state of the interrupted run and
+		//everything it computed after it, so seeding again would say nothing
+		env.restoreForHistory(*resume)
+	} else {
+		//seeded with the window start, not with now: the run stands at from, and a
+		//governed context key seeded from today would put the future into its
+		//first tick
+		env.seed(gen, from)
+	}
+	go this.runHistoryJob(job, env, gen, from, to, resume)
 }
 
 // registerHistory takes the exclusivity decision and puts the run into the
@@ -222,7 +399,8 @@ func (this *Runtime) StartHistory(id string, from time.Time) (HistoryStatus, err
 // the order every other place that holds both uses. The worker count is taken
 // under the same mutex as the stop flag, so a run can never be registered after
 // Stop began waiting for the workers.
-func (this *Runtime) registerHistory(id string, from time.Time, to time.Time) (*historyJob, error) {
+func (this *Runtime) registerHistory(record repo.HistoryJobRecord) (*historyJob, error) {
+	id := record.EnvironmentId
 	this.historyMux.Lock()
 	defer this.historyMux.Unlock()
 	if this.historiesStopped {
@@ -251,34 +429,43 @@ func (this *Runtime) registerHistory(id string, from time.Time, to time.Time) (*
 		base = context.Background()
 	}
 	ctx, cancel := context.WithCancel(base)
-	job := &historyJob{
-		cancel: cancel,
-		status: HistoryStatus{
-			EnvironmentId: id,
-			State:         HistoryRunning,
-			From:          from,
-			To:            to,
-			StartedAt:     time.Now(),
-		},
-	}
+	//taken from the record rather than built here, so a resumed run reports the
+	//counters and the position it had reached instead of starting at zero
+	status := historyStatusOfRecord(record)
+	status.State = HistoryRunning
+	status.FinishedAt = nil
+	job := &historyJob{cancel: cancel, status: status, record: record}
 	job.ctx = ctx
 	this.histories[id] = job
 	this.historyWorkers.Add(1)
 	return job, nil
 }
 
+// unregisterHistory takes a registered run back out, for a start that refuses it
+// after the registration. Nothing has been stopped for it at that point, so the
+// live simulation carries on as if the run had never been asked for.
+func (this *Runtime) unregisterHistory(id string, job *historyJob) {
+	this.historyMux.Lock()
+	if this.histories[id] == job {
+		delete(this.histories, id)
+	}
+	this.historyMux.Unlock()
+	this.historyWorkers.Done()
+	job.cancel()
+}
+
 // runHistoryJob is the run in two phases. Only the first is counted by
 // historyWorkers: the second needs the lifecycle mutex, which Stop holds while
 // it waits for those workers, so counting it would deadlock.
-func (this *Runtime) runHistoryJob(job *historyJob, env *environment, gen *generation, from time.Time, to time.Time) {
-	result, err := this.runHistoryEngine(job, env, gen, from, to)
+func (this *Runtime) runHistoryJob(job *historyJob, env *environment, gen *generation, from time.Time, to time.Time, resume *repo.HistoryCheckpoint) {
+	result, err := this.runHistoryEngine(job, env, gen, from, to, resume)
 	this.finishHistory(job, env, gen.def.Id, result, err)
 }
 
 // runHistoryEngine is the counted phase. A bug in the simulation of one
 // environment must not take the service down with it, and the caller polling the
 // status is the one who needs to hear about it.
-func (this *Runtime) runHistoryEngine(job *historyJob, env *environment, gen *generation, from time.Time, to time.Time) (result HistoryResult, err error) {
+func (this *Runtime) runHistoryEngine(job *historyJob, env *environment, gen *generation, from time.Time, to time.Time, resume *repo.HistoryCheckpoint) (result HistoryResult, err error) {
 	//registered first so that it runs last: the worker stays counted until the
 	//panic above it has been turned into an error
 	defer this.historyWorkers.Done()
@@ -300,20 +487,28 @@ func (this *Runtime) runHistoryEngine(job *historyJob, env *environment, gen *ge
 			current.LastError = lastError
 		})
 	}
+	id := gen.def.Id
+	checkpoint := func(progress repo.HistoryJobProgress) error {
+		//deliberately not the run's context: the checkpoint of an abort or a
+		//shutdown is written after that context has been cancelled, and it is the
+		//one that says where a resume continues
+		ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
+		defer cancel()
+		return this.historyJobs.Checkpoint(ctx, id, progress)
+	}
 	//chaseTheClock: to was the present when the run was asked for, so the run has
 	//to close the time it spends simulating rather than hand over across it
-	return this.historyEngine(job.ctx, env, gen, from, to, chaseTheClock, progress)
+	return this.historyEngine(job.ctx, env, gen, from, to, chaseTheClock, progress, resume, checkpoint)
 }
 
-// finishHistory hands the environment back to the live simulation and only then
-// reports the run as over. It runs after every outcome - success, failure, panic
-// and cancellation alike - because an environment left marked as owned by a run
-// would refuse every state change and never tick again.
+// finishHistory stores the outcome, hands the environment back to the live
+// simulation and only then reports the run as over. It runs after every outcome,
+// because an environment left owned by a run would never tick again.
 //
-// The order is the point. The state the run arrived at is flushed before the
-// live runners start, so the ramp is on disk even if the process dies in the
-// next second; the definition is read again, so an edit made during the run
-// takes effect now; and the status turns to done last, which is what makes
+// The order is the point: the state is flushed before the runners start, the
+// terminal record is written before the handover because the handover can take
+// minutes and a record left running that long would be resumed by the next
+// start as a run that is over, and the status turns last, which is what makes
 // "done" mean "the simulation is running again".
 func (this *Runtime) finishHistory(job *historyJob, env *environment, id string, result HistoryResult, runErr error) {
 	//released here rather than only on an abort: a run that ended normally would
@@ -331,28 +526,16 @@ func (this *Runtime) finishHistory(job *historyJob, env *environment, id string,
 	env.markDirty()
 	this.flush(env)
 
-	restarted := false
-	if this.running {
-		//not derived from this.ctx, for the reason Reload gives: a read arriving
-		//while the service shuts down should find a cancelled runtime rather than
-		//fail with a context error that reads like a database problem
-		ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
-		def, err := this.environments.Get(ctx, id)
-		cancel()
-		switch {
-		case errors.Is(err, repo.ErrNotFound):
-			util.Logger.Info("the environment no longer exists, it is not restarted after the history run", "environment", id)
-			this.removeEnvironment(id)
-		case err != nil:
-			//the state is flushed and the environment is released; the next reload
-			//or restart starts it again
-			util.Logger.Error("unable to read the environment after the history run, it is not restarted",
-				attributes.ErrorKey, err, "environment", id)
-		default:
-			restarted = this.startEnvironment(context.Background(), def)
-			this.rebuildIndex()
-		}
-	}
+	//a shutdown does not end the run, it suspends it: the last checkpoint is where
+	//the next start continues, so the stored record stays running. An abort
+	//somebody asked for is not a suspension, whatever the runtime is doing at the
+	//time, or a deleted or aborted run would come back on every start.
+	suspended := !this.running && errors.Is(runErr, context.Canceled) && !job.aborted()
+	//and the record of an environment that is being deleted goes rather than being
+	//written back, whether or not this runtime is still running: read here, so a
+	//shutdown racing the deletion cannot upsert the definition of an environment
+	//that is gone
+	removed := job.removedWithEnvironment()
 
 	//read off what the engine returned rather than off the context: a run that
 	//finished normally milliseconds before an abort or a shutdown reached it did
@@ -372,55 +555,381 @@ func (this *Runtime) finishHistory(job *historyJob, env *environment, id string,
 		broke = true
 	}
 	finished := time.Now()
-	job.update(func(current *HistoryStatus) {
-		current.State = state
-		current.Error = message
-		current.FinishedAt = &finished
-		if broke {
-			//a run that panicked returns nothing, so the counters the progress
-			//reports left behind are the last thing known about it
-			return
-		}
-		current.Published = result.Published
-		current.Failed = result.Failed
-		current.LastError = result.LastError
-		current.Channels = result.Channels
+	//built before it is published: the engine has returned, so nothing else writes
+	//this status, and the store is written while it still says running - a caller
+	//that reads done and then asks again after a restart has to find the same
+	//outcome, not a document of a run that was still going
+	final := job.snapshot()
+	final.State = state
+	final.Error = message
+	final.FinishedAt = &finished
+	if !broke {
+		//a run that panicked returns nothing, so the counters the progress reports
+		//left behind are the last thing known about it
+		final.Published = result.Published
+		final.Failed = result.Failed
+		final.LastError = result.LastError
+		final.Channels = result.Channels
 		if !result.Position.IsZero() {
 			position := result.Position
-			current.Position = &position
+			final.Position = &position
 		}
 		if !result.End.IsZero() {
-			current.To = result.End
+			final.To = result.End
 		}
-	})
+	}
+
+	switch {
+	case suspended:
+		//the record stays as it is, running and with its last checkpoint: that is
+		//what the next start continues from
+		util.Logger.Info("history run suspended for restart", "environment", id,
+			"position", final.Position, "from", final.From, "to", final.To,
+			"published", final.Published)
+	case removed:
+		//no document of a run of an environment that is not there any more. This is
+		//the second delete the deletion path already does, from the one place that
+		//knows a write of this run is still to come.
+		this.forgetHistoryRecord(id)
+	default:
+		this.storeFinishedHistory(id, final, job.definition())
+	}
+
+	restarted := false
+	if this.running && !removed {
+		//not derived from this.ctx, for the reason Reload gives: a read arriving
+		//while the service shuts down should find a cancelled runtime rather than
+		//fail with a context error that reads like a database problem
+		ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
+		def, err := this.environments.Get(ctx, id)
+		cancel()
+		switch {
+		case errors.Is(err, repo.ErrNotFound):
+			util.Logger.Info("the environment no longer exists, it is not restarted after the history run", "environment", id)
+			this.removeEnvironment(id)
+			//the definition was deleted while the run was ending, so the record that
+			//was just written goes again
+			this.forgetHistoryRecord(id)
+		case err != nil:
+			//the state is flushed and the environment is released; the next reload
+			//or restart starts it again
+			util.Logger.Error("unable to read the environment after the history run, it is not restarted",
+				attributes.ErrorKey, err, "environment", id)
+		default:
+			restarted = this.startEnvironment(context.Background(), def)
+			this.rebuildIndex()
+		}
+	}
+
+	if suspended {
+		//the status stays running, exactly as the store has it: the next start
+		//continues this run, and this process is on its way out
+		return
+	}
+	job.update(func(current *HistoryStatus) { *current = final })
 	util.Logger.Info("history run finished", "environment", id, "state", string(state),
 		"published", result.Published, "failed", result.Failed, "restarted", restarted)
 }
 
+// historyTerminalSaveWaits are the waits before the second and third attempt at
+// the terminal write, historyTerminalSaveTimeout the budget of one; three
+// attempts because that write keeps the next start from resuming a run that is
+// over, each bounded well below storeTimeout because the retry holds lifecycle.
+var historyTerminalSaveWaits = []time.Duration{200 * time.Millisecond, time.Second}
+
+const historyTerminalSaveTimeout = 3 * time.Second
+
+// storeFinishedHistory writes the run as it ended, retrying a failure. A write
+// that still does not land is an ERROR and nothing more: the environment goes
+// back to the live simulation either way, and the status in memory is what a
+// caller of this instance reads.
+func (this *Runtime) storeFinishedHistory(id string, status HistoryStatus, definition domain.Environment) {
+	record := historyRecordOf(status, definition)
+	for attempt := 0; ; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), historyTerminalSaveTimeout)
+		err := this.historyJobs.Save(ctx, record)
+		cancel()
+		if err == nil {
+			return
+		}
+		if attempt >= len(historyTerminalSaveWaits) {
+			util.Logger.Error("unable to store the finished history run", attributes.ErrorKey, err,
+				"environment", id, "state", string(status.State), "attempts", attempt+1)
+			return
+		}
+		util.Logger.Warn("unable to store the finished history run, trying again",
+			attributes.ErrorKey, err, "environment", id, "state", string(status.State), "attempt", attempt+1)
+		time.Sleep(historyTerminalSaveWaits[attempt])
+	}
+}
+
+func (this *Runtime) forgetHistoryRecord(id string) {
+	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
+	defer cancel()
+	if err := this.historyJobs.Delete(ctx, id); err != nil {
+		util.Logger.Error("unable to delete the history run of an environment that is gone",
+			attributes.ErrorKey, err, "environment", id)
+	}
+}
+
+// maxHistoryResumes is how often a run may be picked up again without reaching a
+// chunk boundary in between - a run that reaches one has got going, and the store
+// clears the count there. A run that takes the service down on every start would
+// otherwise be resumed for ever, and a window nobody can finish is worth less
+// than a service that starts.
+const maxHistoryResumes = 3
+
+// resumableHistories is the list of runs this start continues. It runs before
+// the environments are built, so an environment whose run is resumed starts no
+// live runner that would publish the present into the window; a job list that
+// cannot be read leaves the service starting normally with nothing resumed.
+func (this *Runtime) resumableHistories(ctx context.Context) []repo.HistoryJobRecord {
+	records, err := this.historyJobs.Running(ctx)
+	if err != nil {
+		//already reported by the store, with the reason
+		return nil
+	}
+	result := make([]repo.HistoryJobRecord, 0, len(records))
+	for _, record := range records {
+		if record.Resumes >= maxHistoryResumes {
+			this.closeExhaustedHistory(record)
+			continue
+		}
+		result = append(result, record)
+	}
+	return result
+}
+
+// closeExhaustedHistory ends a run that has been resumed as often as it may be.
+// Its environment starts live as any other, since nothing is going to take it
+// away again.
+func (this *Runtime) closeExhaustedHistory(record repo.HistoryJobRecord) {
+	finished := time.Now()
+	record.State = string(HistoryFailed)
+	record.Error = "the run was resumed three times without reaching a chunk boundary"
+	record.FinishedAt = &finished
+	record.Checkpoint = nil
+	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
+	defer cancel()
+	if err := this.historyJobs.Save(ctx, record); err != nil {
+		util.Logger.Error("unable to close a history run that was resumed too often",
+			attributes.ErrorKey, err, "environment", record.EnvironmentId)
+		return
+	}
+	util.Logger.Error("a history run was resumed three times without reaching a chunk boundary, it is closed as failed",
+		"environment", record.EnvironmentId, "resumes", record.Resumes)
+}
+
+// resumeHistories continues the runs the start collected. It must be called with
+// lifecycle held, once the environments are up and before the flusher runs: a
+// flush in between would write the live state the run is about to replace.
+func (this *Runtime) resumeHistories(ctx context.Context, records []repo.HistoryJobRecord) {
+	for _, record := range records {
+		this.resumeHistory(ctx, record)
+	}
+}
+
+// resumeHistory picks one stored run up again. The generation is built from the
+// definition the run was started against - an edit made meanwhile takes effect at
+// the handover, which reads the current one - while the datasets behind it are
+// loaded fresh.
+func (this *Runtime) resumeHistory(ctx context.Context, record repo.HistoryJobRecord) {
+	id := record.EnvironmentId
+	this.mux.RLock()
+	env, running := this.envs[id]
+	this.mux.RUnlock()
+	if !running || env == nil {
+		//nothing to continue on, and what that means decides whether the run ends
+		this.closeHistoryOfGoneEnvironment(record)
+		return
+	}
+
+	seriesCtx, cancelSeries := context.WithTimeout(ctx, seriesLoadTimeout)
+	gen := newGeneration(record.Definition, this.loadSeries(seriesCtx, record.Definition))
+	cancelSeries()
+
+	job, err := this.registerHistory(record)
+	if err != nil {
+		util.Logger.Error("unable to resume the history run", attributes.ErrorKey, err, "environment", id)
+		//the start built this environment for the run and gave it no runners, so it
+		//is handed to the live simulation here - otherwise it would stand still
+		//until the next edit
+		this.giveUpOnResuming(env)
+		return
+	}
+
+	//counted after the registration and before the run starts: a resume that never
+	//happened must not spend one of the three the guard allows, and a run that
+	//takes the service down while it is picked up has to be counted before it can.
+	//A write that fails only loses the count: the run is worth more than the guard.
+	record.Resumes++
+	countCtx, cancelCount := context.WithTimeout(context.Background(), storeTimeout)
+	countErr := this.historyJobs.Save(countCtx, record)
+	cancelCount()
+	if countErr != nil {
+		util.Logger.Error("unable to count the resume of the history run, it is resumed anyway",
+			attributes.ErrorKey, countErr, "environment", id)
+	}
+	position := record.From
+	if record.Checkpoint != nil {
+		position = record.Checkpoint.Position
+	}
+	this.beginHistoryRun(job, env, gen, record.From, record.To, record.Checkpoint)
+	util.Logger.Info("history run resumed", "environment", id, "position", position,
+		"from", record.From, "to", record.To, "checkpointed", record.Checkpoint != nil)
+}
+
+// giveUpOnResuming starts the live simulation of an environment the start left
+// under a run that then could not be resumed. The generation it already carries
+// is the current definition, which is what the start built it from.
+func (this *Runtime) giveUpOnResuming(env *environment) {
+	this.mux.RLock()
+	gen := env.gen
+	this.mux.RUnlock()
+	if gen == nil {
+		return
+	}
+	env.endHistory()
+	this.startEnvironment(context.Background(), gen.def)
+	this.rebuildIndex()
+}
+
+// closeHistoryOfGoneEnvironment ends the stored run of an environment this
+// service is not running - but only when its definition is really gone. An
+// environment that merely failed to start comes back on the next start, and its
+// run is still resumable.
+func (this *Runtime) closeHistoryOfGoneEnvironment(record repo.HistoryJobRecord) {
+	id := record.EnvironmentId
+	readCtx, cancelRead := context.WithTimeout(context.Background(), storeTimeout)
+	_, err := this.environments.Get(readCtx, id)
+	cancelRead()
+	switch {
+	case errors.Is(err, repo.ErrNotFound):
+	case err != nil:
+		util.Logger.Warn("unable to check whether the environment of a stored history run still exists, the run is left as it is",
+			attributes.ErrorKey, err, "environment", id)
+		return
+	default:
+		util.Logger.Warn("the environment of a stored history run exists but is not running here, the run is left as it is",
+			"environment", id)
+		return
+	}
+
+	finished := time.Now()
+	record.State = string(HistoryCancelled)
+	record.Error = "the environment no longer exists"
+	record.FinishedAt = &finished
+	record.Checkpoint = nil
+	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
+	defer cancel()
+	if err := this.historyJobs.Save(ctx, record); err != nil {
+		util.Logger.Error("unable to close the history run of a missing environment",
+			attributes.ErrorKey, err, "environment", record.EnvironmentId)
+		return
+	}
+	util.Logger.Info("the environment of a stored history run is not running here, the run is closed as cancelled",
+		"environment", record.EnvironmentId)
+}
+
+// loadHistoryRecord is the fallback of the two status calls: after a restart the
+// registry knows nothing, and the store is what still does. ErrNotFound is the
+// one error that becomes ErrNoHistory; anything else is handed on, so a store
+// that is unreachable is not reported as "there was no run".
+func (this *Runtime) loadHistoryRecord(id string) (repo.HistoryJobRecord, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
+	defer cancel()
+	record, err := this.historyJobs.Load(ctx, id)
+	if errors.Is(err, repo.ErrNotFound) {
+		return repo.HistoryJobRecord{}, ErrNoHistory
+	}
+	if err != nil {
+		return repo.HistoryJobRecord{}, err
+	}
+	return record, nil
+}
+
 // HistoryStatusOf returns what is known about the history run of one
-// environment.
+// environment, out of the registry or, for a run of a previous incarnation, out
+// of the store.
 func (this *Runtime) HistoryStatusOf(id string) (HistoryStatus, error) {
 	this.historyMux.Lock()
 	job, known := this.histories[id]
 	this.historyMux.Unlock()
-	if !known {
-		return HistoryStatus{}, ErrNoHistory
+	if known {
+		return job.snapshot(), nil
 	}
-	return job.snapshot(), nil
+	record, err := this.loadHistoryRecord(id)
+	if err != nil {
+		return HistoryStatus{}, err
+	}
+	return historyStatusOfRecord(record), nil
 }
 
 // CancelHistory ends a running history run and reports where it stood. It does
 // not wait: the run stops at its next due event and hands the environment back
-// itself, which is what leaves the simulation running on the partial state.
+// itself. A stored run the registry does not know is closed in the store; after
+// a Start that resumed every running record it cannot still be going.
 func (this *Runtime) CancelHistory(id string) (HistoryStatus, error) {
 	this.historyMux.Lock()
 	job, known := this.histories[id]
 	this.historyMux.Unlock()
-	if !known {
-		return HistoryStatus{}, ErrNoHistory
+	if known {
+		//marked before the cancellation, or a shutdown racing it could still read
+		//the run as suspended and resume it on the next start. A run that is over
+		//is only reported: storing cancelled over it would rewrite the outcome of
+		//a run that really finished, which is what the store branch below does not
+		//do either.
+		status, running := job.beginAbort()
+		if !running {
+			return status, nil
+		}
+		//stored before the cancellation too, rather than left to the terminal write
+		//at the end of the run: a write that fails there would leave the record
+		//running, and the next start would resume a run somebody stopped. The
+		//terminal write replaces this with the full result.
+		this.storeAbortedHistory(job)
+		job.cancel()
+		return job.snapshot(), nil
 	}
-	job.cancel()
-	return job.snapshot(), nil
+
+	record, err := this.loadHistoryRecord(id)
+	if err != nil {
+		return HistoryStatus{}, err
+	}
+	status := historyStatusOfRecord(record)
+	if status.State != HistoryRunning {
+		return status, nil
+	}
+	finished := time.Now()
+	status.State = HistoryCancelled
+	status.FinishedAt = &finished
+	stored := historyRecordOf(status, record.Definition)
+	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
+	defer cancel()
+	if err = this.historyJobs.Save(ctx, stored); err != nil {
+		util.Logger.Error("unable to close a stored history run this runtime does not run",
+			attributes.ErrorKey, err, "environment", id)
+		return HistoryStatus{}, err
+	}
+	return status, nil
+}
+
+// storeAbortedHistory writes the run as cancelled where it stands, before the
+// run is cancelled, so a terminal write that fails afterwards cannot leave a
+// running record; Running() filters on the state, so the engine's own abort
+// checkpoint written into it afterwards resumes nothing. A failure is an ERROR:
+// the abort is decided either way.
+func (this *Runtime) storeAbortedHistory(job *historyJob) {
+	status := job.snapshot()
+	finished := time.Now()
+	status.State = HistoryCancelled
+	status.FinishedAt = &finished
+	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
+	defer cancel()
+	if err := this.historyJobs.Save(ctx, historyRecordOf(status, job.definition())); err != nil {
+		util.Logger.Error("unable to store the abort of the history run, its record stays as it is",
+			attributes.ErrorKey, err, "environment", status.EnvironmentId)
+	}
 }
 
 // cancelHistory ends a run without reporting anything, for a caller that is
@@ -430,6 +939,10 @@ func (this *Runtime) cancelHistory(id string) {
 	job, known := this.histories[id]
 	this.historyMux.Unlock()
 	if known {
+		//the environment is going away, so this run must not be resumed even if the
+		//service is shutting down at the same time, and its record is deleted
+		//rather than written back when the run ends
+		job.markRemovedWithEnvironment()
 		job.cancel()
 	}
 }
@@ -474,6 +987,10 @@ func validateHistoryWindow(from time.Time, now time.Time) (time.Time, time.Time,
 	if from.IsZero() {
 		return from, now, &HistoryRangeError{Reason: "from is required, as an RFC3339 timestamp"}
 	}
+	//truncated to the precision a bson datetime keeps: the window of the record a
+	//resume runs against has to be the window the run itself used, or every
+	//instant of the resumed half would sit a fraction of a millisecond off
+	from = from.Truncate(time.Millisecond)
 	if !from.Before(now) {
 		return from, now, &HistoryRangeError{Reason: "from has to lie in the past; a history run ends at the present"}
 	}
@@ -489,6 +1006,17 @@ func validateHistoryWindow(from time.Time, now time.Time) (time.Time, time.Time,
 			"the window spans %v, more than the %v a history run covers", now.Sub(from), MaxBackfillSpan)}
 	}
 	return from, now, nil
+}
+
+// checkHistoryGrids refuses an environment whose grids a checkpoint could not
+// tell apart, before the live state is thrown away for it: the document itself
+// validates - a channel called "context:k" next to a context source k, say - so
+// the answer is a 400 rather than a run that fails after stopping the runners.
+func checkHistoryGrids(gen *generation) error {
+	if err := historyDistinctGrids(historyGridsOf(gen, historyContextKeys(gen))); err != nil {
+		return &HistoryRangeError{Reason: err.Error()}
+	}
+	return nil
 }
 
 // checkHistoryVolume refuses a run before the live channels are stopped for it.

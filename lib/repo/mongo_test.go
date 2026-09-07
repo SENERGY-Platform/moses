@@ -489,6 +489,16 @@ func TestMongoDeleteRemovesTheDefinitionAndTheState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	//the history run goes with the environment too, or a restart would resume a
+	//run against a definition that no longer exists
+	err = store.HistoryJobs().Save(ctx, HistoryJobRecord{EnvironmentId: "env-1", State: HistoryJobRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if count := countDocuments(t, store, defaultHistoryJobCollectionName); count != 1 {
+		t.Fatalf("the history run was not stored, so its deletion below would prove nothing: %d documents", count)
+	}
 
 	err = store.Delete(ctx, "env-1")
 	if err != nil {
@@ -499,6 +509,12 @@ func TestMongoDeleteRemovesTheDefinitionAndTheState(t *testing.T) {
 	}
 	if count := countDocuments(t, store, "environment_states"); count != 0 {
 		t.Errorf("expected the runtime state to be gone, got %d documents", count)
+	}
+	if count := countDocuments(t, store, defaultHistoryJobCollectionName); count != 0 {
+		t.Errorf("expected the history run to be gone, got %d documents", count)
+	}
+	if _, err := store.HistoryJobs().Load(ctx, "env-1"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected the history run to be gone, got %v", err)
 	}
 }
 

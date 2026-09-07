@@ -150,7 +150,7 @@ func TestTheWorkerCountIsClamped(t *testing.T) {
 	for configured, want := range map[int]int{-1: defaultPublishWorkers, 0: defaultPublishWorkers, 1: 1,
 		32: 32, maxPublishWorkers: maxPublishWorkers, maxPublishWorkers + 1: maxPublishWorkers, 100000: maxPublishWorkers} {
 		cfg := config.Config{JsTimeout: time.Second, StateFlushInterval: time.Hour, PublishWorkers: configured}
-		if got := newRuntime(cfg, newFakeEnvironments(), newFakeStates(), nil, &fakePublisher{}).publishWorkers; got != want {
+		if got := newRuntime(cfg, newFakeEnvironments(), newFakeStates(), nil, newFakeHistoryJobs(), &fakePublisher{}).publishWorkers; got != want {
 			t.Errorf("a configured worker count of %d became %d, expected %d", configured, got, want)
 		}
 	}
@@ -653,7 +653,7 @@ func TestACancelledHistoryRunAccountsForTheReadingsItAccepted(t *testing.T) {
 	rt, env, gen := historyFixture(t, document, nil, publisher)
 
 	before := goruntime.NumGoroutine()
-	result, err := rt.runHistory(ctx, env, gen, historyFrom, historyFrom.Add(time.Hour), keepTheWindow, nil)
+	result, err := rt.runHistory(ctx, env, gen, historyFrom, historyFrom.Add(time.Hour), keepTheWindow, nil, nil, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected the run to report the cancellation, got %v", err)
 	}
@@ -707,7 +707,7 @@ func TestAnAbortDoesNotOverwriteThePlatformsMessage(t *testing.T) {
 	}
 	rt, env, gen := historyFixture(t, document, nil, publisher)
 
-	result, err := rt.runHistory(ctx, env, gen, historyFrom, historyFrom.Add(time.Hour), keepTheWindow, nil)
+	result, err := rt.runHistory(ctx, env, gen, historyFrom, historyFrom.Add(time.Hour), keepTheWindow, nil, nil, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected the run to report the cancellation, got %v", err)
 	}
@@ -741,7 +741,7 @@ func TestABackfillPublishesEveryChannelOfAJobInOrder(t *testing.T) {
 	}}
 	cfg := testConfig(time.Hour)
 	cfg.PublishWorkers = 2
-	rt := newRuntime(cfg, newFakeEnvironments(document), newFakeStates(), nil, publisher)
+	rt := newRuntime(cfg, newFakeEnvironments(document), newFakeStates(), nil, newFakeHistoryJobs(), publisher)
 	gen := newGeneration(document, nil)
 
 	from := historyFrom
@@ -887,7 +887,7 @@ func TestACovScriptThatSendsTwiceInOneRunSettlesInBetween(t *testing.T) {
 	}
 	done := make(chan outcome, 1)
 	go func() {
-		result, err := rt.runHistory(context.Background(), env, gen, from, to, keepTheWindow, nil)
+		result, err := rt.runHistory(context.Background(), env, gen, from, to, keepTheWindow, nil, nil, nil)
 		done <- outcome{result: result, err: err}
 	}()
 

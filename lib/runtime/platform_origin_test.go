@@ -87,7 +87,7 @@ func TestAPlatformChannelReplaysTheFetchedWindow(t *testing.T) {
 	env := testEnvironment("env-real", platformChannel("env-real"))
 	env.Owner = "owner-42"
 	publisher := &fakePublisher{}
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), nil, publisher)
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), nil, newFakeHistoryJobs(), publisher)
 	rt.fetcher = fetcher
 	rt.ownerToken = func(userId string) (string, error) { return "Bearer token-for-" + userId, nil }
 	ctx, cancel := context.WithCancel(context.Background())
@@ -128,7 +128,7 @@ func TestAPlatformChannelWithoutAWrapperIsSkippedNotFatal(t *testing.T) {
 		scriptChannel("ch-b", domain.Sensor, 1, serviceRefOf("env-nowrap")+"-b", `moses.service.send("alive");`))
 	publisher := &fakePublisher{}
 	//fetcher stays nil: no timescale_wrapper_url configured
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), nil, publisher)
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), nil, newFakeHistoryJobs(), publisher)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	if err := rt.Start(ctx); err != nil {
