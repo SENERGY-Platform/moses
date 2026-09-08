@@ -1332,11 +1332,18 @@ func wrapperStatusOf(err error) int {
 // words of the document rather than by its platform id alone.
 func assetNamesOf(def domain.Environment) map[string]string {
 	result := map[string]string{}
-	for _, zone := range def.Zones {
-		for _, asset := range zone.Assets {
-			result[asset.Id] = asset.Name
+	var walk func(zones []domain.Zone)
+	walk = func(zones []domain.Zone) {
+		for _, zone := range zones {
+			for _, asset := range zone.Assets {
+				result[asset.Id] = asset.Name
+			}
+			//nested zones carry assets too; a name missing here shows up as a
+			//device without one in the 409 body
+			walk(zone.Zones)
 		}
 	}
+	walk(def.Zones)
 	return result
 }
 

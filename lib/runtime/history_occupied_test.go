@@ -881,3 +881,24 @@ func TestAnEnvironmentThatIsAlreadyBusyIsRefusedBeforeTheTimescaleIsAsked(t *tes
 		waitForBackfill(t, rt, id)
 	})
 }
+
+// TestTheOccupiedDeviceListNamesAssetsOfNestedZones: the demonstrator keeps its
+// machines in a hall inside a site, and a device the 409 body cannot name is a
+// device the operator has to look up by id.
+func TestTheOccupiedDeviceListNamesAssetsOfNestedZones(t *testing.T) {
+	def := domain.Environment{Zones: []domain.Zone{{
+		Id:     "site",
+		Assets: []domain.Asset{{Id: "meter", Name: "main meter"}},
+		Zones: []domain.Zone{{
+			Id:     "hall",
+			Assets: []domain.Asset{{Id: "press", Name: "press"}},
+			Zones:  []domain.Zone{{Id: "corner", Assets: []domain.Asset{{Id: "lamp", Name: "lamp"}}}},
+		}},
+	}}}
+	names := assetNamesOf(def)
+	for id, want := range map[string]string{"meter": "main meter", "press": "press", "lamp": "lamp"} {
+		if names[id] != want {
+			t.Errorf("asset %s: expected name %q, got %q", id, want, names[id])
+		}
+	}
+}
