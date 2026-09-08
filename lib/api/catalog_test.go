@@ -46,6 +46,19 @@ type fakeCatalog struct {
 	// deleteErr fails only the deletion, so a test can provision successfully and
 	// still watch what a failing cleanup does.
 	deleteErr error
+
+	// renamed records what a rename was asked to write, id and name together: a
+	// rename to the wrong name is the failure mode worth seeing, not a missing
+	// call.
+	renamed []renamedDevice
+
+	// renameErr fails only the rename, for the same reason deleteErr exists.
+	renameErr error
+}
+
+type renamedDevice struct {
+	id   string
+	name string
 }
 
 func (this *fakeCatalog) DeviceTypes(token string) ([]devices.DeviceType, error) {
@@ -71,6 +84,14 @@ func (this *fakeCatalog) DeleteDevice(ctx context.Context, token string, id stri
 	this.deleted = append(this.deleted, id)
 	if this.deleteErr != nil {
 		return this.deleteErr
+	}
+	return this.err
+}
+
+func (this *fakeCatalog) RenameDevice(ctx context.Context, token string, id string, name string) error {
+	this.renamed = append(this.renamed, renamedDevice{id: id, name: name})
+	if this.renameErr != nil {
+		return this.renameErr
 	}
 	return this.err
 }

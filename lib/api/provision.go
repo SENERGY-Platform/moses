@@ -223,3 +223,81 @@ func deleteDevices(ctx context.Context, catalog DeviceCatalog, token sc_jwt.Toke
 		util.Logger.Info("deleted the platform devices of removed assets", "environment", environmentId, "devices", deleted)
 	}
 }
+
+// managedRename is one platform device that has to follow the name of the asset
+// it was created for. The asset id is carried for the log line only: what is
+// renamed is addressed by the device id.
+type managedRename struct {
+	assetId  string
+	deviceId string
+	name     string
+}
+
+// renamedDevices lists the devices moses created whose asset carries a different
+// name in the document about to be stored. A picked device is never among them,
+// nor a device two assets reference (either name would be a guess), nor one this
+// request just created (created): the device-manager already has the new name,
+// and the read-back would go through the device-repository, which trails it.
+// The predecessor is looked up like reconcileManagedFlags does, duplicate stored
+// ids excluded, so a duplicate id never decides which name a device gets.
+func renamedDevices(existing *domain.Environment, env *domain.Environment, created []managedDevice) []managedRename {
+	previous := map[string]*domain.Asset{}
+	ambiguous := map[string]bool{}
+	forEachAsset(existing, func(asset *domain.Asset) {
+		if asset.Id == "" {
+			return
+		}
+		if _, taken := previous[asset.Id]; taken {
+			ambiguous[asset.Id] = true
+			return
+		}
+		previous[asset.Id] = asset
+	})
+	fresh := map[string]bool{}
+	for _, device := range created {
+		fresh[device.deviceId] = true
+	}
+	references := map[string]int{}
+	forEachAsset(env, func(asset *domain.Asset) {
+		if asset.ExternalRef != "" {
+			references[asset.ExternalRef]++
+		}
+	})
+	result := []managedRename{}
+	forEachAsset(env, func(asset *domain.Asset) {
+		if !asset.ExternalManaged || asset.ExternalRef == "" || references[asset.ExternalRef] > 1 || fresh[asset.ExternalRef] {
+			return
+		}
+		before, known := previous[asset.Id]
+		if !known || ambiguous[asset.Id] || before.Name == asset.Name {
+			return
+		}
+		result = append(result, managedRename{assetId: asset.Id, deviceId: asset.ExternalRef, name: asset.Name})
+	})
+	return result
+}
+
+// renameDevices carries the new name of an asset over to the platform device
+// moses created for it. Best effort after the write, like deleteDevices: a
+// failure leaves the device under its old name plus a warning, and the next
+// rename of the asset repairs it. Never called with anything but renamedDevices
+// output, so a picked device cannot reach it.
+func renameDevices(ctx context.Context, catalog DeviceCatalog, token sc_jwt.Token, environmentId string, renames []managedRename) {
+	if catalog == nil || len(renames) == 0 {
+		return
+	}
+	//counts the writes that landed: RenameDevice always puts when it returns nil,
+	//and a device that is gone comes back as an error, unlike in the cleanup
+	renamed := 0
+	for _, device := range renames {
+		if err := catalog.RenameDevice(ctx, token.Jwt(), device.deviceId, device.name); err != nil {
+			util.Logger.Warn("unable to rename the platform device of a renamed asset", attributes.ErrorKey, err,
+				"environment", environmentId, "asset", device.assetId, "device", device.deviceId)
+			continue
+		}
+		renamed++
+	}
+	if renamed > 0 {
+		util.Logger.Info("renamed the platform devices of renamed assets", "environment", environmentId, "devices", renamed)
+	}
+}

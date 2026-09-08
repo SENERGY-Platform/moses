@@ -30,6 +30,13 @@ attached: same fields, opposite rule — it is never deleted.
   an asset that does not own it. The cleanup set is ref-based: exchanging a
   managed device for a picked one releases the old device like a deleted asset
   does.
+- **A managed device follows its asset's name on update.** Renaming an asset
+  renames the platform device moses created for it — after the write and best
+  effort like the cleanup, so a failure leaves the device under its old name and
+  a warning log. A picked device is never renamed, and a device two assets of
+  the document reference is left alone, because either name would be a guess.
+  The platform shows a device's `shared/nickname` attribute as its display name
+  where one is set, and the rename does not touch that attribute.
 - **A 404 from the device-manager on delete counts as success** (the device is
   gone, which is what the caller wanted); a 404 on create still fails loudly,
   because there it means the manager URL is wrong (`lib/devices/catalog.go`,

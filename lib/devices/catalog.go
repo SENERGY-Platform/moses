@@ -34,6 +34,7 @@ import (
 	"net/url"
 
 	deviceRepo "github.com/SENERGY-Platform/device-repository/lib/client"
+	deviceRepoModel "github.com/SENERGY-Platform/device-repository/lib/model"
 	"github.com/SENERGY-Platform/models/go/models"
 	"github.com/SENERGY-Platform/moses/lib/domain"
 	"github.com/google/uuid"
@@ -68,12 +69,13 @@ type Device struct {
 }
 
 // registry is the narrow slice of the device-repository this package uses.
-// Narrow because it is a boundary: a fake of two methods is testable, a fake of
-// the full client is not, and the http paths below are exactly where a contract
-// with another service silently drifts.
+// Narrow because it is a boundary: a fake of three methods is testable, a fake
+// of the full client is not, and the http paths below are exactly where a
+// contract with another service silently drifts.
 type registry interface {
 	ListDeviceTypesV3(token string, options deviceRepo.DeviceTypeListOptions) ([]models.DeviceType, int64, error, int)
 	ListProtocols(token string, limit int64, offset int64, sort string) ([]models.Protocol, error, int)
+	ReadDevice(id string, token string, action deviceRepoModel.AuthAction) (models.Device, error, int)
 }
 
 type Catalog struct {
@@ -243,8 +245,9 @@ func (this *Catalog) CreateDevice(ctx context.Context, token string, deviceTypeI
 	return Device{Id: created.Id, LocalId: created.LocalId, Name: created.Name, DeviceTypeId: created.DeviceTypeId}, nil
 }
 
-// ErrNotFound is what a 404 from the device-manager becomes, so a caller can
-// tell "there is no such device" apart from "the call did not work".
+// ErrNotFound is what a 404 from the device-manager, or from the read the rename
+// does first, becomes, so a caller can tell "there is no such device" apart from
+// "the call did not work".
 var ErrNotFound = errors.New("the device-manager knows no such device")
 
 // DeleteDevice removes a platform device again, so removing a simulated asset
@@ -258,6 +261,48 @@ func (this *Catalog) DeleteDevice(ctx context.Context, token string, id string) 
 	if errors.Is(err, ErrNotFound) {
 		return nil
 	}
+	if err != nil {
+		return err
+	}
+	return response.Body.Close()
+}
+
+// defaultAttributeOrigin marks an attribute the device-repository's read adds
+// from the owner's account-wide defaults (lib/controller/defaults.go there); the
+// models package has no constant for it. Written back, the default would become
+// a value stored on the device.
+const defaultAttributeOrigin = "default"
+
+// RenameDevice gives a platform device the name of the asset it belongs to. The
+// device-manager takes the whole device on a put, so the current one is read
+// back first, with write permission, and only its name is exchanged.
+//
+// The put happens even where the read already reports the wanted name: the read
+// comes from the device-repository, which trails the device-manager, so a
+// matching answer may describe a state two renames old. A 404 on either half is
+// an error, unlike on a delete, because the asset still points at the device.
+func (this *Catalog) RenameDevice(ctx context.Context, token string, id string, name string) error {
+	current, err, code := this.repo.ReadDevice(id, token, deviceRepoModel.WRITE)
+	if code == http.StatusNotFound {
+		return fmt.Errorf("%w: on the read before the rename: %v", ErrNotFound, err)
+	}
+	if err != nil {
+		return err
+	}
+	current.Name = name
+	//nil is kept nil, which is what a created device sends too
+	var stored []models.Attribute
+	for _, attribute := range current.Attributes {
+		if attribute.Origin != defaultAttributeOrigin {
+			stored = append(stored, attribute)
+		}
+	}
+	current.Attributes = stored
+	body, err := json.Marshal(current)
+	if err != nil {
+		return err
+	}
+	response, err := this.send(ctx, token, http.MethodPut, this.managerUrl+"/devices/"+url.PathEscape(id), body)
 	if err != nil {
 		return err
 	}

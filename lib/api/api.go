@@ -54,6 +54,7 @@ type DeviceCatalog interface {
 	DeviceTypes(token string) ([]devices.DeviceType, error)
 	CreateDevice(ctx context.Context, token string, deviceTypeId string, name string) (devices.Device, error)
 	DeleteDevice(ctx context.Context, token string, id string) error
+	RenameDevice(ctx context.Context, token string, id string, name string) error
 }
 
 // RuntimeNotifier is how a change to a stored environment reaches the running

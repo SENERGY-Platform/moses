@@ -18,6 +18,7 @@ package devices
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -25,6 +26,7 @@ import (
 	"testing"
 
 	deviceRepo "github.com/SENERGY-Platform/device-repository/lib/client"
+	deviceRepoModel "github.com/SENERGY-Platform/device-repository/lib/model"
 	"github.com/SENERGY-Platform/models/go/models"
 	"github.com/SENERGY-Platform/moses/lib/domain"
 )
@@ -143,6 +145,15 @@ type fakeRegistry struct {
 	protocols []models.Protocol
 	calls     []deviceRepo.DeviceTypeListOptions
 	err       error
+
+	// device is what a read of any id answers with. readCode is the status a
+	// failing read reports and zero means success, which is what the real client
+	// does - it carries a status only when it failed. Setting it puts a device
+	// that is already gone, or an unreachable repository, in front of a rename.
+	device      models.Device
+	readCode    int
+	readIds     []string
+	readActions []deviceRepoModel.AuthAction
 }
 
 func (this *fakeRegistry) ListDeviceTypesV3(token string, options deviceRepo.DeviceTypeListOptions) ([]models.DeviceType, int64, error, int) {
@@ -162,6 +173,17 @@ func (this *fakeRegistry) ListProtocols(token string, limit int64, offset int64,
 		return nil, this.err, 500
 	}
 	return this.protocols, nil, 200
+}
+
+func (this *fakeRegistry) ReadDevice(id string, token string, action deviceRepoModel.AuthAction) (models.Device, error, int) {
+	this.readIds = append(this.readIds, id)
+	this.readActions = append(this.readActions, action)
+	if this.readCode != 0 {
+		return models.Device{}, errors.New("the device-repository answered " + http.StatusText(this.readCode)), this.readCode
+	}
+	device := this.device
+	device.Id = id
+	return device, nil, 0
 }
 
 func catalogWith(registry *fakeRegistry, managerUrl string) *Catalog {
@@ -321,5 +343,154 @@ func TestAnUnreadableAnswerIsAnError(t *testing.T) {
 
 	if _, err := catalogWith(&fakeRegistry{}, server.URL).CreateDevice(context.Background(), "Bearer t", "dt-1", "x"); err == nil {
 		t.Error("an unreadable answer must not pass as a created device")
+	}
+}
+
+// The device-manager takes the whole device on a put, so everything the rename
+// does not touch has to survive it: a local id dropped here detaches the device
+// from the protocol, and a lost device type id detaches it from its services.
+func TestRenameDevicePutsTheWholeDeviceBack(t *testing.T) {
+	registry := &fakeRegistry{device: models.Device{
+		LocalId:      "local-abc",
+		Name:         "Kompressor 1",
+		DeviceTypeId: "dt-1",
+		OwnerId:      "user-a",
+		Attributes:   []models.Attribute{{Key: "senergy/local-mqtt", Value: "true", Origin: "web-ui"}},
+	}}
+	var seen struct {
+		method, path, auth, body string
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		seen.method, seen.path, seen.auth, seen.body = r.Method, r.URL.Path, r.Header.Get("Authorization"), string(raw)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"urn:device:x","name":"Kompressor 2"}`))
+	}))
+	defer server.Close()
+
+	if err := catalogWith(registry, server.URL).RenameDevice(context.Background(), "Bearer t", "urn:device:x", "Kompressor 2"); err != nil {
+		t.Fatal(err)
+	}
+	if registry.readIds == nil || registry.readIds[0] != "urn:device:x" {
+		t.Errorf("the current device has to be read back first, read %v", registry.readIds)
+	}
+	//the read has to demand write rights, or a caller who may only read the
+	//device gets past it and fails on the put instead
+	if len(registry.readActions) != 1 || registry.readActions[0] != deviceRepoModel.WRITE {
+		t.Errorf("the read has to ask for %q, asked %v", deviceRepoModel.WRITE, registry.readActions)
+	}
+	if seen.method != http.MethodPut || seen.path != "/devices/urn:device:x" || seen.auth != "Bearer t" {
+		t.Errorf("unexpected request: %+v", seen)
+	}
+	if !strings.Contains(seen.body, `"name":"Kompressor 2"`) {
+		t.Errorf("the new name has to be written, got %s", seen.body)
+	}
+	for _, kept := range []string{`"local_id":"local-abc"`, `"device_type_id":"dt-1"`, `"senergy/local-mqtt"`, `"id":"urn:device:x"`, `"owner_id":"user-a"`} {
+		if !strings.Contains(seen.body, kept) {
+			t.Errorf("the put replaces the whole device, so %s has to survive it, got %s", kept, seen.body)
+		}
+	}
+}
+
+// The read goes to the device-repository, which trails the device-manager the put
+// goes to. A read that reports the wanted name may therefore be two renames
+// behind - so the put happens anyway, or renaming a device from A to B and back
+// to A inside that window would leave it at B forever.
+func TestRenamingToTheNameTheReadReportsStillWrites(t *testing.T) {
+	registry := &fakeRegistry{device: models.Device{Name: "Kompressor 1", LocalId: "local-abc"}}
+	bodies := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(raw))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	if err := catalogWith(registry, server.URL).RenameDevice(context.Background(), "Bearer t", "urn:device:x", "Kompressor 1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 1 {
+		t.Fatalf("a stale read that happens to match must not swallow the write, put %d times", len(bodies))
+	}
+	if !strings.Contains(bodies[0], `"name":"Kompressor 1"`) {
+		t.Errorf("the wanted name has to be written, got %s", bodies[0])
+	}
+}
+
+// The device-repository's read adds the owner's account-wide default attributes
+// to the answer. They are not stored on the device, and putting them back would
+// make them stored - the default could then never be changed for this device
+// again.
+func TestRenameDeviceDropsTheAttributesTheReadInjected(t *testing.T) {
+	registry := &fakeRegistry{device: models.Device{
+		Name:    "alt",
+		LocalId: "local-abc",
+		Attributes: []models.Attribute{
+			{Key: "shared/nickname", Value: "Halle 1", Origin: "web-ui"},
+			{Key: "senergy/time-path", Value: "time", Origin: defaultAttributeOrigin},
+		},
+	}}
+	body := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		body = string(raw)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	if err := catalogWith(registry, server.URL).RenameDevice(context.Background(), "Bearer t", "urn:device:x", "neu"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body, `"shared/nickname"`) {
+		t.Errorf("an attribute stored on the device has to survive the put, got %s", body)
+	}
+	if strings.Contains(body, `"senergy/time-path"`) {
+		t.Errorf("an attribute the read injected must not be written back, got %s", body)
+	}
+}
+
+// Unlike a delete, a 404 does not reach the goal state: the asset still points at
+// this device, so the caller has to see that the rename did not happen. Both
+// halves of the call have to report it.
+func TestRenamingADeviceThatIsGoneIsAnError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "no such device", http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	//gone by the time the write lands
+	registry := &fakeRegistry{device: models.Device{Name: "alt"}}
+	err := catalogWith(registry, server.URL).RenameDevice(context.Background(), "Bearer t", "urn:device:gone", "neu")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("a 404 on the write means the rename did not happen, got %v", err)
+	}
+
+	//and gone already when it is read
+	registry = &fakeRegistry{readCode: http.StatusNotFound}
+	err = catalogWith(registry, server.URL).RenameDevice(context.Background(), "Bearer t", "urn:device:gone", "neu")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("a 404 on the read means the rename did not happen, got %v", err)
+	}
+}
+
+// Everything else stays an error, or a rename that never happened is reported as
+// done and the device keeps its old name silently.
+func TestARenameThatWasRefusedIsAnError(t *testing.T) {
+	registry := &fakeRegistry{device: models.Device{Name: "alt"}}
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "nope", status)
+		}))
+		err := catalogWith(registry, server.URL).RenameDevice(context.Background(), "Bearer t", "urn:device:x", "neu")
+		server.Close()
+		if err == nil {
+			t.Errorf("expected %d to be an error", status)
+		}
+	}
+	//and so does a read that failed for any other reason: renaming from a device
+	//that could not be read would write an empty local id back
+	registry = &fakeRegistry{readCode: http.StatusInternalServerError}
+	if err := catalogWith(registry, "").RenameDevice(context.Background(), "Bearer t", "urn:device:x", "neu"); err == nil {
+		t.Error("a failing read must not pass as a rename")
 	}
 }

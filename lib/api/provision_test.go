@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/SENERGY-Platform/moses/lib/domain"
@@ -365,7 +366,10 @@ func TestAFailedWriteDeletesNoDevice(t *testing.T) {
 
 	stored := putEnvironment(t, router, "env-1", "user-a", environmentWithTwoAssets())
 
-	store.failing = errors.New("database is down")
+	//only the write fails, so the handler reads the stored document, provisions
+	//and reaches the cleanup: store.failing would fail that read too, and the
+	//request would be answered long before any device could be deleted
+	store.failingWrite = errors.New("database is down")
 	if code := do(t, router, "PUT", "/environments/env-1", "user-a", withoutAsset(t, stored, "Zähler")).Code; code < 400 {
 		t.Fatalf("expected the write to fail, got %d", code)
 	}
@@ -518,5 +522,336 @@ func TestTheWalkReachesEveryAssetAtEveryDepth(t *testing.T) {
 	forEachAsset(&env, func(asset *domain.Asset) { asset.ExternalRef = "touched" })
 	if env.Zones[0].Zones[0].Zones[0].Assets[1].ExternalRef != "touched" {
 		t.Error("the walk has to hand out the asset itself, not a copy")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// A managed device follows the name of its asset. Same split as above: a device
+// moses created is renamed with its asset, a device the user picked keeps the
+// name they gave it.
+// ---------------------------------------------------------------------------
+
+// renamedAsset returns a copy of the document with one asset under a new name,
+// which is what an editor sends after the user renamed it.
+func renamedAsset(t *testing.T, env domain.Environment, from string, to string) domain.Environment {
+	t.Helper()
+	copied := copyEnvironment(t, env)
+	renamed := 0
+	forEachAsset(&copied, func(asset *domain.Asset) {
+		if asset.Name == from {
+			asset.Name = to
+			renamed++
+		}
+	})
+	if renamed != 1 {
+		t.Fatalf("expected to rename exactly one asset named %q, renamed %d", from, renamed)
+	}
+	return copied
+}
+
+// The device carries the asset's name in the platform's own ui, so an asset
+// renamed in the editor and a device left under the old name are the same asset
+// under two names.
+func TestRenamingAnAssetRenamesItsManagedDevice(t *testing.T) {
+	catalog := &fakeCatalog{idsByName: namedDeviceIds()}
+	store := newFakeEnvironments()
+	router := testRouterWithCatalog(store, catalog)
+
+	stored := putEnvironment(t, router, "env-1", "user-a", environmentWithTwoAssets())
+	putEnvironment(t, router, "env-1", "user-a", renamedAsset(t, stored, "Zähler", "Zähler Halle 1"))
+
+	if len(catalog.renamed) != 1 || catalog.renamed[0].id != "urn:device:zaehler" {
+		t.Fatalf("expected exactly the device of the renamed asset, got %+v", catalog.renamed)
+	}
+	if catalog.renamed[0].name != "Zähler Halle 1" {
+		t.Errorf("the device has to get the asset's new name, got %q", catalog.renamed[0].name)
+	}
+	//the asset that kept its name keeps its device untouched
+	if len(catalog.deleted) != 0 {
+		t.Errorf("a rename removes nothing, deleted %v", catalog.deleted)
+	}
+}
+
+// Storing the same document again must be free: every save would otherwise send
+// a write to the device-manager for every managed device.
+func TestStoringTheSameNamesRenamesNothing(t *testing.T) {
+	catalog := &fakeCatalog{idsByName: namedDeviceIds()}
+	store := newFakeEnvironments()
+	router := testRouterWithCatalog(store, catalog)
+
+	stored := putEnvironment(t, router, "env-1", "user-a", environmentWithTwoAssets())
+	putEnvironment(t, router, "env-1", "user-a", copyEnvironment(t, stored))
+
+	if len(catalog.renamed) != 0 {
+		t.Fatalf("an unchanged name is nothing to write, got %+v", catalog.renamed)
+	}
+}
+
+// A device the user picked belongs to the platform, and its name belongs to
+// them: an asset renamed in a simulation must not rename it.
+func TestRenamingAnAssetLeavesAPickedDeviceAlone(t *testing.T) {
+	catalog := &fakeCatalog{idsByName: namedDeviceIds()}
+	store := newFakeEnvironments()
+	router := testRouterWithCatalog(store, catalog)
+
+	env := environmentWithTwoAssets()
+	env.Zones[0].Zones[0].Assets[0].ExternalRef = "urn:device:picked"
+	stored := putEnvironment(t, router, "env-1", "user-a", env)
+	if assetNamed(t, stored, "Zähler").ExternalManaged {
+		t.Fatal("setup: a device that was already there was not created by moses")
+	}
+
+	putEnvironment(t, router, "env-1", "user-a", renamedAsset(t, stored, "Zähler", "fremder Name"))
+
+	if len(catalog.renamed) != 0 {
+		t.Fatalf("a picked device keeps the name the user gave it, got %+v", catalog.renamed)
+	}
+}
+
+// The same lie as with the deletion: the client sends the whole document back,
+// so an echoed external_managed on a picked device would hand moses the right to
+// rename it.
+func TestAnEchoedManagedFlagDoesNotAllowARename(t *testing.T) {
+	catalog := &fakeCatalog{idsByName: namedDeviceIds()}
+	store := newFakeEnvironments()
+	router := testRouterWithCatalog(store, catalog)
+
+	env := environmentWithTwoAssets()
+	env.Zones[0].Zones[0].Assets[0].ExternalRef = "urn:device:picked"
+	stored := storeDirectly(t, store, "env-1", "user-a", env)
+
+	lying := renamedAsset(t, stored, "Zähler", "übernommen")
+	lying.Zones[0].Zones[0].Assets[0].ExternalManaged = true
+	putEnvironment(t, router, "env-1", "user-a", lying)
+
+	for _, renamed := range catalog.renamed {
+		if renamed.id == "urn:device:picked" {
+			t.Fatalf("the server decides external_managed, so the claim must not rename anything, got %+v", catalog.renamed)
+		}
+	}
+}
+
+// A failed write must rename nothing: the stored document still carries the old
+// name, and the device would then be the only place the new one exists.
+func TestAFailedWriteRenamesNoDevice(t *testing.T) {
+	catalog := &fakeCatalog{idsByName: namedDeviceIds()}
+	store := newFakeEnvironments()
+	router := testRouterWithCatalog(store, catalog)
+
+	stored := putEnvironment(t, router, "env-1", "user-a", environmentWithTwoAssets())
+
+	//only the write fails: store.failing would fail the handler's read as well,
+	//and the request would then be answered before the rename is even reached
+	store.failingWrite = errors.New("database is down")
+	if code := do(t, router, "PUT", "/environments/env-1", "user-a", renamedAsset(t, stored, "Zähler", "neu")).Code; code < 400 {
+		t.Fatalf("expected the write to fail, got %d", code)
+	}
+	if len(catalog.renamed) != 0 {
+		t.Fatalf("a document that was not written keeps the names of its devices, got %+v", catalog.renamed)
+	}
+}
+
+// Two assets on one device: renaming one of them would decide the name of a
+// device the other one names too, and either choice is a guess.
+func TestADeviceTwoAssetsReferenceIsNotRenamed(t *testing.T) {
+	catalog := &fakeCatalog{}
+	store := newFakeEnvironments()
+	router := testRouterWithCatalog(store, catalog)
+
+	env := environmentWithTwoAssets()
+	env.Zones[0].Assets[0].ExternalRef = "urn:device:shared"
+	env.Zones[0].Assets[0].ExternalManaged = true
+	env.Zones[0].Zones[0].Assets[0].ExternalRef = "urn:device:shared"
+	stored := storeDirectly(t, store, "env-1", "user-a", env)
+
+	putEnvironment(t, router, "env-1", "user-a", renamedAsset(t, stored, "Kompressor 1", "Kompressor 2"))
+
+	if len(catalog.renamed) != 0 {
+		t.Fatalf("a device two assets name has no single new name, got %+v", catalog.renamed)
+	}
+}
+
+// The rename runs after the write, so a failing one may not fail the request:
+// the document did change, and a caller told otherwise would repeat the edit.
+// What stays behind is a device under its old name.
+func TestAFailingRenameDoesNotFailTheRequest(t *testing.T) {
+	catalog := &fakeCatalog{idsByName: namedDeviceIds(), renameErr: errors.New("device-manager unreachable")}
+	store := newFakeEnvironments()
+	router := testRouterWithCatalog(store, catalog)
+
+	stored := putEnvironment(t, router, "env-1", "user-a", environmentWithTwoAssets())
+
+	resp := do(t, router, "PUT", "/environments/env-1", "user-a", renamedAsset(t, stored, "Zähler", "Zähler neu"))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200 despite the failing rename, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if name := store.stored["env-1"].Zones[0].Zones[0].Assets[0].Name; name != "Zähler neu" {
+		t.Errorf("the document has to be written even though the rename failed, got %q", name)
+	}
+	if len(catalog.renamed) != 1 {
+		t.Errorf("expected the rename to have been attempted, got %+v", catalog.renamed)
+	}
+}
+
+// One save can rename an asset and give it its first device at once. The device
+// is created with the new name, so reading it back through the device-repository,
+// which trails the device-manager, would confirm nothing and write nothing new.
+func TestADeviceCreatedByTheSameSaveIsNotRenamed(t *testing.T) {
+	catalog := &fakeCatalog{idsByName: namedDeviceIds()}
+	store := newFakeEnvironments()
+	router := testRouterWithCatalog(store, catalog)
+
+	//stored without devices, so this save is the one that provisions them
+	stored := storeDirectly(t, store, "env-1", "user-a", environmentWithTwoAssets())
+	if assetNamed(t, stored, "Zähler").ExternalRef != "" {
+		t.Fatal("setup: the asset must not carry a device yet")
+	}
+
+	putEnvironment(t, router, "env-1", "user-a", renamedAsset(t, stored, "Zähler", "Zähler neu"))
+
+	if len(catalog.created) != 2 {
+		t.Fatalf("expected both assets to be provisioned, got %+v", catalog.created)
+	}
+	if len(catalog.renamed) != 0 {
+		t.Fatalf("a device created a moment ago already carries the name, got %+v", catalog.renamed)
+	}
+	names := []string{}
+	for _, device := range catalog.created {
+		names = append(names, device.Name)
+	}
+	if !slices.Contains(names, "Zähler neu") {
+		t.Errorf("the create has to carry the new name, created %v", names)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// renamedDevices directly, for the pairs of documents a single request cannot
+// produce.
+// ---------------------------------------------------------------------------
+
+func TestRenamedDevices(t *testing.T) {
+	managed := func(id string, name string, ref string) domain.Asset {
+		return domain.Asset{Id: id, Name: name, ExternalRef: ref, ExternalManaged: true}
+	}
+	oneZone := func(assets ...domain.Asset) *domain.Environment {
+		return &domain.Environment{Zones: []domain.Zone{{Assets: assets}}}
+	}
+	for _, testCase := range []struct {
+		name     string
+		existing *domain.Environment
+		env      *domain.Environment
+		created  []managedDevice
+		expected []managedRename
+	}{{
+		name:     "a renamed managed asset renames its device",
+		existing: oneZone(managed("asset-1", "alt", "urn:device:a")),
+		env:      oneZone(managed("asset-1", "neu", "urn:device:a")),
+		expected: []managedRename{{assetId: "asset-1", deviceId: "urn:device:a", name: "neu"}},
+	}, {
+		name:     "an unchanged name is nothing to write",
+		existing: oneZone(managed("asset-1", "alt", "urn:device:a")),
+		env:      oneZone(managed("asset-1", "alt", "urn:device:a")),
+		expected: []managedRename{},
+	}, {
+		name:     "a picked device keeps its name",
+		existing: oneZone(domain.Asset{Id: "asset-1", Name: "alt", ExternalRef: "urn:device:a"}),
+		env:      oneZone(domain.Asset{Id: "asset-1", Name: "neu", ExternalRef: "urn:device:a"}),
+		expected: []managedRename{},
+	}, {
+		name:     "an asset without a device has nothing to rename",
+		existing: oneZone(domain.Asset{Id: "asset-1", Name: "alt"}),
+		env:      oneZone(domain.Asset{Id: "asset-1", Name: "neu"}),
+		expected: []managedRename{},
+	}, {
+		name:     "an asset that is new to the document has no earlier name",
+		existing: oneZone(managed("asset-1", "alt", "urn:device:a")),
+		env:      oneZone(managed("asset-2", "neu", "urn:device:a")),
+		expected: []managedRename{},
+	}, {
+		//a stored document from before the uniqueness validation: which of the
+		//two names the asset carried is unknowable, and the device only has one
+		name:     "an ambiguous stored asset id renames nothing",
+		existing: oneZone(managed("asset-1", "alt", "urn:device:a"), managed("asset-1", "anders", "urn:device:a")),
+		env:      oneZone(managed("asset-1", "neu", "urn:device:a")),
+		expected: []managedRename{},
+	}, {
+		name:     "a device two assets reference has no single new name",
+		existing: oneZone(managed("asset-1", "alt", "urn:device:a"), managed("asset-2", "zwei", "urn:device:a")),
+		env:      oneZone(managed("asset-1", "neu", "urn:device:a"), managed("asset-2", "zwei", "urn:device:a")),
+		expected: []managedRename{},
+	}, {
+		name:     "a document that is new under this id renames nothing",
+		existing: nil,
+		env:      oneZone(managed("asset-1", "neu", "urn:device:a")),
+		expected: []managedRename{},
+	}, {
+		//the walk has to reach every depth, or an asset in a sub-zone keeps a
+		//device under its old name forever
+		name: "an asset in a nested zone is reached",
+		existing: &domain.Environment{Zones: []domain.Zone{{
+			Zones: []domain.Zone{{Zones: []domain.Zone{{Assets: []domain.Asset{managed("asset-1", "alt", "urn:device:a")}}}}},
+		}}},
+		env: &domain.Environment{Zones: []domain.Zone{{
+			Zones: []domain.Zone{{Zones: []domain.Zone{{Assets: []domain.Asset{managed("asset-1", "neu", "urn:device:a")}}}}},
+		}}},
+		expected: []managedRename{{assetId: "asset-1", deviceId: "urn:device:a", name: "neu"}},
+	}, {
+		name:     "an asset without an id is never matched",
+		existing: oneZone(managed("", "alt", "urn:device:a")),
+		env:      oneZone(managed("", "neu", "urn:device:a")),
+		expected: []managedRename{},
+	}, {
+		//the device-manager already got this name on the create, and the read
+		//the rename does goes to the device-repository, which trails it
+		name:     "a device this save created is not read back",
+		existing: oneZone(domain.Asset{Id: "asset-1", Name: "alt", ExternalTypeId: "dt-1"}),
+		env:      oneZone(managed("asset-1", "neu", "urn:device:a")),
+		created:  []managedDevice{{assetId: "asset-1", deviceId: "urn:device:a"}},
+		expected: []managedRename{},
+	}, {
+		//and a device created for another asset of the same save does not shield
+		//the one that was genuinely renamed
+		name:     "a device created beside a renamed one still renames it",
+		existing: oneZone(managed("asset-1", "alt", "urn:device:a")),
+		env:      oneZone(managed("asset-1", "neu", "urn:device:a"), managed("asset-2", "zwei", "urn:device:b")),
+		created:  []managedDevice{{assetId: "asset-2", deviceId: "urn:device:b"}},
+		expected: []managedRename{{assetId: "asset-1", deviceId: "urn:device:a", name: "neu"}},
+	}} {
+		t.Run(testCase.name, func(t *testing.T) {
+			got := renamedDevices(testCase.existing, testCase.env, testCase.created)
+			if len(got) != len(testCase.expected) {
+				t.Fatalf("expected %+v, got %+v", testCase.expected, got)
+			}
+			for i := range got {
+				if got[i] != testCase.expected[i] {
+					t.Errorf("expected %+v, got %+v", testCase.expected[i], got[i])
+				}
+			}
+		})
+	}
+}
+
+// The conflict the handler's own check cannot see, for the rename: the winning
+// write lands between the read and the write. The loser must not carry its name
+// over to a device the winning document names under the old one.
+func TestAConflictDecidedByTheStoreRenamesNoDevice(t *testing.T) {
+	catalog := &fakeCatalog{idsByName: namedDeviceIds()}
+	store := newFakeEnvironments()
+	router := testRouterWithCatalog(store, catalog)
+
+	stored := putEnvironment(t, router, "env-1", "user-a", environmentWithTwoAssets())
+	store.beforeWrite = func() {
+		store.beforeWrite = nil
+		winner := store.stored["env-1"]
+		winner.Name = "written by the winner"
+		store.write(winner)
+	}
+
+	resp := do(t, router, "PUT", "/environments/env-1", "user-a", renamedAsset(t, stored, "Zähler", "neu"))
+	if resp.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if len(catalog.renamed) != 0 {
+		t.Fatalf("a write refused by the store must not rename a device, got %+v", catalog.renamed)
 	}
 }
