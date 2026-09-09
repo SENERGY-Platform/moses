@@ -63,8 +63,8 @@ type Config struct {
 	// restarted service can resume it, see lib/repo/historyjobs.go.
 	HistoryJobCollectionName string `json:"history_job_collection_name" env_var:"HISTORY_JOB_COLLECTION_NAME"`
 
-	// TimescaleWrapperUrl is where dataset sources with the platform origin
-	// fetch real measurements from. Empty disables the origin: affected
+	// TimescaleWrapperUrl is where dataset sources with the platform or export origin
+	// fetch real measurements from. Empty disables both origins: affected
 	// channels are reported and skipped.
 	TimescaleWrapperUrl string `json:"timescale_wrapper_url" env_var:"TIMESCALE_WRAPPER_URL"`
 

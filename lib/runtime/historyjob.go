@@ -1312,7 +1312,7 @@ func (this *Runtime) askOccupancy(ctx context.Context, queries []occupancyQuery,
 			//no pre-check of the budget: the client hands the context to the
 			//request and reports a spent one as its own error
 			occupied[i], failures[i] = this.fetcher.HasReadings(ctx, token,
-				query.deviceId, query.serviceId, query.column, from, end)
+				timeseries.DeviceSeries(query.deviceId, query.serviceId), query.column, from, end)
 		}(index)
 	}
 	waiting.Wait()

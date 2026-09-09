@@ -77,9 +77,29 @@ type queryColumn struct {
 	Name string `json:"name"`
 }
 
+// Series addresses one timeseries the wrapper can answer: a device's service,
+// or an analytics-serving export - never both, so exactly one constructor
+// fills the fields a request needs.
+type Series struct {
+	DeviceId  string
+	ServiceId string
+	ExportId  string
+}
+
+// DeviceSeries addresses a device's service.
+func DeviceSeries(deviceId string, serviceId string) Series {
+	return Series{DeviceId: deviceId, ServiceId: serviceId}
+}
+
+// ExportSeries addresses an analytics-serving export.
+func ExportSeries(exportId string) Series {
+	return Series{ExportId: exportId}
+}
+
 type queryElement struct {
-	DeviceId  string        `json:"deviceId"`
-	ServiceId string        `json:"serviceId"`
+	DeviceId  string        `json:"deviceId,omitempty"`
+	ServiceId string        `json:"serviceId,omitempty"`
+	ExportId  string        `json:"exportId,omitempty"`
 	Columns   []queryColumn `json:"columns"`
 	Time      queryTime     `json:"time"`
 	Limit     int           `json:"limit"`
@@ -141,10 +161,11 @@ func (this *Client) queryRows(ctx context.Context, token string, element queryEl
 // Fetch loads one column of one service's timeseries for [start, end). The
 // time_format parameter pins the wrapper's timestamp rendering to RFC3339, so
 // this client does not depend on the wrapper's default.
-func (this *Client) Fetch(ctx context.Context, token string, deviceId string, serviceId string, column string, start time.Time, end time.Time) ([]dataset.Point, error) {
+func (this *Client) Fetch(ctx context.Context, token string, series Series, column string, start time.Time, end time.Time) ([]dataset.Point, error) {
 	rows, err := this.queryRows(ctx, token, queryElement{
-		DeviceId:  deviceId,
-		ServiceId: serviceId,
+		DeviceId:  series.DeviceId,
+		ServiceId: series.ServiceId,
+		ExportId:  series.ExportId,
 		Columns:   []queryColumn{{Name: column}},
 		Time: queryTime{
 			Start: start.UTC().Format(time.RFC3339),
@@ -210,11 +231,12 @@ func (this *Client) Fetch(ctx context.Context, token string, deviceId string, se
 // that carries a value under no instant is neither: it is an answer this
 // client cannot place in the window, so it is a refusal rather than a free
 // window a history run would start over unchecked.
-func (this *Client) HasReadings(ctx context.Context, token string, deviceId string, serviceId string, column string, start time.Time, end time.Time) (bool, error) {
+func (this *Client) HasReadings(ctx context.Context, token string, series Series, column string, start time.Time, end time.Time) (bool, error) {
 	timeColumn := 0
 	rows, err := this.queryRows(ctx, token, queryElement{
-		DeviceId:  deviceId,
-		ServiceId: serviceId,
+		DeviceId:  series.DeviceId,
+		ServiceId: series.ServiceId,
+		ExportId:  series.ExportId,
 		Columns:   []queryColumn{{Name: column}},
 		Time: queryTime{
 			//the wrapper's SQL is exclusive at both ends, so the start goes back a

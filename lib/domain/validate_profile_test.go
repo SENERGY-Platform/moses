@@ -166,6 +166,33 @@ func TestValidateRefusesBrokenPlatformDatasets(t *testing.T) {
 	expectProfileProblem(t, datasetChannel(func(c *Channel) { c.Source.Dataset.Window = "7d" }), "only applies to a platform timeseries")
 }
 
+func exportDatasetChannel(mutate func(*Channel)) func(*Channel) {
+	return func(c *Channel) {
+		c.Source = Source{Kind: SourceDataset, Dataset: &DatasetSource{
+			Origin: OriginExport, Ref: "export-1",
+			Column: "temperature", Window: "7d",
+			Resample: ResampleHold, Anchor: AnchorLoop,
+		}}
+		if mutate != nil {
+			mutate(c)
+		}
+	}
+}
+
+func TestValidateAcceptsAnExportDataset(t *testing.T) {
+	if err := Validate(profileEnvironment(exportDatasetChannel(nil))); err != nil {
+		t.Errorf("a valid export dataset has to be storable now: %v", err)
+	}
+}
+
+func TestValidateRefusesBrokenExportDatasets(t *testing.T) {
+	expectProfileProblem(t, exportDatasetChannel(func(c *Channel) { c.Source.Dataset.Ref = " " }), "must name the export")
+	expectProfileProblem(t, exportDatasetChannel(func(c *Channel) { c.Source.Dataset.Column = "" }), "must name the export's column")
+	expectProfileProblem(t, exportDatasetChannel(func(c *Channel) { c.Source.Dataset.ServiceRef = "urn:service:x" }), "an export has no service")
+	expectProfileProblem(t, exportDatasetChannel(func(c *Channel) { c.Source.Dataset.Window = "" }), "window")
+	expectProfileProblem(t, exportDatasetChannel(func(c *Channel) { c.Source.Dataset.Window = "sieben Tage" }), "unreadable window")
+}
+
 func contextSourceEnvironment(key string, source Source) Environment {
 	env := profileEnvironment(nil)
 	env.ContextSources = map[string]Source{key: source}

@@ -13,7 +13,7 @@ owns. Where the backfill leaves two ramps with a step at the seam, this leaves
 one; where the backfill can only reconstruct `profile` and `dataset`, this
 simulates every source kind, script and schedule included. The price is that the
 live simulation is suspended for the duration and its current state is thrown
-away. Also not this: the `dataset` source with `origin: platform`, which *reads*
+away. Also not this: the `dataset` source with `origin: platform` or `export`, which *reads*
 real history into a simulation.
 
 ## What it does

@@ -312,6 +312,8 @@ const (
 	OriginFile DatasetOrigin = "file"
 	// OriginEndpoint polls an allow-listed http endpoint.
 	OriginEndpoint DatasetOrigin = "endpoint"
+	// OriginExport reads a timeseries of an analytics-serving export.
+	OriginExport DatasetOrigin = "export"
 )
 
 type ResampleMode string
@@ -341,13 +343,15 @@ const (
 type DatasetSource struct {
 	Origin DatasetOrigin `json:"origin" bson:"origin"`
 
-	// Ref is a platform device id, an uploaded dataset id or a url, per Origin.
+	// Ref is a platform device id, an uploaded dataset id, a url or an export
+	// id, per Origin.
 	Ref string `json:"ref" bson:"ref"`
 	// ServiceRef selects the service when Origin is OriginPlatform.
 	ServiceRef string `json:"service_ref,omitempty" bson:"service_ref,omitempty"`
 	// Column selects the value column: for an uploaded dataset the column name
 	// (empty means the first one), for a platform timeseries the path of the
-	// output variable, e.g. "value" or "energy.value".
+	// output variable, e.g. "value" or "energy.value", for an export the
+	// column name chosen by whoever created it.
 	Column string `json:"column,omitempty" bson:"column,omitempty"`
 
 	// Window is how much of a platform timeseries is fetched, backwards from

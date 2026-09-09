@@ -159,18 +159,18 @@ func New(config config.Config, environments repo.Environments, states repo.State
 	return result
 }
 
-// seriesFetcher is what the platform origin needs from the timescale-wrapper.
-// ctx is the load's budget: a fetch outlives neither the start nor the reload
-// that asked for it.
+// seriesFetcher is what the platform and export origins need from the
+// timescale-wrapper. ctx is the load's budget: a fetch outlives neither the
+// start nor the reload that asked for it.
 type seriesFetcher interface {
-	Fetch(ctx context.Context, token string, deviceId string, serviceId string, column string, start time.Time, end time.Time) ([]dataset.Point, error)
+	Fetch(ctx context.Context, token string, series timeseries.Series, column string, start time.Time, end time.Time) ([]dataset.Point, error)
 
 	// HasReadings reports whether that column already holds a reading in
 	// [start, end). It is what a history run asks before it writes into a
 	// window; ctx is the check's budget. An error refuses the run rather than
 	// starting it unchecked, except for a *timeseries.StatusError of the 4xx
 	// class, which leaves that one channel unchecked.
-	HasReadings(ctx context.Context, token string, deviceId string, serviceId string, column string, start time.Time, end time.Time) (bool, error)
+	HasReadings(ctx context.Context, token string, series timeseries.Series, column string, start time.Time, end time.Time) (bool, error)
 }
 
 // newRuntime is what the tests use: everything except the connector is already
@@ -1120,7 +1120,7 @@ func (this *Runtime) loadZoneSeries(ctx context.Context, envId string, owner str
 			if source.Kind != domain.SourceDataset || source.Dataset == nil {
 				continue
 			}
-			if source.Dataset.Origin != domain.OriginFile && source.Dataset.Origin != domain.OriginPlatform {
+			if source.Dataset.Origin != domain.OriginFile && source.Dataset.Origin != domain.OriginPlatform && source.Dataset.Origin != domain.OriginExport {
 				continue
 			}
 			points, err := this.fetchSeries(ctx, owner, source.Dataset, cache)
@@ -1138,8 +1138,8 @@ func (this *Runtime) loadZoneSeries(ctx context.Context, envId string, owner str
 // upload cache of the load in progress; it may be nil, which costs the sharing
 // and nothing else.
 func (this *Runtime) fetchSeries(ctx context.Context, owner string, source *domain.DatasetSource, cache fileSeriesCache) ([]dataset.Point, error) {
-	if source.Origin == domain.OriginPlatform {
-		return this.fetchPlatformSeries(ctx, owner, source)
+	if source.Origin == domain.OriginPlatform || source.Origin == domain.OriginExport {
+		return this.fetchRemoteSeries(ctx, owner, source)
 	}
 	series, cached := cache[source.Ref]
 	if !cached {
@@ -1183,12 +1183,13 @@ func (this *Runtime) fetchSeries(ctx context.Context, owner string, source *doma
 	return nil, fmt.Errorf("the dataset has no column %q", source.Column)
 }
 
-// fetchPlatformSeries pulls a window of a real timeseries, backwards from now.
-// The window is frozen until the next reload, which is what makes the replay
-// deterministic between reloads.
-func (this *Runtime) fetchPlatformSeries(ctx context.Context, owner string, source *domain.DatasetSource) ([]dataset.Point, error) {
+// fetchRemoteSeries pulls a window of a real timeseries, backwards from now,
+// for the platform and export origins alike - a device's service for the
+// former, an export for the latter. The window is frozen until the next
+// reload, which is what makes the replay deterministic between reloads.
+func (this *Runtime) fetchRemoteSeries(ctx context.Context, owner string, source *domain.DatasetSource) ([]dataset.Point, error) {
 	if this.fetcher == nil {
-		return nil, errors.New("no timescale_wrapper_url configured, the platform origin is disabled")
+		return nil, errors.New("no timescale_wrapper_url configured, the platform and export origins are disabled")
 	}
 	if this.ownerToken == nil {
 		return nil, errors.New("no token source configured")
@@ -1201,8 +1202,12 @@ func (this *Runtime) fetchPlatformSeries(ctx context.Context, owner string, sour
 	if err != nil {
 		return nil, fmt.Errorf("unable to obtain a token for the owner: %w", err)
 	}
+	series := timeseries.DeviceSeries(source.Ref, source.ServiceRef)
+	if source.Origin == domain.OriginExport {
+		series = timeseries.ExportSeries(source.Ref)
+	}
 	end := time.Now()
-	return this.fetcher.Fetch(ctx, token, source.Ref, source.ServiceRef, source.Column, end.Add(-window), end)
+	return this.fetcher.Fetch(ctx, token, series, source.Column, end.Add(-window), end)
 }
 
 // executeDataset publishes the replay value for now. The anchor of a looping

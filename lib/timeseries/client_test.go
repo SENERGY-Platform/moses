@@ -52,7 +52,7 @@ func TestFetchPinsTheRequestContract(t *testing.T) {
 
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	end := start.Add(7 * 24 * time.Hour)
-	points, err := New(server.URL).Fetch(context.Background(), "Bearer abc", "device-1", "service-1", "energy.value", start, end)
+	points, err := New(server.URL).Fetch(context.Background(), "Bearer abc", DeviceSeries("device-1", "service-1"), "energy.value", start, end)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,6 +79,45 @@ func TestFetchPinsTheRequestContract(t *testing.T) {
 	}
 }
 
+// TestFetchAddressesExactlyOneSeriesShape: the wrapper addresses a series by
+// deviceId+serviceId or by exportId, never both, so a device series must not
+// carry an exportId key and an export series must not carry the device keys.
+func TestFetchAddressesExactlyOneSeriesShape(t *testing.T) {
+	rows := `[[["2026-01-05T00:00:00Z", 1.5],["2026-01-05T00:15:00Z", 2.5]]]`
+	start, end := time.Now().Add(-time.Hour), time.Now()
+
+	captured := map[string]interface{}{}
+	server := wrapperAnswering(t, rows, &captured)
+	if _, err := New(server.URL).Fetch(context.Background(), "t", DeviceSeries("device-1", "service-1"), "value", start, end); err != nil {
+		t.Fatal(err)
+	}
+	server.Close()
+	element := captured["element"].(map[string]interface{})
+	if element["deviceId"] != "device-1" || element["serviceId"] != "service-1" {
+		t.Errorf("a device series has to send its ids: %v", element)
+	}
+	if _, sent := element["exportId"]; sent {
+		t.Errorf("a device series must not send an exportId key: %v", element)
+	}
+
+	captured = map[string]interface{}{}
+	server = wrapperAnswering(t, rows, &captured)
+	if _, err := New(server.URL).Fetch(context.Background(), "t", ExportSeries("export-1"), "value", start, end); err != nil {
+		t.Fatal(err)
+	}
+	server.Close()
+	element = captured["element"].(map[string]interface{})
+	if element["exportId"] != "export-1" {
+		t.Errorf("an export series has to send its id: %v", element)
+	}
+	if _, sent := element["deviceId"]; sent {
+		t.Errorf("an export series must not send a deviceId key: %v", element)
+	}
+	if _, sent := element["serviceId"]; sent {
+		t.Errorf("an export series must not send a serviceId key: %v", element)
+	}
+}
+
 func TestFetchSortsDeduplicatesAndSkipsGaps(t *testing.T) {
 	//out of order, one null gap, one duplicate timestamp
 	server := wrapperAnswering(t, `[[
@@ -90,7 +129,7 @@ func TestFetchSortsDeduplicatesAndSkipsGaps(t *testing.T) {
 	]]`, nil)
 	defer server.Close()
 
-	points, err := New(server.URL).Fetch(context.Background(), "t", "d", "s", "value", time.Now().Add(-time.Hour), time.Now())
+	points, err := New(server.URL).Fetch(context.Background(), "t", DeviceSeries("d", "s"), "value", time.Now().Add(-time.Hour), time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +165,7 @@ func TestFetchEndsWithTheContextItWasGiven(t *testing.T) {
 		{"cancelled", cancelled, context.Canceled},
 		{"deadline in the past", expired, context.DeadlineExceeded},
 	} {
-		_, err := New(server.URL).Fetch(tc.ctx, "t", "d", "s", "value", time.Now().Add(-time.Hour), time.Now())
+		_, err := New(server.URL).Fetch(tc.ctx, "t", DeviceSeries("d", "s"), "value", time.Now().Add(-time.Hour), time.Now())
 		if err == nil {
 			t.Errorf("%s: a spent context has to end the fetch", tc.name)
 			continue
@@ -155,7 +194,7 @@ func TestFetchGivesUpWhenTheCallersDeadlinePasses(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := New(server.URL).Fetch(ctx, "t", "d", "s", "value", time.Now().Add(-time.Hour), time.Now())
+		_, err := New(server.URL).Fetch(ctx, "t", DeviceSeries("d", "s"), "value", time.Now().Add(-time.Hour), time.Now())
 		done <- err
 	}()
 	select {
@@ -180,7 +219,7 @@ func TestFetchRefusals(t *testing.T) {
 		{"a value without an instant", `[[[null, 1.5],["2026-01-05T00:00:00Z", 1.0],["2026-01-05T00:15:00Z", 2.0]]]`, "unreadable timestamp"},
 	} {
 		server := wrapperAnswering(t, tc.body, nil)
-		_, err := New(server.URL).Fetch(context.Background(), "t", "d", "s", "value", time.Now().Add(-time.Hour), time.Now())
+		_, err := New(server.URL).Fetch(context.Background(), "t", DeviceSeries("d", "s"), "value", time.Now().Add(-time.Hour), time.Now())
 		server.Close()
 		if err == nil || !strings.Contains(err.Error(), tc.fragment) {
 			t.Errorf("%s: expected %q, got %v", tc.name, tc.fragment, err)
@@ -190,7 +229,7 @@ func TestFetchRefusals(t *testing.T) {
 		http.Error(w, "no access", http.StatusNotFound)
 	}))
 	defer server.Close()
-	_, err := New(server.URL).Fetch(context.Background(), "t", "d", "s", "value", time.Now().Add(-time.Hour), time.Now())
+	_, err := New(server.URL).Fetch(context.Background(), "t", DeviceSeries("d", "s"), "value", time.Now().Add(-time.Hour), time.Now())
 	if err == nil || !strings.Contains(err.Error(), "404") {
 		t.Errorf("a non-200 has to carry the status, got %v", err)
 	}
@@ -206,7 +245,7 @@ func TestHasReadingsPinsTheRequestContract(t *testing.T) {
 
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	end := start.Add(24 * time.Hour)
-	occupied, err := New(server.URL).HasReadings(context.Background(), "Bearer abc", "device-1", "service-1", "energy.value", start, end)
+	occupied, err := New(server.URL).HasReadings(context.Background(), "Bearer abc", DeviceSeries("device-1", "service-1"), "energy.value", start, end)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +289,7 @@ func TestHasReadingsKeepsTheSubSecondPartOfTheWindow(t *testing.T) {
 	defer server.Close()
 
 	start := time.Date(2026, 7, 1, 12, 0, 0, 250*int(time.Millisecond), time.UTC)
-	if _, err := New(server.URL).HasReadings(context.Background(), "t", "d", "s", "value",
+	if _, err := New(server.URL).HasReadings(context.Background(), "t", DeviceSeries("d", "s"), "value",
 		start, start.Add(24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +320,7 @@ func TestHasReadingsReadsBothAnswers(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			server := wrapperAnswering(t, tc.rows, nil)
 			defer server.Close()
-			occupied, err := New(server.URL).HasReadings(context.Background(), "t", "d", "s", "value",
+			occupied, err := New(server.URL).HasReadings(context.Background(), "t", DeviceSeries("d", "s"), "value",
 				time.Now().Add(-24*time.Hour), time.Now())
 			if err != nil {
 				t.Fatal(err)
@@ -307,7 +346,7 @@ func TestHasReadingsRefusesAnAnswerItCannotRead(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			server := wrapperAnswering(t, tc.body, nil)
 			defer server.Close()
-			occupied, err := New(server.URL).HasReadings(context.Background(), "t", "d", "s", "value",
+			occupied, err := New(server.URL).HasReadings(context.Background(), "t", DeviceSeries("d", "s"), "value",
 				time.Now().Add(-24*time.Hour), time.Now())
 			if err == nil || !strings.Contains(err.Error(), tc.fragment) {
 				t.Errorf("expected %q, got %v", tc.fragment, err)
@@ -322,7 +361,7 @@ func TestHasReadingsRefusesAnAnswerItCannotRead(t *testing.T) {
 		http.Error(w, "no access", http.StatusForbidden)
 	}))
 	defer server.Close()
-	_, err := New(server.URL).HasReadings(context.Background(), "t", "d", "s", "value",
+	_, err := New(server.URL).HasReadings(context.Background(), "t", DeviceSeries("d", "s"), "value",
 		time.Now().Add(-24*time.Hour), time.Now())
 	if err == nil || !strings.Contains(err.Error(), "403") {
 		t.Errorf("a non-200 has to carry the status, got %v", err)
@@ -358,7 +397,7 @@ func TestHasReadingsEndsWithTheContextItWasGiven(t *testing.T) {
 		{"cancelled", cancelled, context.Canceled},
 		{"deadline in the past", expired, context.DeadlineExceeded},
 	} {
-		occupied, err := New(server.URL).HasReadings(tc.ctx, "t", "d", "s", "value",
+		occupied, err := New(server.URL).HasReadings(tc.ctx, "t", DeviceSeries("d", "s"), "value",
 			time.Now().Add(-24*time.Hour), time.Now())
 		if !errors.Is(err, tc.want) {
 			t.Errorf("%s: expected %v, got %v", tc.name, tc.want, err)
@@ -377,7 +416,7 @@ func TestFetchSendsNoOrder(t *testing.T) {
 	server := wrapperAnswering(t, `[[["2026-01-05T00:00:00Z", 1.5],["2026-01-05T00:15:00Z", 2.5]]]`, &captured)
 	defer server.Close()
 
-	if _, err := New(server.URL).Fetch(context.Background(), "t", "d", "s", "value",
+	if _, err := New(server.URL).Fetch(context.Background(), "t", DeviceSeries("d", "s"), "value",
 		time.Now().Add(-time.Hour), time.Now()); err != nil {
 		t.Fatal(err)
 	}

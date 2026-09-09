@@ -1185,6 +1185,19 @@ func (this *validator) checkDatasetFields(path string, source Source) {
 		if _, err := ParseWindow(d.Window); err != nil {
 			this.fail(path+".dataset.window", "%s", err.Error())
 		}
+	case OriginExport:
+		if strings.TrimSpace(d.Ref) == "" {
+			this.fail(path+".dataset.ref", "must name the export")
+		}
+		if strings.TrimSpace(d.ServiceRef) != "" {
+			this.fail(path+".dataset.service_ref", "an export has no service")
+		}
+		if strings.TrimSpace(d.Column) == "" {
+			this.fail(path+".dataset.column", "must name the export's column")
+		}
+		if _, err := ParseWindow(d.Window); err != nil {
+			this.fail(path+".dataset.window", "%s", err.Error())
+		}
 	case OriginEndpoint:
 		this.fail(path+".dataset.origin", "origin %q is part of the format but not executed yet", d.Origin)
 	default:

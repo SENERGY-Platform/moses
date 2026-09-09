@@ -118,7 +118,7 @@ func (this *Runtime) loadContextSeries(ctx context.Context, def domain.Environme
 		if source.Kind != domain.SourceDataset || source.Dataset == nil {
 			continue
 		}
-		if source.Dataset.Origin != domain.OriginFile && source.Dataset.Origin != domain.OriginPlatform {
+		if source.Dataset.Origin != domain.OriginFile && source.Dataset.Origin != domain.OriginPlatform && source.Dataset.Origin != domain.OriginExport {
 			continue
 		}
 		points, err := this.fetchSeries(ctx, def.Owner, source.Dataset, cache)

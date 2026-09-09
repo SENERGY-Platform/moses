@@ -308,11 +308,13 @@ definitions:
     - platform
     - file
     - endpoint
+    - export
     type: string
     x-enum-varnames:
     - OriginPlatform
     - OriginFile
     - OriginEndpoint
+    - OriginExport
   domain.DatasetSource:
     properties:
       anchor:
@@ -321,7 +323,8 @@ definitions:
         description: |-
           Column selects the value column: for an uploaded dataset the column name
           (empty means the first one), for a platform timeseries the path of the
-          output variable, e.g. "value" or "energy.value".
+          output variable, e.g. "value" or "energy.value", for an export the
+          column name chosen by whoever created it.
         type: string
       cumulative:
         description: |-
@@ -331,8 +334,9 @@ definitions:
       origin:
         $ref: '#/definitions/domain.DatasetOrigin'
       ref:
-        description: Ref is a platform device id, an uploaded dataset id or a url,
-          per Origin.
+        description: |-
+          Ref is a platform device id, an uploaded dataset id, a url or an export
+          id, per Origin.
         type: string
       resample:
         $ref: '#/definitions/domain.ResampleMode'

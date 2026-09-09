@@ -10,8 +10,8 @@ simulation, the same arithmetic on the same document, and the two differ in
 exactly one thing that changes everything downstream: a live reading is stamped
 by the platform on arrival, a backfilled one carries its own timestamp in the
 message. Everything below follows from that. A second neighbour is the dataset
-source with `origin: platform`, which *reads* real history into a simulation;
-this writes simulated history out. And this is not an import: it publishes
+source with `origin: platform` or `export`, which *reads* real history into a
+simulation; this writes simulated history out. And this is not an import: it publishes
 through the ordinary connector, so a backfilled row is indistinguishable from a
 live one once it is in timescale.
 

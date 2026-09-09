@@ -24,6 +24,7 @@ import (
 
 	"github.com/SENERGY-Platform/moses/lib/dataset"
 	"github.com/SENERGY-Platform/moses/lib/domain"
+	"github.com/SENERGY-Platform/moses/lib/timeseries"
 )
 
 type fakeFetcher struct {
@@ -72,18 +73,18 @@ type occupancyCheck struct {
 	end       time.Time
 }
 
-func (this *fakeFetcher) HasReadings(ctx context.Context, token string, deviceId string, serviceId string, column string, start time.Time, end time.Time) (bool, error) {
+func (this *fakeFetcher) HasReadings(ctx context.Context, token string, series timeseries.Series, column string, start time.Time, end time.Time) (bool, error) {
 	this.mux.Lock()
 	this.checks = append(this.checks, occupancyCheck{
-		token: token, deviceId: deviceId, serviceId: serviceId, column: column, start: start, end: end,
+		token: token, deviceId: series.DeviceId, serviceId: series.ServiceId, column: column, start: start, end: end,
 	})
 	this.inFlight++
 	if this.inFlight > this.peakInFlight {
 		this.peakInFlight = this.inFlight
 	}
-	occupied := this.occupied[serviceId]
+	occupied := this.occupied[series.ServiceId]
 	failure := this.readingsErr
-	if perService, found := this.readingsErrOf[serviceId]; found {
+	if perService, found := this.readingsErrOf[series.ServiceId]; found {
 		failure = perService
 	}
 	gate := this.readingsGate
@@ -104,7 +105,7 @@ func (this *fakeFetcher) HasReadings(ctx context.Context, token string, deviceId
 		return false, err
 	}
 	if answer != nil {
-		return answer(token, serviceId)
+		return answer(token, series.ServiceId)
 	}
 	if failure != nil {
 		return false, failure
@@ -126,11 +127,11 @@ func (this *fakeFetcher) peakOccupancyQueries() int {
 	return this.peakInFlight
 }
 
-func (this *fakeFetcher) Fetch(ctx context.Context, token string, deviceId string, serviceId string, column string, start time.Time, end time.Time) ([]dataset.Point, error) {
+func (this *fakeFetcher) Fetch(ctx context.Context, token string, series timeseries.Series, column string, start time.Time, end time.Time) ([]dataset.Point, error) {
 	this.mux.Lock()
 	defer this.mux.Unlock()
 	this.calls = append(this.calls, map[string]string{
-		"token": token, "device": deviceId, "service": serviceId, "column": column,
+		"token": token, "device": series.DeviceId, "service": series.ServiceId, "export": series.ExportId, "column": column,
 		"window": end.Sub(start).String(),
 	})
 	this.budgets = append(this.budgets, budgetOf(ctx))
@@ -206,6 +207,62 @@ func TestAPlatformChannelReplaysTheFetchedWindow(t *testing.T) {
 		t.Errorf("the fetch has to use the owner's token, got %q", call["token"])
 	}
 	if call["device"] != "urn:device:real" || call["service"] != "urn:service:real" || call["column"] != "energy.value" {
+		t.Errorf("wrong query: %v", call)
+	}
+	if call["window"] != "168h0m0s" {
+		t.Errorf("expected a 7d window, got %q", call["window"])
+	}
+}
+
+func exportChannel(envId string) domain.Channel {
+	return domain.Channel{
+		Id: "ch-export", Name: "export", Direction: domain.Sensor,
+		ExternalRef: serviceRefOf(envId) + "-export", IntervalSeconds: 1,
+		Source: domain.Source{Kind: domain.SourceDataset, Dataset: &domain.DatasetSource{
+			Origin: domain.OriginExport, Ref: "export-1",
+			Column: "temperature", Window: "7d",
+			Resample: domain.ResampleHold, Anchor: domain.AnchorLoop,
+		}},
+	}
+}
+
+func TestAnExportChannelReplaysTheFetchedWindow(t *testing.T) {
+	now := time.Now().Unix()
+	fetcher := &fakeFetcher{points: []dataset.Point{
+		{Unix: now - 7200, Value: 11}, {Unix: now - 3600, Value: 22}, {Unix: now, Value: 33},
+	}}
+	env := testEnvironment("env-export", exportChannel("env-export"))
+	env.Owner = "owner-42"
+	publisher := &fakePublisher{}
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), nil, newFakeHistoryJobs(), publisher)
+	rt.fetcher = fetcher
+	rt.ownerToken = func(userId string) (string, error) { return "Bearer token-for-" + userId, nil }
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := rt.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(rt.Stop)
+
+	if !waitFor(5*time.Second, func() bool { return publisher.count() >= 2 }) {
+		t.Fatalf("the export replay did not publish, count %d", publisher.count())
+	}
+	for _, event := range publisher.all() {
+		v := event.value.(float64)
+		if v != 11 && v != 22 && v != 33 {
+			t.Fatalf("expected only fetched values, got %v", v)
+		}
+	}
+	//the fetch ran with the owner's token, the declared column and the window,
+	//addressed by export id rather than device+service
+	if len(fetcher.calls) != 1 {
+		t.Fatalf("expected one fetch per start, got %d", len(fetcher.calls))
+	}
+	call := fetcher.calls[0]
+	if call["token"] != "Bearer token-for-owner-42" {
+		t.Errorf("the fetch has to use the owner's token, got %q", call["token"])
+	}
+	if call["export"] != "export-1" || call["device"] != "" || call["service"] != "" || call["column"] != "temperature" {
 		t.Errorf("wrong query: %v", call)
 	}
 	if call["window"] != "168h0m0s" {

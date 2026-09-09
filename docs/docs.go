@@ -1570,12 +1570,14 @@ const docTemplate = `{
             "enum": [
                 "platform",
                 "file",
-                "endpoint"
+                "endpoint",
+                "export"
             ],
             "x-enum-varnames": [
                 "OriginPlatform",
                 "OriginFile",
-                "OriginEndpoint"
+                "OriginEndpoint",
+                "OriginExport"
             ]
         },
         "domain.DatasetSource": {
@@ -1585,7 +1587,7 @@ const docTemplate = `{
                     "$ref": "#/definitions/domain.AnchorMode"
                 },
                 "column": {
-                    "description": "Column selects the value column: for an uploaded dataset the column name\n(empty means the first one), for a platform timeseries the path of the\noutput variable, e.g. \"value\" or \"energy.value\".",
+                    "description": "Column selects the value column: for an uploaded dataset the column name\n(empty means the first one), for a platform timeseries the path of the\noutput variable, e.g. \"value\" or \"energy.value\", for an export the\ncolumn name chosen by whoever created it.",
                     "type": "string"
                 },
                 "cumulative": {
@@ -1596,7 +1598,7 @@ const docTemplate = `{
                     "$ref": "#/definitions/domain.DatasetOrigin"
                 },
                 "ref": {
-                    "description": "Ref is a platform device id, an uploaded dataset id or a url, per Origin.",
+                    "description": "Ref is a platform device id, an uploaded dataset id, a url or an export\nid, per Origin.",
                     "type": "string"
                 },
                 "resample": {
