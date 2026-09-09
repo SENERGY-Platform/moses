@@ -87,12 +87,34 @@ type environment struct {
 	// commands, so a wait that starts after the gate closed cannot race an Add.
 	commands sync.WaitGroup
 
+	// reloadPending is true while a reload a follow loop spawned for this
+	// environment has not returned yet, guarded by mux. It keeps a later probe
+	// of the same loop from spawning a second one (follow.go).
+	reloadPending bool
+
 	// gen, cancel and runners are only written while the runtime's lifecycle
 	// mutex is held; gen is additionally guarded by the runtime's mux, because
 	// rebuildIndex reads it.
 	gen     *generation
 	cancel  context.CancelFunc
 	runners sync.WaitGroup
+}
+
+// snapshotSeries copies the series map of one generation under env.mux, which
+// is the lock every touch of that map takes. A backfill job and a history run
+// read points for as long as they run, while a following source appends to
+// them (follow.go), so each takes one frozen set at its start.
+//
+// The point slices themselves are shared rather than copied: a stored slice is
+// never written into, a refresh always replaces the map entry with a fresh one.
+func snapshotSeries(env *environment, gen *generation) map[string][]dataset.Point {
+	env.mux.Lock()
+	defer env.mux.Unlock()
+	result := make(map[string][]dataset.Point, len(gen.series))
+	for id, points := range gen.series {
+		result[id] = points
+	}
+	return result
 }
 
 // generation is the immutable view of one version of a definition. A channel
@@ -113,7 +135,10 @@ type generation struct {
 	// commands maps an incoming command to the channel that answers it.
 	commands map[commandKey]channelBinding
 
-	// series carries the parsed uploads while the generation is indexed.
+	// series carries the points of every dataset source, keyed by channel id or
+	// context series id. It is guarded by environment.mux: a following source
+	// appends to it while the environment runs (follow.go), so a reader that
+	// keeps the points for longer than one tick takes a snapshotSeries copy.
 	series map[string][]dataset.Point
 
 	// aggregateInputs maps an aggregate channel's id to the ids of the channels
@@ -224,9 +249,6 @@ type channelBinding struct {
 	// channel that declares none. They are resolved against stepSeconds, so the
 	// field has to be filled after stepSeconds is final.
 	faults channelFaults
-
-	// points is the parsed series of a dataset channel, loaded at start.
-	points []dataset.Point
 
 	// program is the compiled expression of a formula channel.
 	program *formula.Program
@@ -475,9 +497,6 @@ func (this *generation) addAsset(envId string, zoneId string, asset domain.Asset
 		if script {
 			binding.code = channel.Source.Script.Code
 			binding.script, binding.scriptErr = compileScript(channel.Id, binding.code)
-		}
-		if replay {
-			binding.points = this.series[channel.Id]
 		}
 		binding.program = program
 		//seconds times time.Second overflows int64 beyond this limit and produces

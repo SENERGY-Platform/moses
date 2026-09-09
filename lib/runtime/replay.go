@@ -40,8 +40,18 @@ func replayValue(source domain.DatasetSource, points []dataset.Point, anchorUnix
 	switch source.Anchor {
 	case domain.AnchorOriginal:
 		virtual = now.Unix()
-		if virtual < first || virtual > last {
+		if virtual < first {
 			return 0, false
+		}
+		if virtual > last {
+			if !followHolds(source, last, virtual) {
+				return 0, false
+			}
+			//a following source is re-read on its own cadence, so between two
+			//refreshes the newest measurement is what the present holds -
+			//without this the channel would be silent for all but the instant
+			//of its last fetched point
+			virtual = last
 		}
 	default: //loop
 		elapsed := now.Unix() - anchorUnix
@@ -92,6 +102,43 @@ func resample(mode domain.ResampleMode, points []dataset.Point, virtual int64, t
 	default: //hold
 		return points[previous].Value
 	}
+}
+
+// followHolds says whether a replay may still answer with the newest point of
+// a following source at an instant after it: only for a source that follows,
+// only while that point is at most followStaleMultiplier cadences old, and not
+// for "distribute", which hands out the share of a slot rather than a value -
+// holding it would keep integrating the last sample's quantity into every slot
+// after the series ended.
+func followHolds(source domain.DatasetSource, lastUnix int64, nowUnix int64) bool {
+	if !source.Follow || source.Resample == domain.ResampleDistribute {
+		return false
+	}
+	return nowUnix-lastUnix <= followHoldSeconds(source)
+}
+
+// followHoldSeconds is how long past its newest point a following source keeps
+// answering: followStaleMultiplier refresh cadences, rounded up to a whole
+// second because the instants of a series are whole seconds, and at least one,
+// since a bound below a second could not be held at all.
+func followHoldSeconds(source domain.DatasetSource) int64 {
+	every, err := domain.ParseFollowEvery(source.FollowEvery)
+	if err != nil {
+		//validation refuses an unreadable follow_every, so this document
+		//bypassed the api; the default cadence is what the loop assumes too
+		every, _ = domain.ParseFollowEvery("")
+	}
+	//in whole seconds before the multiplication, so that a window of centuries
+	//cannot overflow the duration
+	seconds := int64(every / time.Second)
+	if every%time.Second != 0 {
+		seconds++
+	}
+	hold := followStaleMultiplier * seconds
+	if hold < 1 {
+		hold = 1
+	}
+	return hold
 }
 
 // slotSeconds is the length of the interval a sample covers: the distance to

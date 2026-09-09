@@ -193,6 +193,65 @@ func TestValidateRefusesBrokenExportDatasets(t *testing.T) {
 	expectProfileProblem(t, exportDatasetChannel(func(c *Channel) { c.Source.Dataset.Window = "sieben Tage" }), "unreadable window")
 }
 
+func followingExportDatasetChannel(mutate func(*Channel)) func(*Channel) {
+	return exportDatasetChannel(func(c *Channel) {
+		c.Source.Dataset.Anchor = AnchorOriginal
+		c.Source.Dataset.Follow = true
+		if mutate != nil {
+			mutate(c)
+		}
+	})
+}
+
+func TestValidateAcceptsAFollowingExportSource(t *testing.T) {
+	if err := Validate(profileEnvironment(followingExportDatasetChannel(nil))); err != nil {
+		t.Errorf("a following export dataset has to be storable: %v", err)
+	}
+	custom := followingExportDatasetChannel(func(c *Channel) { c.Source.Dataset.FollowEvery = "5m" })
+	if err := Validate(profileEnvironment(custom)); err != nil {
+		t.Errorf("a following export dataset with a custom follow_every has to be storable: %v", err)
+	}
+}
+
+func TestValidateRefusesFollowOnAFileDataset(t *testing.T) {
+	expectProfileProblem(t, datasetChannel(func(c *Channel) {
+		c.Source.Dataset.Anchor = AnchorOriginal
+		c.Source.Dataset.Follow = true
+	}), "nothing to follow")
+}
+
+func TestValidateRefusesFollowWithALoopAnchor(t *testing.T) {
+	expectProfileProblem(t, exportDatasetChannel(func(c *Channel) {
+		c.Source.Dataset.Follow = true // Anchor stays AnchorLoop
+	}), "anchor original")
+}
+
+// TestValidateRefusesFollowWithoutTheOriginalAnchor: only "original" makes a
+// follow readable, so the check has to be against that one rather than against
+// the loop it happens to be the opposite of today - an anchor that is unset,
+// or one a later format adds, must not slip a follow through.
+func TestValidateRefusesFollowWithoutTheOriginalAnchor(t *testing.T) {
+	expectProfileProblem(t, exportDatasetChannel(func(c *Channel) {
+		c.Source.Dataset.Follow = true
+		c.Source.Dataset.Anchor = ""
+	}), "anchor original")
+}
+
+func TestValidateRefusesFollowEveryWithoutFollow(t *testing.T) {
+	expectProfileProblem(t, exportDatasetChannel(func(c *Channel) {
+		c.Source.Dataset.FollowEvery = "5m"
+	}), "only be set together with follow")
+}
+
+func TestValidateRefusesABadFollowEvery(t *testing.T) {
+	expectProfileProblem(t, followingExportDatasetChannel(func(c *Channel) {
+		c.Source.Dataset.FollowEvery = "30s"
+	}), "at least")
+	expectProfileProblem(t, followingExportDatasetChannel(func(c *Channel) {
+		c.Source.Dataset.FollowEvery = "bald"
+	}), "unreadable")
+}
+
 func contextSourceEnvironment(key string, source Source) Environment {
 	env := profileEnvironment(nil)
 	env.ContextSources = map[string]Source{key: source}

@@ -1217,6 +1217,32 @@ func (this *validator) checkDatasetFields(path string, source Source) {
 	default:
 		this.fail(path+".dataset.anchor", "unknown anchor mode %q", d.Anchor)
 	}
+	this.checkFollow(path, d)
+}
+
+// checkFollow refuses a follow that could not do what it reads like: an
+// uploaded dataset has nothing to poll again, and a loop replays the frozen
+// window it already fetched rather than reading further.
+func (this *validator) checkFollow(path string, d *DatasetSource) {
+	if !d.Follow {
+		if strings.TrimSpace(d.FollowEvery) != "" {
+			this.fail(path+".dataset.follow_every", "may only be set together with follow")
+		}
+		return
+	}
+	if d.Origin == OriginFile {
+		this.fail(path+".dataset.follow", "an uploaded dataset has nothing to follow")
+	}
+	if d.Anchor != AnchorOriginal {
+		//against original rather than against loop: an unset anchor, or one a
+		//later format adds, must not slip a follow through either
+		this.fail(path+".dataset.follow", "following needs anchor original: a loop replays the frozen window")
+	}
+	if every, err := ParseFollowEvery(d.FollowEvery); err != nil {
+		this.fail(path+".dataset.follow_every", "%s", err.Error())
+	} else if every < MinFollowEvery {
+		this.fail(path+".dataset.follow_every", "must be at least %s, got %q", MinFollowEvery, d.FollowEvery)
+	}
 }
 
 // checkContextSource: a context source ticks on its own interval and writes

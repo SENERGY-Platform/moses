@@ -250,9 +250,7 @@ func TestABackfillDoesNotMoveTheAnchorOfTheLiveSimulation(t *testing.T) {
 	//and it replayed against an anchor of its own, not the persisted one. Both
 	//anchors produce values here, so the discriminator has to be the values
 	//themselves rather than whether anything was published at all.
-	rt.mux.RLock()
-	points := live.gen.series["ch-1"]
-	rt.mux.RUnlock()
+	points := seriesOf(t, rt, "env-bf-anchor", "ch-1")
 	if len(points) < 2 {
 		t.Fatalf("the dataset did not load, %d points", len(points))
 	}

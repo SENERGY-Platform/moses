@@ -428,3 +428,56 @@ func TestFetchSendsNoOrder(t *testing.T) {
 		t.Errorf("Fetch sent an order direction: %v", element)
 	}
 }
+
+// TestFetchSinceTakesAnyNumberOfPoints: a follow refresh asks for the tail
+// since its last stored point, where no new measurement and a single one are
+// both ordinary answers - only a replay needs the two points Fetch insists on.
+func TestFetchSinceTakesAnyNumberOfPoints(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want []float64
+	}{
+		//the wrapper pads an empty result with an all-null row rather than
+		//answering no rows at all
+		{"the wrapper's padded empty window", `[[[null, null]]]`, nil},
+		{"no rows", `[[]]`, nil},
+		{"one row", `[[["2026-01-05T00:15:00Z", 2.5]]]`, []float64{2.5}},
+		{"two rows out of order", `[[["2026-01-05T00:30:00Z", 3.5],["2026-01-05T00:15:00Z", 2.5]]]`, []float64{2.5, 3.5}},
+		//a null value is a gap in the measurement, so the answer is empty
+		//rather than an error, exactly as in Fetch
+		{"one gap", `[[["2026-01-05T00:15:00Z", null]]]`, nil},
+	} {
+		server := wrapperAnswering(t, tc.body, nil)
+		points, err := New(server.URL).FetchSince(context.Background(), "t", DeviceSeries("d", "s"), "value",
+			time.Now().Add(-time.Hour), time.Now())
+		server.Close()
+		if err != nil {
+			t.Errorf("%s: a refresh over %d points must not be an error: %v", tc.name, len(tc.want), err)
+			continue
+		}
+		if points == nil {
+			t.Errorf("%s: expected an empty slice rather than nil", tc.name)
+			continue
+		}
+		if len(points) != len(tc.want) {
+			t.Errorf("%s: got %+v, want %v values", tc.name, points, tc.want)
+			continue
+		}
+		for i, value := range tc.want {
+			if points[i].Value != value {
+				t.Errorf("%s: point %d is %v, want %v", tc.name, i, points[i].Value, value)
+			}
+		}
+	}
+
+	//and an unreadable answer is still an error: dropping the rule about how
+	//many points a window holds says nothing about a row this client cannot
+	//place in time
+	server := wrapperAnswering(t, `[[[null, 1.5]]]`, nil)
+	defer server.Close()
+	if _, err := New(server.URL).FetchSince(context.Background(), "t", DeviceSeries("d", "s"), "value",
+		time.Now().Add(-time.Hour), time.Now()); err == nil || !strings.Contains(err.Error(), "unreadable timestamp") {
+		t.Errorf("a value under no instant has to stay a refusal, got %v", err)
+	}
+}

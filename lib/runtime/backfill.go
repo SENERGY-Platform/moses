@@ -204,6 +204,11 @@ func (this *Runtime) StartBackfill(id string, from time.Time, to time.Time) (Bac
 	if err = checkBackfillVolume(channels, from, to); err != nil {
 		return BackfillStatus{}, err
 	}
+	//taken before the job is registered and outside every other lock: a
+	//following source keeps growing gen.series while the job runs (follow.go),
+	//and a job that read that map directly would both race the refresh and
+	//reconstruct the window from a series that changed halfway through
+	series := snapshotSeries(env, gen)
 
 	//both registries under one nesting, history first, so that a run and a job
 	//starting at the same moment cannot both see the other as absent. Every
@@ -254,7 +259,7 @@ func (this *Runtime) StartBackfill(id string, from time.Time, to time.Time) (Bac
 	this.backfillMux.Unlock()
 
 	util.Logger.Info("backfill started", "environment", id, "from", from, "to", to, "channels", len(channels))
-	go this.runBackfill(ctx, job, gen, channels, from, to)
+	go this.runBackfill(ctx, job, gen, series, channels, from, to)
 	return job.snapshot(), nil
 }
 
@@ -479,7 +484,9 @@ func (this *Runtime) skipReason(channel backfillChannel, points []dataset.Point)
 // runBackfill is the job. Channels are done one after another, as they always
 // were, and one channel is one shard of the publish pool - so a job gains the
 // overlap between computing and sending and nothing more.
-func (this *Runtime) runBackfill(ctx context.Context, job *backfillJob, gen *generation, channels []backfillChannel, from time.Time, to time.Time) {
+// series is the frozen set of points of this job, snapshotted by StartBackfill:
+// gen.series itself is written by the follow loop while the job runs.
+func (this *Runtime) runBackfill(ctx context.Context, job *backfillJob, gen *generation, series map[string][]dataset.Point, channels []backfillChannel, from time.Time, to time.Time) {
 	defer this.backfillWorkers.Done()
 	defer close(job.done)
 	//a bug in the reconstruction of one environment must not take the service
@@ -520,7 +527,7 @@ func (this *Runtime) runBackfill(ctx context.Context, job *backfillJob, gen *gen
 		if ctx.Err() != nil {
 			break
 		}
-		points := gen.series[channel.channel.Id]
+		points := series[channel.channel.Id]
 		status := BackfillChannelStatus{
 			ChannelId: channel.channel.Id,
 			AssetId:   channel.assetId,

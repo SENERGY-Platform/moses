@@ -29,6 +29,15 @@ the live runtime runs, driven by a different clock. Seed plus window therefore
 determine the result: **the same document and the same window produce the same
 dataset**, which is what makes a model retrainable on it.
 
+**One exception: a dataset source with `follow`.** Such a source is a moving
+window — the runtime keeps appending what the platform published since the last
+refresh and trims off the far end — so the series a job reconstructs from is the
+one that existed when it started. Two jobs over the same window at different
+wall-clock times therefore read different series and produce different readings.
+The guarantee holds within one job, which takes one frozen copy of the series
+at its start, and for every source that does not follow. A window that has to be
+reproducible must be reconstructed from a source without `follow`.
+
 ## The hard condition: `senergy/time_path`
 
 The platform's timescale ingestion stamps a row with `time.Now()` unless the
@@ -135,7 +144,7 @@ kafka consumers.
 | Source | Backfilled | Why |
 |---|---|---|
 | `profile` | yes | a pure function of the clock |
-| `dataset` | yes | a pure function of the clock and an anchor |
+| `dataset` | yes | a pure function of the clock and an anchor — of the moment the job ran too, if the source has `follow`, see above |
 | `script` | no | stateful: its value depends on the state its earlier runs left behind, and that state does not exist for a past moment |
 | `formula` | no | derived: it follows from other channels and the context rather than being a series of its own |
 | `aggregate` | no | derived: it follows from the channels of the sub-metered assets rather than being a series of its own |

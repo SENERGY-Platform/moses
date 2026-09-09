@@ -127,6 +127,15 @@ type Runtime struct {
 	// lifecycle can inject an engine of its own instead of simulating a window.
 	historyEngine historyEngineFunc
 
+	// followReloads counts the reloads a follow loop spawned for a source that
+	// recovered from a failed initial load (follow.go). Stop waits for them
+	// with the lifecycle mutex released, since that is what they block on.
+	followReloads sync.WaitGroup
+
+	// followClock, when set, replaces the wall clock and the shared ticker of
+	// every follow loop. Only a test sets it, before Start.
+	followClock *followClock
+
 	ctx     context.Context
 	cancel  context.CancelFunc
 	flusher sync.WaitGroup
@@ -164,6 +173,12 @@ func New(config config.Config, environments repo.Environments, states repo.State
 // start nor the reload that asked for it.
 type seriesFetcher interface {
 	Fetch(ctx context.Context, token string, series timeseries.Series, column string, start time.Time, end time.Time) ([]dataset.Point, error)
+
+	// FetchSince is Fetch without its rule that a window has to hold at least
+	// two measurements: a follow refresh (follow.go) asks for the tail since
+	// its last stored point, where no new measurement at all is the ordinary
+	// answer of a source that publishes less often than it is followed.
+	FetchSince(ctx context.Context, token string, series timeseries.Series, column string, start time.Time, end time.Time) ([]dataset.Point, error)
 
 	// HasReadings reports whether that column already holds a reading in
 	// [start, end). It is what a history run asks before it writes into a
@@ -287,10 +302,23 @@ func (this *Runtime) Start(ctx context.Context) error {
 // It is safe to call after ctx of Start has been cancelled, and that is the
 // normal case: the final flush therefore does not use that context.
 func (this *Runtime) Stop() {
+	if !this.stopRuntime() {
+		return
+	}
+	//outside the lifecycle mutex on purpose: a reload that a follow loop
+	//spawned blocks on exactly that mutex, so waiting for it while holding it
+	//would deadlock. No loop is left to spawn another - stopRuntime waited for
+	//the runners that do - and one still queued finds a stopped runtime.
+	this.followReloads.Wait()
+}
+
+// stopRuntime is the body of Stop that runs under the lifecycle mutex. It
+// reports whether this call was the one that stopped a running runtime.
+func (this *Runtime) stopRuntime() bool {
 	this.lifecycle.Lock()
 	defer this.lifecycle.Unlock()
 	if !this.running {
-		return
+		return false
 	}
 	this.running = false
 	this.cancel()
@@ -313,6 +341,7 @@ func (this *Runtime) Stop() {
 		this.flush(env)
 	}
 	util.Logger.Info("runtime stopped", "environments", len(envs))
+	return true
 }
 
 // Reload picks up the current definition of one environment and restarts its
@@ -510,6 +539,10 @@ func (this *Runtime) prepareEnvironment(ctx context.Context, def domain.Environm
 	for key, source := range gen.def.ContextSources {
 		env.runners.Add(1)
 		go this.runContextSource(envCtx, env, gen, key, source)
+	}
+	if followers := followersOf(gen.def); len(followers) > 0 {
+		env.runners.Add(1)
+		go this.runFollowLoop(envCtx, env, gen, followers)
 	}
 	return true
 }
@@ -1185,34 +1218,61 @@ func (this *Runtime) fetchSeries(ctx context.Context, owner string, source *doma
 
 // fetchRemoteSeries pulls a window of a real timeseries, backwards from now,
 // for the platform and export origins alike - a device's service for the
-// former, an export for the latter. The window is frozen until the next
-// reload, which is what makes the replay deterministic between reloads.
+// former, an export for the latter. The window a replay reads is frozen until
+// the next reload, with one exception: a following source (follow.go) grows
+// its stored series between reloads, while a backfill job and a history run
+// each hold a snapshot of it and are unaffected.
 func (this *Runtime) fetchRemoteSeries(ctx context.Context, owner string, source *domain.DatasetSource) ([]dataset.Point, error) {
-	if this.fetcher == nil {
-		return nil, errors.New("no timescale_wrapper_url configured, the platform and export origins are disabled")
-	}
-	if this.ownerToken == nil {
-		return nil, errors.New("no token source configured")
-	}
 	window, err := domain.ParseWindow(source.Window)
 	if err != nil {
 		return nil, err
 	}
-	token, err := this.ownerToken(owner)
+	token, series, err := this.remoteQuery(owner, source)
 	if err != nil {
-		return nil, fmt.Errorf("unable to obtain a token for the owner: %w", err)
-	}
-	series := timeseries.DeviceSeries(source.Ref, source.ServiceRef)
-	if source.Origin == domain.OriginExport {
-		series = timeseries.ExportSeries(source.Ref)
+		return nil, err
 	}
 	end := time.Now()
 	return this.fetcher.Fetch(ctx, token, series, source.Column, end.Add(-window), end)
 }
 
+// fetchRemoteSince is fetchRemoteSeries for a follow refresh: the window is
+// the caller's rather than source.Window, and fewer than two measurements is
+// an answer instead of a refusal.
+func (this *Runtime) fetchRemoteSince(ctx context.Context, owner string, source *domain.DatasetSource, start time.Time, end time.Time) ([]dataset.Point, error) {
+	token, series, err := this.remoteQuery(owner, source)
+	if err != nil {
+		return nil, err
+	}
+	return this.fetcher.FetchSince(ctx, token, series, source.Column, start, end)
+}
+
+// remoteQuery resolves one source into what the wrapper is addressed with: the
+// owner's token and the series, a device's service or an export.
+func (this *Runtime) remoteQuery(owner string, source *domain.DatasetSource) (string, timeseries.Series, error) {
+	if this.fetcher == nil {
+		return "", timeseries.Series{}, errors.New("no timescale_wrapper_url configured, the platform and export origins are disabled")
+	}
+	if this.ownerToken == nil {
+		return "", timeseries.Series{}, errors.New("no token source configured")
+	}
+	token, err := this.ownerToken(owner)
+	if err != nil {
+		return "", timeseries.Series{}, fmt.Errorf("unable to obtain a token for the owner: %w", err)
+	}
+	if source.Origin == domain.OriginExport {
+		return token, timeseries.ExportSeries(source.Ref), nil
+	}
+	return token, timeseries.DeviceSeries(source.Ref, source.ServiceRef), nil
+}
+
 // executeDataset publishes the replay value for now. The anchor of a looping
 // replay is set on first use and persisted with the state, so a restart
 // resumes mid-loop.
+//
+// The points come from gen.series rather than a copy taken at generation
+// build time, and are read under env.mux like every other touch of that map:
+// a following source's refresh swaps them in under the same lock (follow.go),
+// so a channel that is still running sees the grown series on its next tick.
 func (this *Runtime) executeDataset(env *environment, gen *generation, binding channelBinding, send func(value interface{}), now time.Time) {
 	//the scale of this instant, which is the one field of a replay the timeline
 	//governs; the anchor below is unaffected by it
@@ -1224,7 +1284,7 @@ func (this *Runtime) executeDataset(env *environment, gen *generation, binding c
 	//share of a sample one computation stands for, and with a change trigger the
 	//value is computed on the evaluation cadence. Without a trigger the two are
 	//the same number.
-	value, playable := replayValue(source, binding.points, anchor, now, binding.stepSeconds)
+	value, playable := replayValue(source, gen.series[binding.channel.Id], anchor, now, binding.stepSeconds)
 	if !playable {
 		return
 	}

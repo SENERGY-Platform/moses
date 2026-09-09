@@ -443,6 +443,9 @@ func (this *Runtime) StartHistory(id string, from time.Time, force bool, token s
 // is the state replaced, so nothing of the present lands in it.
 func (this *Runtime) beginHistoryRun(job *historyJob, env *environment, gen *generation, from time.Time, to time.Time, resume *repo.HistoryCheckpoint) {
 	env.markUnderHistory()
+	//and this is why a run never races a follow refresh: stopRunners waits for
+	//the follow loop of the live generation, and the run replays a generation
+	//of its own whose series nothing appends to
 	this.stopRunners(env.id)
 	env.commands.Wait()
 	env.resetForHistory()

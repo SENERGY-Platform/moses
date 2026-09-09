@@ -63,6 +63,33 @@ type fakeEnvironments struct {
 	allErr error
 	getErr error
 	gets   int
+
+	// getFailures is how many of the next Get calls fail with failure before
+	// the store answers normally again - a database blip in the middle of a
+	// reload, which the caller has to survive rather than give up on.
+	getFailures int
+	failure     error
+
+	// getDelay slows every Get down, which is what makes a reload long enough
+	// for a test to see whether anything spawns a second one meanwhile.
+	getDelay time.Duration
+}
+
+// failGets makes the next count Get calls fail. Called before the runtime
+// starts, or from a test goroutine while it runs; the counter is guarded by
+// the same mutex Get takes.
+func (this *fakeEnvironments) failGets(count int, err error) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	this.getFailures = count
+	this.failure = err
+}
+
+// getCount is how many Get calls the store has answered, failures included.
+func (this *fakeEnvironments) getCount() int {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	return this.gets
 }
 
 func newFakeEnvironments(envs ...domain.Environment) *fakeEnvironments {
@@ -96,10 +123,22 @@ func (this *fakeEnvironments) PutIfVersion(ctx context.Context, env domain.Envir
 
 func (this *fakeEnvironments) Get(ctx context.Context, id string) (domain.Environment, error) {
 	this.mux.Lock()
+	delay := this.getDelay
+	this.mux.Unlock()
+	//outside the mutex, so that concurrent reads really do overlap instead of
+	//queueing behind each other
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+	this.mux.Lock()
 	defer this.mux.Unlock()
 	this.gets++
 	if this.getErr != nil {
 		return domain.Environment{}, this.getErr
+	}
+	if this.getFailures > 0 {
+		this.getFailures--
+		return domain.Environment{}, this.failure
 	}
 	env, ok := this.stored[id]
 	if !ok {

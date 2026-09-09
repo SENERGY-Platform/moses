@@ -1587,6 +1587,14 @@
                     "description": "A meter reading keeps counting across a loop boundary instead of jumping\nback to the first value.",
                     "type": "boolean"
                 },
+                "follow": {
+                    "description": "Follow keeps a platform or export series current after the initial fetch:\na periodic refresh appends what is new since the last fetched point.\nValid only for the platform and export origins and only with\nanchor \"original\", since a loop replays the frozen window it already has.",
+                    "type": "boolean"
+                },
+                "follow_every": {
+                    "description": "FollowEvery is how often a following source is refreshed, a duration like\nWindow; empty defaults to DefaultFollowEvery and it may not be shorter\nthan MinFollowEvery.",
+                    "type": "string"
+                },
                 "origin": {
                     "$ref": "#/definitions/domain.DatasetOrigin"
                 },

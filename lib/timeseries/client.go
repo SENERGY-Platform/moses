@@ -158,10 +158,34 @@ func (this *Client) queryRows(ctx context.Context, token string, element queryEl
 	return series[0], nil
 }
 
-// Fetch loads one column of one service's timeseries for [start, end). The
-// time_format parameter pins the wrapper's timestamp rendering to RFC3339, so
-// this client does not depend on the wrapper's default.
+// Fetch loads one column of one service's timeseries for [start, end) and
+// refuses fewer than two usable measurements: a replay divides the elapsed
+// time by the span of its series, which one point does not have. A follow
+// refresh asks for the tail instead and takes any number, see FetchSince.
 func (this *Client) Fetch(ctx context.Context, token string, series Series, column string, start time.Time, end time.Time) ([]dataset.Point, error) {
+	points, err := this.fetchPoints(ctx, token, series, column, start, end)
+	if err != nil {
+		return nil, err
+	}
+	if len(points) < 2 {
+		return nil, fmt.Errorf("the window holds %d usable measurements, replay needs at least 2", len(points))
+	}
+	return points, nil
+}
+
+// FetchSince is Fetch without that rule: it returns the 0..n measurements the
+// window holds. A follow refresh asks for [last stored point, now], where no
+// new measurement at all is the ordinary answer of a source that publishes
+// less often than it is followed.
+func (this *Client) FetchSince(ctx context.Context, token string, series Series, column string, start time.Time, end time.Time) ([]dataset.Point, error) {
+	return this.fetchPoints(ctx, token, series, column, start, end)
+}
+
+// fetchPoints is the shared body: one request, parsed, sorted and
+// deduplicated on the instant. The time_format parameter pins the wrapper's
+// timestamp rendering to RFC3339, so this client does not depend on the
+// wrapper's default.
+func (this *Client) fetchPoints(ctx context.Context, token string, series Series, column string, start time.Time, end time.Time) ([]dataset.Point, error) {
 	rows, err := this.queryRows(ctx, token, queryElement{
 		DeviceId:  series.DeviceId,
 		ServiceId: series.ServiceId,
@@ -214,9 +238,6 @@ func (this *Client) Fetch(ctx context.Context, token string, series Series, colu
 			continue
 		}
 		deduplicated = append(deduplicated, point)
-	}
-	if len(deduplicated) < 2 {
-		return nil, fmt.Errorf("the window holds %d usable measurements, replay needs at least 2", len(deduplicated))
 	}
 	return deduplicated, nil
 }

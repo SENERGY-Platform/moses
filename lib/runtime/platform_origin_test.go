@@ -18,6 +18,7 @@ package runtime
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -34,6 +35,37 @@ type fakeFetcher struct {
 	// budgets is the context each call was handed, in call order. A real fetch
 	// of a long window needs minutes, so what bounds it is worth an assertion.
 	budgets []ctxBudget
+	// starts and ends are the start and end argument of every Fetch call, in
+	// call order - what a follow refresh asked for is part of its behaviour,
+	// not just its result.
+	starts []time.Time
+	ends   []time.Time
+
+	// pointsSeq, set, answers Fetch calls in order instead of points, a call
+	// beyond the end repeating the last entry - a follow test's second call
+	// answers a longer series than its first.
+	pointsSeq [][]dataset.Point
+	// errSeq, when its entry for a call is non-nil, fails that Fetch call
+	// instead of answering points - a follow test's second call can fail
+	// without failing the first.
+	errSeq []error
+	// pointsFunc, when set, decides every call's answer from the call index and
+	// the start/end it was asked for, ahead of pointsSeq, errSeq and points - a
+	// follow test needs points anchored to the real instant of each call rather
+	// than a series fixed at fake construction.
+	pointsFunc func(index int, start time.Time, end time.Time) ([]dataset.Point, error)
+
+	// pointsOfDevice answers the fetches of one device ahead of pointsFunc: a
+	// document with two dataset sources has to be able to answer them apart,
+	// and the call index cannot tell them apart across a reload.
+	pointsOfDevice map[string]func(index int, start time.Time, end time.Time) ([]dataset.Point, error)
+
+	// fetchGate, when set, holds every fetch from gateFrom on until it is
+	// closed or the caller's context ends: a refresh that is still in flight
+	// while its environment is cancelled is what the follow loop has to keep
+	// quiet about.
+	fetchGate chan struct{}
+	gateFrom  int
 
 	// occupied says which service refs report a reading in the window they are
 	// asked about, readingsErr is what HasReadings reports instead, and checks
@@ -128,17 +160,60 @@ func (this *fakeFetcher) peakOccupancyQueries() int {
 }
 
 func (this *fakeFetcher) Fetch(ctx context.Context, token string, series timeseries.Series, column string, start time.Time, end time.Time) ([]dataset.Point, error) {
+	return this.fetch(ctx, token, series, column, start, end, false)
+}
+
+// FetchSince answers a follow refresh. It is recorded in the same call
+// sequence as Fetch, under "since", because a refresh and the load before it
+// are one series of calls on one source - what the errSeq and pointsFunc of a
+// test index into.
+func (this *fakeFetcher) FetchSince(ctx context.Context, token string, series timeseries.Series, column string, start time.Time, end time.Time) ([]dataset.Point, error) {
+	return this.fetch(ctx, token, series, column, start, end, true)
+}
+
+func (this *fakeFetcher) fetch(ctx context.Context, token string, series timeseries.Series, column string, start time.Time, end time.Time, since bool) ([]dataset.Point, error) {
 	this.mux.Lock()
-	defer this.mux.Unlock()
 	this.calls = append(this.calls, map[string]string{
 		"token": token, "device": series.DeviceId, "service": series.ServiceId, "export": series.ExportId, "column": column,
-		"window": end.Sub(start).String(),
+		"window": end.Sub(start).String(), "since": strconv.FormatBool(since),
 	})
 	this.budgets = append(this.budgets, budgetOf(ctx))
+	this.starts = append(this.starts, start)
+	this.ends = append(this.ends, end)
+	index := len(this.calls) - 1
+	gate := this.fetchGate
+	gated := gate != nil && index >= this.gateFrom
+	this.mux.Unlock()
+
 	//the real client passes the context to the request; a fake that ignored it
 	//would let a broken budget look healthy
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if gated {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	if perDevice, found := this.pointsOfDevice[series.DeviceId]; found {
+		return perDevice(index, start, end)
+	}
+	if this.pointsFunc != nil {
+		return this.pointsFunc(index, start, end)
+	}
+	if index < len(this.errSeq) && this.errSeq[index] != nil {
+		return nil, this.errSeq[index]
+	}
+	if this.pointsSeq != nil {
+		if index < len(this.pointsSeq) {
+			return this.pointsSeq[index], nil
+		}
+		return this.pointsSeq[len(this.pointsSeq)-1], nil
 	}
 	return this.points, nil
 }
@@ -153,10 +228,44 @@ func (this *fakeFetcher) budgetAt(index int) ctxBudget {
 	return this.budgets[index]
 }
 
+// startAt and endAt return the start and end argument of the nth fetch,
+// counted from zero.
+func (this *fakeFetcher) startAt(index int) time.Time {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	if index >= len(this.starts) {
+		return time.Time{}
+	}
+	return this.starts[index]
+}
+
+func (this *fakeFetcher) endAt(index int) time.Time {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	if index >= len(this.ends) {
+		return time.Time{}
+	}
+	return this.ends[index]
+}
+
 func (this *fakeFetcher) callCount() int {
 	this.mux.Lock()
 	defer this.mux.Unlock()
 	return len(this.calls)
+}
+
+// callCountOf counts the fetches of one device, which is how a test with two
+// following sources tells their cadences apart.
+func (this *fakeFetcher) callCountOf(deviceId string) int {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	count := 0
+	for _, call := range this.calls {
+		if call["device"] == deviceId {
+			count++
+		}
+	}
+	return count
 }
 
 func platformChannel(envId string) domain.Channel {

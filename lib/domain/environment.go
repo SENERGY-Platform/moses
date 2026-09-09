@@ -368,6 +368,38 @@ type DatasetSource struct {
 	// A meter reading keeps counting across a loop boundary instead of jumping
 	// back to the first value.
 	Cumulative bool `json:"cumulative" bson:"cumulative"`
+
+	// Follow keeps a platform or export series current after the initial fetch:
+	// a periodic refresh appends what is new since the last fetched point.
+	// Valid only for the platform and export origins and only with
+	// anchor "original", since a loop replays the frozen window it already has.
+	Follow bool `json:"follow" bson:"follow"`
+	// FollowEvery is how often a following source is refreshed, a duration like
+	// Window; empty defaults to DefaultFollowEvery and it may not be shorter
+	// than MinFollowEvery.
+	FollowEvery string `json:"follow_every,omitempty" bson:"follow_every,omitempty"`
+}
+
+// DefaultFollowEvery is the refresh cadence a following source gets when it
+// does not name one of its own.
+const DefaultFollowEvery = "30m"
+
+// MinFollowEvery is the shortest refresh cadence a following source may
+// declare, so a document cannot turn a follow into a fetch storm. It is a
+// validation rule (see checkFollow in validate.go), not something
+// ParseFollowEvery enforces: the runtime trusts a stored document to already
+// satisfy it.
+const MinFollowEvery = time.Minute
+
+// ParseFollowEvery reads follow_every the way validation and the runtime both
+// need it: an empty string defaults to DefaultFollowEvery. It does not refuse
+// a result below MinFollowEvery; that bound is checked once, at validation.
+func ParseFollowEvery(followEvery string) (time.Duration, error) {
+	trimmed := strings.TrimSpace(followEvery)
+	if trimmed == "" {
+		trimmed = DefaultFollowEvery
+	}
+	return ParseWindow(trimmed)
 }
 
 // FormulaSource derives a value from other channels and the environment context.
