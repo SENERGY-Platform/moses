@@ -303,9 +303,11 @@ simulation and the record stays as it was.
 the run - after a restart that is how the outcome of an earlier run is still
 readable, and `404` now means "there never was one here".
 
-Kafka retention applies as it does to a backfill: a record carrying a historical
-timestamp may be considered expired at once. The destination is timescale, and
-that row is written synchronously in the same call.
+Kafka retention applies as it does to a backfill: a record is measured by its
+historical timestamp, so it expires once that is older than the topic's
+`retention.ms` and stays until then (`docs/backfill.md` says where that value
+comes from). The destination is timescale, and that row is written synchronously
+in the same call.
 
 ## Known gaps
 

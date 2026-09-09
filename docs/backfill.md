@@ -120,11 +120,15 @@ The kafka record of a backfilled event carries the historical timestamp too, via
 removed again before the message is unmarshalled). That keeps the record and the
 row consistent.
 
-It also means **a topic with time-based retention may consider a backfilled
-record immediately expired** and delete it in the next cleanup. That is
-acceptable and intended: the destination of a backfill is timescale, and the row
-there is written synchronously in the same call. A backfill is not a way to
-replay history to kafka consumers.
+It also means **time-based retention measures a backfilled record by its
+historical timestamp**, not by when it was produced: a record older than the
+topic's `retention.ms` is expired at the next cleanup, a younger one stays as
+long as the retention says. Service topics carry the retention the creating
+service configured (`kafka_topic_configs` in `config.json`, prefix
+`urn_infai_ses_service_`), which is where a deployment shortens it. Either way
+the destination of a backfill is timescale, and the row there is written
+synchronously in the same call. A backfill is not a way to replay history to
+kafka consumers.
 
 ## What is skipped, and why
 
