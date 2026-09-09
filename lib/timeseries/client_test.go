@@ -276,7 +276,6 @@ func TestHasReadingsReadsBothAnswers(t *testing.T) {
 		//an all-null row rather than sending none, and the per_query trim is
 		//undone by the re-slice to the limit
 		{"the wrapper's padded empty result", `[[[null, null]]]`, false},
-		{"a padded row that carries a value but no instant", `[[[null, 1.5]]]`, false},
 		{"no rows at all", `[[]]`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -301,6 +300,7 @@ func TestHasReadingsRefusesAnAnswerItCannotRead(t *testing.T) {
 	for _, tc := range []struct{ name, body, fragment string }{
 		{"an instant that is a number", `[[[1751328000, 1.5]]]`, "unreadable timestamp"},
 		{"an instant that is not rfc3339", `[[["yesterday", 1.5]]]`, "unreadable timestamp"},
+		{"a padded row that carries a value but no instant", `[[[null, 1.5]]]`, "unreadable timestamp"},
 		{"wrong shape", `{"nope": 1}`, "unreadable wrapper response"},
 		{"two series", `[[],[]]`, "expected one series"},
 	} {

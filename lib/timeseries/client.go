@@ -206,7 +206,10 @@ func (this *Client) Fetch(ctx context.Context, token string, deviceId string, se
 // column, because without the order index the wrapper drops the ORDER BY and the
 // one row the limit keeps would be an arbitrary one. A row that carries an
 // instant counts as a reading even where its value is null, while the all-null
-// row the wrapper pads an empty result with means the window is free.
+// row the wrapper pads an empty result with means the window is free. A row
+// that carries a value under no instant is neither: it is an answer this
+// client cannot place in the window, so it is a refusal rather than a free
+// window a history run would start over unchecked.
 func (this *Client) HasReadings(ctx context.Context, token string, deviceId string, serviceId string, column string, start time.Time, end time.Time) (bool, error) {
 	timeColumn := 0
 	rows, err := this.queryRows(ctx, token, queryElement{
@@ -229,8 +232,13 @@ func (this *Client) HasReadings(ctx context.Context, token string, deviceId stri
 	}
 	for _, row := range rows {
 		if row[0] == nil {
-			//the wrapper's no-data marker: this row says the window is free
-			continue
+			if row[1] == nil {
+				//the wrapper's no-data marker: this row says the window is free
+				continue
+			}
+			//a value under no instant cannot be placed in the window, so it is a
+			//refusal rather than a free window a run would start over unchecked
+			return false, fmt.Errorf("unreadable timestamp: a row carries the value %v under no instant", row[1])
 		}
 		stamp, ok := row[0].(string)
 		if !ok {
