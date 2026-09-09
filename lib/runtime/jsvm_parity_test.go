@@ -49,19 +49,29 @@ func newStubApi() *stubApi {
 }
 
 // stateOf mirrors jsStateApi, seeding included: a missing key reads as 0 and is
-// written, which is one of the behaviours the two engines have to agree on.
+// written, which is one of the behaviours the two engines have to agree on. It
+// also mirrors the refusal of a missing field name, so the two engines are
+// compared on that as well.
 func stateOf(states map[string]interface{}) map[string]interface{} {
 	return map[string]interface{}{
-		"get": func(field string) interface{} {
-			value, ok := states[field]
+		"get": func(field interface{}) interface{} {
+			name, ok := jsField(field)
 			if !ok {
-				states[field] = 0
+				return 0
+			}
+			value, ok := states[name]
+			if !ok {
+				states[name] = 0
 				return 0
 			}
 			return value
 		},
-		"set": func(field string, value interface{}) {
-			states[field] = value
+		"set": func(field interface{}, value interface{}) {
+			name, ok := jsField(field)
+			if !ok {
+				return
+			}
+			states[name] = value
 		},
 	}
 }
@@ -189,6 +199,22 @@ func TestTheEnginesAgreeOnWhatAScriptProduces(t *testing.T) {
 		"a string reaches send unchanged": `
 			moses.device.state.set("label", "hall-" + 2);
 			moses.service.send("value:" + moses.device.state.get("label"));
+		`,
+		//a wholly argument-less get() is left out here: otto's reflect-based
+		//native call rejects a call with fewer arguments than the Go function
+		//declares, aborting the run before the field is even inspected. That
+		//case is production-relevant on goja alone and is covered in
+		//runtime_test.go instead.
+		"a get or set given no field touches no state": `
+			moses.device.state.set(undefined, 7);
+			moses.device.state.set("", 8);
+			moses.service.send(moses.device.state.get(""));
+			moses.service.send(moses.device.state.get(undefined));
+		`,
+		"a numeric field names the key the engines spelled": `
+			moses.device.state.set(9, 4);
+			moses.service.send(moses.device.state.get(9));
+			moses.service.send(moses.device.state.get("9"));
 		`,
 		"cross scope reads through getRoom and getDevice": `
 			moses.world.getRoom("z-2").state.set("v", 4);

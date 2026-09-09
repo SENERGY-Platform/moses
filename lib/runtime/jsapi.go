@@ -17,6 +17,7 @@
 package runtime
 
 import (
+	"fmt"
 	"github.com/SENERGY-Platform/moses/lib/util"
 	"time"
 )
@@ -115,20 +116,32 @@ func (this *Runtime) jsAssetApi(env *environment, assetId string) map[string]int
 // get seeds a missing key with 0 and returns it, as the legacy api did: a
 // migrated script relies on "state.get() + 1" working on the first tick. The
 // seeding is a state change, so it marks the environment dirty; it happens once
-// per key, because the next get finds the key.
+// per key, because the next get finds the key. A missing or empty field name is
+// refused rather than becoming a key; a number or boolean names the key the
+// engines always spelled it as.
 func jsStateApi(env *environment, states func() map[string]interface{}) map[string]interface{} {
 	return map[string]interface{}{
-		"get": func(field string) interface{} {
-			target := states()
-			value, ok := target[field]
+		"get": func(field interface{}) interface{} {
+			name, ok := jsField(field)
 			if !ok {
-				target[field] = 0
+				env.warnNoField()
+				return 0
+			}
+			target := states()
+			value, ok := target[name]
+			if !ok {
+				target[name] = 0
 				env.dirty = true
 				return 0
 			}
 			return value
 		},
-		"set": func(field string, value interface{}) {
+		"set": func(field interface{}, value interface{}) {
+			name, ok := jsField(field)
+			if !ok {
+				env.warnNoField()
+				return
+			}
 			//a missing argument, an explicit null and an explicit undefined all
 			//arrive as nil, where otto aborted the run; the key keeps whatever
 			//it holds rather than taking a nil no reader can use
@@ -136,10 +149,24 @@ func jsStateApi(env *environment, states func() map[string]interface{}) map[stri
 				util.Logger.Warn("the script handed no value", "environment", env.id, "field", field)
 				return
 			}
-			states()[field] = jsNumber(value)
+			states()[name] = jsNumber(value)
 			env.dirty = true
 		},
 	}
+}
+
+// jsField turns a script's field argument into a key. A missing argument, null
+// and undefined arrive as nil and name no key, nor does the empty string; a
+// number or boolean is spelled out as both engines did when the parameter was a
+// string, so a legacy script keyed by an hour keeps its key.
+func jsField(field interface{}) (string, bool) {
+	switch v := field.(type) {
+	case string:
+		return v, v != ""
+	case int64, int, float64, bool:
+		return fmt.Sprint(v), true
+	}
+	return "", false
 }
 
 // jsNumber normalises a number on its way from a script into Go. A javascript
@@ -168,29 +195,33 @@ func jsContextStateApi(env *environment, gen *generation, now time.Time) map[str
 	if gen == nil || gen.timeline == nil {
 		return plain
 	}
-	get := plain["get"].(func(field string) interface{})
-	set := plain["set"].(func(field string, value interface{}))
+	get := plain["get"].(func(field interface{}) interface{})
+	set := plain["set"].(func(field interface{}, value interface{}))
 	return map[string]interface{}{
-		"get": func(field string) interface{} {
-			if !gen.timeline.governsContext(field) {
+		"get": func(field interface{}) interface{} {
+			name, ok := jsField(field)
+			if !ok || !gen.timeline.governsContext(name) {
+				//an invalid field falls through to the plain get, which refuses it
 				return get(field)
 			}
-			if value, governed := gen.timeline.effectiveContext(field, now); governed {
+			if value, governed := gen.timeline.effectiveContext(name, now); governed {
 				return value
 			}
 			//before the first change the inline value stands, and seeding put it
 			//into the state at start; a key that is missing anyway reads as 0
 			//without being written
-			if value, exists := env.contextStates()[field]; exists {
+			if value, exists := env.contextStates()[name]; exists {
 				return value
 			}
 			return 0
 		},
-		"set": func(field string, value interface{}) {
-			if gen.timeline.governsContext(field) {
-				env.warnTimelineGoverned(field)
+		"set": func(field interface{}, value interface{}) {
+			name, ok := jsField(field)
+			if ok && gen.timeline.governsContext(name) {
+				env.warnTimelineGoverned(name)
 				return
 			}
+			//an invalid field falls through to the plain set, which refuses it
 			set(field, value)
 		},
 	}

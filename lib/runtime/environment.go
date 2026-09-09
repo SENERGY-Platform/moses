@@ -67,6 +67,7 @@ type environment struct {
 	// maps: the refusal is worth one line per key, and one per tick would bury
 	// the service log of a site whose scripts were written before the timeline.
 	timelineWarned map[string]bool
+	noFieldWarned  bool
 
 	// saves counts the Save calls that have left the mutex but not yet returned.
 	// Remove waits for it before deleting the stored state, so that a flush in
@@ -629,6 +630,18 @@ func (this *environment) warnTimelineGoverned(key string) {
 	this.timelineWarned[key] = true
 	util.Logger.Warn("a script set a context key the timeline governs, the write is dropped",
 		"environment", this.id, "key", key)
+}
+
+// warnNoField reports a script's get or set without a usable field name, once
+// per environment: the call site repeats on every tick, and the refused value is
+// never worth logging. Called with mux held, like warnTimelineGoverned.
+func (this *environment) warnNoField() {
+	if this.noFieldWarned {
+		return
+	}
+	this.noFieldWarned = true
+	util.Logger.Warn("a script asked for a state key without a field name, the call is ignored",
+		"environment", this.id)
 }
 
 // forgetTimelineWarnings clears what warnTimelineGoverned has already reported.

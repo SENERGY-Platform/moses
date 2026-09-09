@@ -95,6 +95,45 @@ func TestStateRoundTripAcrossTheThreeScopes(t *testing.T) {
 	}
 }
 
+// TestAGetWithoutAFieldSeedsNoKey pins that get/set without a field name is a
+// refusal, not a write under an empty or "undefined" key. The environment is
+// never dirtied by this script, so unlike TestStateRoundTripAcrossTheThreeScopes
+// this reads the live state directly rather than through a flush.
+func TestAGetWithoutAFieldSeedsNoKey(t *testing.T) {
+	code := `
+		moses.device.state.set(undefined, 7);
+		moses.device.state.set("", 8);
+		moses.service.send(moses.device.state.get());
+		moses.service.send(moses.device.state.get(""));
+		moses.service.send(moses.device.state.get(undefined));
+	`
+	env := testEnvironment("env-a", scriptChannel("ch-1", domain.Sensor, 1, serviceRefOf("env-a"), code))
+	publisher := &fakePublisher{}
+	rt := startRuntime(t, testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), publisher)
+
+	if !waitFor(4*time.Second, func() bool { return publisher.count() >= 3 }) {
+		t.Fatal("expected three sends within 4s")
+	}
+	for i, event := range publisher.all()[:3] {
+		if got := numberOf(t, event.value); got != 0 {
+			t.Errorf("send %d: expected the seeded zero, got %v", i, got)
+		}
+	}
+
+	rt.mux.RLock()
+	live := rt.envs["env-a"]
+	rt.mux.RUnlock()
+	live.mux.Lock()
+	defer live.mux.Unlock()
+	states := live.assetStates(testAssetId)
+	if _, exists := states[""]; exists {
+		t.Errorf("expected no empty-string key, the map holds %#v", states)
+	}
+	if _, exists := states["undefined"]; exists {
+		t.Errorf("expected no \"undefined\" key, the map holds %#v", states)
+	}
+}
+
 // TestTheNewNamesAreAliasesOfTheLegacyOnes proves they are the same maps and not
 // two copies that drift apart.
 func TestTheNewNamesAreAliasesOfTheLegacyOnes(t *testing.T) {

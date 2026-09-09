@@ -358,8 +358,8 @@ func TestAScriptReadsAGovernedContextKeyAndCannotWriteIt(t *testing.T) {
 	env.seed(gen, timelineKnick.Add(-time.Hour))
 
 	api := jsContextStateApi(env, gen, timelineKnick.Add(time.Hour))
-	get := api["get"].(func(field string) interface{})
-	set := api["set"].(func(field string, value interface{}))
+	get := api["get"].(func(field interface{}) interface{})
+	set := api["set"].(func(field interface{}, value interface{}))
 
 	if got := get("price"); got != 0.42 {
 		t.Errorf("a governed key has to read as the declared value of this instant, got %v", got)
@@ -407,7 +407,7 @@ func TestAGovernedKeyReadsItsInlineValueBeforeTheFirstChange(t *testing.T) {
 	env.seed(gen, timelineKnick.Add(-2*time.Hour))
 
 	api := jsContextStateApi(env, gen, timelineKnick.Add(-time.Hour))
-	if got := api["get"].(func(field string) interface{})("price"); got != 0.30 {
+	if got := api["get"].(func(field interface{}) interface{})("price"); got != 0.30 {
 		t.Errorf("before the first change the inline value stands, got %v", got)
 	}
 }
