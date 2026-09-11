@@ -136,6 +136,14 @@ type Runtime struct {
 	// every follow loop. Only a test sets it, before Start.
 	followClock *followClock
 
+	// instant, when set, replaces the wall clock of the initial series load.
+	// A follow loop judges a stored series against followClock, so a test that
+	// asserts on that relation has to set both from the same source - with
+	// only one of them replaced the loaded points and the loop live days
+	// apart. Kept separate from followClock because reading that one hands the
+	// test clock a tick token, and the load is not a tick.
+	instant func() time.Time
+
 	ctx     context.Context
 	cancel  context.CancelFunc
 	flusher sync.WaitGroup
@@ -1231,8 +1239,16 @@ func (this *Runtime) fetchRemoteSeries(ctx context.Context, owner string, source
 	if err != nil {
 		return nil, err
 	}
-	end := time.Now()
+	end := this.loadInstant()
 	return this.fetcher.Fetch(ctx, token, series, source.Column, end.Add(-window), end)
+}
+
+// loadInstant is the wall clock unless a test replaced it.
+func (this *Runtime) loadInstant() time.Time {
+	if this.instant != nil {
+		return this.instant()
+	}
+	return time.Now()
 }
 
 // fetchRemoteSince is fetchRemoteSeries for a follow refresh: the window is

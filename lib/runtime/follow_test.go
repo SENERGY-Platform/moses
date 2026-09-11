@@ -665,10 +665,17 @@ type followTestClock struct {
 	// the instant of this one, which skips a due time and makes the count this
 	// clock exists to make exact wrong again.
 	read chan struct{}
+
+	// installed carries one token when the loop asks for its ticker. That is
+	// the point at which everything the start path does is done - the grid,
+	// and the warning a source already past its hold bound earns - so an
+	// assertion made right after awaitStart cannot race it.
+	installed chan struct{}
 }
 
 func newFollowTestClock(start time.Time) *followTestClock {
-	return &followTestClock{now: start, ticks: make(chan time.Time), read: make(chan struct{}, 1)}
+	return &followTestClock{now: start, ticks: make(chan time.Time),
+		read: make(chan struct{}, 1), installed: make(chan struct{}, 1)}
 }
 
 func (this *followTestClock) hook() *followClock {
@@ -684,21 +691,42 @@ func (this *followTestClock) hook() *followClock {
 			return at
 		},
 		tick: func(interval time.Duration) (<-chan time.Time, func()) {
+			select {
+			case this.installed <- struct{}{}:
+			default:
+			}
 			return this.ticks, func() {}
 		},
 	}
 }
 
-// awaitStart waits for the loop's first read of the clock, the one that puts
-// its followers on their grid. Without it a first tick can be sent before the
-// loop got that far, the loop reads the instant of that tick as its start and
-// the whole grid sits one cadence too late.
+// instant is now() without the read token, for the initial series load. That
+// load is not a tick, so a token from it would break the one-per-tick
+// accounting the ticks rely on - and a test that compares a loaded series
+// against the loop's clock has to hand the runtime this one.
+func (this *followTestClock) instant() time.Time {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	return this.now
+}
+
+// awaitStart waits until the loop is ready to take ticks: first for its read
+// of the clock, the one that puts its followers on their grid, then for the
+// ticker it asks for once the start path is done. Without the first a tick can
+// be sent before the loop got that far, the loop reads the instant of that
+// tick as its start and the whole grid sits one cadence too late. Without the
+// second an assertion on what the start path logged races it.
 func (this *followTestClock) awaitStart(t *testing.T) {
 	t.Helper()
 	select {
 	case <-this.read:
 	case <-time.After(10 * time.Second):
 		t.Fatal("the follow loop never read the clock it was given")
+	}
+	select {
+	case <-this.installed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the follow loop never asked for its ticker")
 	}
 }
 
@@ -1121,6 +1149,10 @@ func TestASourceThatIsAlreadyStaleAtStartIsReportedAtOnce(t *testing.T) {
 	base := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
 	clock := newFollowTestClock(base)
 	rt.followClock = clock.hook()
+	//the load has to read the same clock the loop judges against, or the
+	//points it fetches land days away from the instant the start path compares
+	//them with and nothing is ever stale
+	rt.instant = clock.instant
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	if err := rt.Start(ctx); err != nil {
