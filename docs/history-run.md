@@ -36,6 +36,18 @@ stops. That is what bounds the extra work: the rounds are a halving sequence and
 sum to about twice the pass before them, so the chase cannot multiply the work
 the step cap allowed.
 
+## Where a tick falls
+
+Every grid — a context source, a channel source, the publish half of a split
+channel — is a sequence of ticks of its own interval, and tick `n` is due at
+`from + n*step`. The grid starts at **tick 0**, so the first evaluation of every
+source is the start of the window itself and not one step after it.
+
+That matters for a source that keeps a counter of its own. A script that
+increments a counter in its state reads 1 at the first evaluation, so the
+evaluation covering an instant `seconds` into the window is `seconds/step + 1`.
+A script that dates a change against `seconds/step` fires it one step early.
+
 ## The order inside one instant
 
 Several grids fall on the same instant, and the live runtime picks one of the
