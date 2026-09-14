@@ -101,11 +101,13 @@ jobs:
     # job creates the tag itself, so keeping it would run the whole suite a
     # second time on the same tree for every release. A build from a tag is
     # still a workflow_dispatch on that ref.
+    #
+    # The ref decides, not the event. A workflow_dispatch used to land here
+    # whatever branch it ran on, so a dispatch on dev would have released a prod
+    # image and a version tag off the dev branch.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && (
-        github.ref == 'refs/heads/master' ||
-        github.ref == 'refs/heads/main'))
+      (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -142,3 +144,39 @@ jobs:
             ghcr.io/senergy-platform/moses:${{ steps.tag_version.outputs.new_tag }}
             smartenergyplatform/moses:latest
             ghcr.io/senergy-platform/moses:latest
+
+  dev-image:
+    name: DEV Docker Image
+    # dev.yml built this image on every push to dev without any gate in front of
+    # it - the same hole the prod image had, one branch further. It carries no
+    # version tag: only the prod job releases.
+    needs: [gates, test]
+    if: >-
+      github.ref == 'refs/heads/dev' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.CR_PAT }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            smartenergyplatform/moses:dev
+            ghcr.io/senergy-platform/moses:dev
