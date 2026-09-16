@@ -104,6 +104,12 @@ type validator struct {
 	// context source, and both of those are read from the top of the document
 	// while the reference is found deep inside a zone.
 	gateRefs []channelRef
+
+	// scaleRefs is the same second pass for a schedule's scale. It is kept apart
+	// from gateRefs because the two fail for different reasons: a gate nobody
+	// writes never starts, a scale nobody writes reads as one and quietly says
+	// nothing.
+	scaleRefs []channelRef
 }
 
 type channelRef struct {
@@ -182,6 +188,19 @@ func Validate(env Environment) error {
 			continue
 		}
 		v.fail(ref.path, "the gate key %q is neither in context nor driven by a context source; declare it in context (an initial 0 is enough) even when a script or the state endpoint writes it, so the document shows what the gate reads", ref.id)
+	}
+
+	// The scale reads as one where the key is missing, so a document naming a
+	// key nobody writes is not broken - it is a machine nobody scales, written
+	// as though somebody did.
+	for _, ref := range v.scaleRefs {
+		if _, static := env.Context[ref.id]; static {
+			continue
+		}
+		if _, driven := env.ContextSources[ref.id]; driven {
+			continue
+		}
+		v.fail(ref.path, "the scale key %q is neither in context nor driven by a context source; a scale nobody writes reads as one, so the programme would run unscaled while the document says otherwise", ref.id)
 	}
 
 	// submeterRefs: a target has to exist as an asset - a zone or channel id is
@@ -964,6 +983,18 @@ func (this *validator) checkSchedule(path string, source Source) {
 		//a threshold may be negative - a gate on a temperature is a legitimate
 		//shape - but it has to be comparable at all
 		this.checkFinite(gatePath+".threshold", schedule.Gate.Threshold)
+	}
+
+	if schedule.Scale != "" {
+		scalePath := schedulePath + ".scale"
+		if schedule.Scale != strings.TrimSpace(schedule.Scale) {
+			this.fail(scalePath, "must not begin or end with whitespace: the runtime looks the key up in the context exactly as it stands, so %q is a scale that never finds the key the editor shows it reading", schedule.Scale)
+		} else {
+			//the same second pass as the gate: the key may be driven by a
+			//context source declared at the top of a document whose zones are
+			//walked here
+			this.scaleRefs = append(this.scaleRefs, channelRef{path: scalePath, id: schedule.Scale})
+		}
 	}
 
 	names := map[string]int{}

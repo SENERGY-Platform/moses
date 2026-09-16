@@ -100,6 +100,42 @@ validation message asks for.
 for a gate somebody flips by hand, the programme starts within one
 `interval_seconds`.
 
+## The scale
+
+`scale` names a context key every value of the programme is multiplied by: the
+published reading and every entry of `state_writes`.
+
+```json
+"schedule": {
+  "state_key": "programme",
+  "scale": "day_type",
+  "states": [ … ]
+}
+```
+
+A programme states what a machine does. How hard it is worked on a given day is
+not a property of the cycle, and without a scale the only way to say it is a
+state per day - a document nobody can read, in a source that caps at 256 states.
+A demonstrator that wanted a day of long series runs to differ from a day of
+setups is what this exists for.
+
+It is **not** a second gate. A closed gate is the machine standing still: the
+state key reads `off`, every write is 0 and the channel publishes 0. A scale of
+zero is a machine whose programme keeps running and that draws nothing while it
+does - the state key still names the running step, and the programme walks on.
+The two look the same in one reading and are not the same thing.
+
+**A key the context does not carry reads as one**, not as zero: the programme is
+the statement and a scale nobody wrote must not silence a plant. That is also
+why validation refuses a scale on a key that is neither in `context` nor driven
+by a context source - the document would otherwise say the machine is scaled
+while it runs unscaled, and nothing in the data would show it.
+
+The scale applies to `state_writes` as well as to the reading. They are the same
+statement - the air a step demands, the power it draws - and a scale reaching
+one and not the other would let a compressor size itself against a machine
+nobody is running.
+
 ## The state writes, and why they are a union
 
 `state_writes` declares further asset state values a step stands for: the air a
@@ -175,6 +211,9 @@ the editor and be something else in the data.
   publishes.
 - **At least one state**, at most **256**. The runtime walks all of them on
   every evaluation.
+- A **`scale`**, when set, carries no leading or trailing whitespace and names a
+  key that is in `context` or driven by a context source. It is optional; absent
+  means a factor of one.
 - **Names** are non-empty, carry **no leading or trailing whitespace** and are
   **unique**: the name is the only thing a reader has to tell two steps apart,
   and it is written into the asset state verbatim. `off` is refused for a

@@ -290,8 +290,44 @@ func (this *Runtime) executeSchedule(env *environment, gen *generation, binding 
 	//the value of this step as the timeline has it at this instant; the walk
 	//above is untouched by it, since durations are not governed
 	state := gen.timeline.effectiveScheduleState(binding.channel.Id, source.States[position.index], now)
-	this.writeScheduleStates(env, binding, source, state.Name, state.StateWrites)
-	send(scheduleValue(state, gen.def.Seed, binding.channel.Id, binding.stepSeconds, now))
+	scale := this.scheduleScale(env, gen, source, now)
+	this.writeScheduleStates(env, binding, source, state.Name, scaledWrites(state.StateWrites, scale))
+	send(scale * scheduleValue(state, gen.def.Seed, binding.channel.Id, binding.stepSeconds, now))
+}
+
+// scheduleScale is the factor the programme's values are multiplied by. A
+// source without one, and a key the context does not carry, both read as one:
+// the programme is the statement, the scale only says how hard the machine is
+// worked, and a missing key must not silence a plant.
+func (this *Runtime) scheduleScale(env *environment, gen *generation, source domain.ScheduleSource, now time.Time) float64 {
+	if source.Scale == "" {
+		return 1
+	}
+	if gen != nil {
+		if value, governed := gen.timeline.effectiveContext(source.Scale, now); governed {
+			return value
+		}
+	}
+	value, declared := env.contextStates()[source.Scale]
+	if !declared {
+		return 1
+	}
+	return numericOrZero(value)
+}
+
+// scaledWrites applies the scale to the values a state declares. They are the
+// same statement as the published reading - the air a step demands, the power
+// it draws - so a scale that reached one and not the other would let a
+// compressor size itself against a machine nobody is running.
+func scaledWrites(writes map[string]float64, scale float64) map[string]float64 {
+	if writes == nil || scale == 1 {
+		return writes
+	}
+	scaled := make(map[string]float64, len(writes))
+	for key, value := range writes {
+		scaled[key] = value * scale
+	}
+	return scaled
 }
 
 // scheduleRun returns the run of this channel and whether its gate is open,

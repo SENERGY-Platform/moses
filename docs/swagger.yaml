@@ -616,6 +616,16 @@ definitions:
           shift stops charging and stays stopped. With a Gate every opening starts a
           new single run.
         type: boolean
+      scale:
+        description: |-
+          Scale names a context key every value of the programme is multiplied by:
+          the published reading and every state write. A programme says what a
+          machine does; how hard it is worked on a given day is not a property of
+          the cycle, and without this the only way to say it is a state per day.
+          Empty means a factor of one. Unlike Gate it does not start or stop
+          anything - a closed gate still publishes zero, and a scale of zero is a
+          machine that draws nothing while its programme keeps running.
+        type: string
       state_key:
         description: |-
           StateKey is the asset state key the name of the current state is written
@@ -651,6 +661,7 @@ definitions:
         type: number
       state_writes:
         additionalProperties:
+          format: float64
           type: number
         description: |-
           StateWrites are further asset state values this step declares - the air
@@ -744,6 +755,7 @@ definitions:
         type: array
       time_constants:
         additionalProperties:
+          format: int64
           type: integer
         description: |-
           TimeConstants makes a state value follow a set point instead of jumping to

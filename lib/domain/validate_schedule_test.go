@@ -263,3 +263,47 @@ func TestValidateRefusesAScheduleWritingOverItsOwnStateKey(t *testing.T) {
 		c.Source.Schedule.States[2].StateWrites = map[string]float64{"programm": 1}
 	}, "would be overwritten by a number")
 }
+
+func TestAScaleOnAKeyNobodyWritesIsRefused(t *testing.T) {
+	//a scale reads as one where the key is missing, so this is not a broken
+	//document but a lying one: a machine nobody scales, written as though
+	//somebody did
+	env := scheduleEnvironment(func(channel *Channel) {
+		channel.Source.Schedule.Scale = "day_type"
+	})
+	err := Validate(env)
+	if err == nil {
+		t.Fatal("a scale on a key that is neither in context nor driven has to be refused")
+	}
+	if !strings.Contains(err.Error(), "scale") || !strings.Contains(err.Error(), "day_type") {
+		t.Errorf("the message has to name the field and the key, got %v", err)
+	}
+}
+
+func TestAScaleOnADeclaredKeyIsAccepted(t *testing.T) {
+	env := scheduleEnvironment(func(channel *Channel) {
+		channel.Source.Schedule.Scale = "day_type"
+	})
+	env.Context["day_type"] = float64(1)
+	if err := Validate(env); err != nil {
+		t.Errorf("a scale on a declared context key has to be storable: %v", err)
+	}
+}
+
+func TestAPaddedScaleKeyIsRefused(t *testing.T) {
+	//the runtime looks the key up exactly as it stands, so a padded name is a
+	//scale that silently reads as one forever
+	env := scheduleEnvironment(func(channel *Channel) {
+		channel.Source.Schedule.Scale = " day_type "
+	})
+	env.Context["day_type"] = float64(1)
+	if err := Validate(env); err == nil {
+		t.Fatal("a scale key padded with whitespace has to be refused")
+	}
+}
+
+func TestAScheduleWithoutAScaleStaysValid(t *testing.T) {
+	if err := Validate(scheduleEnvironment(nil)); err != nil {
+		t.Errorf("the scale is optional: %v", err)
+	}
+}

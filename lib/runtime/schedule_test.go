@@ -957,3 +957,92 @@ func TestAScheduleIsNotBackfilled(t *testing.T) {
 		t.Errorf("the reason has to say why, got %q", reason)
 	}
 }
+
+// A programme says what a machine does; how hard it is worked on a given day is
+// not a property of the cycle. Without a scale the only way to say it is a state
+// per day, which is a document nobody can read.
+func TestAScaledScheduleMultipliesItsValuesAndItsStateWrites(t *testing.T) {
+	const envId = "env-schedule-scale"
+	source := shortSchedule(
+		domain.ScheduleState{
+			Name: "running", DurationSeconds: 1, Value: 1000,
+			StateWrites: map[string]float64{"air_demand": 20},
+		},
+	)
+	source.Scale = "day_type"
+	env := testEnvironment(envId, scheduleChannel("ch-1", serviceRefOf(envId), 1, source))
+	env.Context = map[string]interface{}{"day_type": 0.5}
+	publisher := &fakePublisher{}
+	runtime := startRuntime(t, testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), publisher)
+
+	seen := func() bool {
+		for _, value := range publisher.forDevice(deviceRefOf(envId)) {
+			if number, ok := value.(float64); ok && number == 500 {
+				return true
+			}
+		}
+		return false
+	}
+	if !waitFor(10*time.Second, seen) {
+		t.Fatalf("expected the scaled 500, saw %v", publisher.forDevice(deviceRefOf(envId)))
+	}
+	if air := assetStateOf(t, runtime, envId, "air_demand"); air != 10.0 {
+		t.Errorf("a state write has to carry the same scale as the reading, got %v", air)
+	}
+}
+
+// A missing key reads as one rather than as zero: the programme is the
+// statement, and a scale nobody wrote must not silence a plant.
+func TestAScheduleWithoutTheKeyItScalesByKeepsRunning(t *testing.T) {
+	const envId = "env-schedule-scale-missing"
+	source := shortSchedule(
+		domain.ScheduleState{Name: "running", DurationSeconds: 1, Value: 1000},
+	)
+	source.Scale = "never_written"
+	env := testEnvironment(envId, scheduleChannel("ch-1", serviceRefOf(envId), 1, source))
+	publisher := &fakePublisher{}
+	startRuntime(t, testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), publisher)
+
+	seen := func() bool {
+		for _, value := range publisher.forDevice(deviceRefOf(envId)) {
+			if number, ok := value.(float64); ok && number == 1000 {
+				return true
+			}
+		}
+		return false
+	}
+	if !waitFor(10*time.Second, seen) {
+		t.Fatalf("expected the unscaled 1000, saw %v", publisher.forDevice(deviceRefOf(envId)))
+	}
+}
+
+// A closed gate is the machine standing still whatever the scale says, and a
+// scale of zero is a machine that draws nothing while its programme keeps
+// running - the two look the same in the data and are not the same thing.
+func TestAScaleOfZeroIsNotAClosedGate(t *testing.T) {
+	const envId = "env-schedule-scale-zero"
+	source := shortSchedule(
+		domain.ScheduleState{
+			Name: "running", DurationSeconds: 1, Value: 1000,
+			StateWrites: map[string]float64{"air_demand": 20},
+		},
+	)
+	source.Scale = "day_type"
+	env := testEnvironment(envId, scheduleChannel("ch-1", serviceRefOf(envId), 1, source))
+	env.Context = map[string]interface{}{"day_type": 0.0}
+	publisher := &fakePublisher{}
+	runtime := startRuntime(t, testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), publisher)
+
+	named := func() bool {
+		name, _ := assetStateOf(t, runtime, envId, "programm").(string)
+		return name == "running"
+	}
+	if !waitFor(10*time.Second, named) {
+		t.Fatal("the programme has to keep naming its state while the scale is zero")
+	}
+	for _, value := range publisher.forDevice(deviceRefOf(envId)) {
+		if number, ok := value.(float64); ok && number != 0 {
+			t.Errorf("a scale of zero publishes zero, got %v", number)
+		}
+	}
+}
