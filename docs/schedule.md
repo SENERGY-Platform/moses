@@ -102,13 +102,17 @@ for a gate somebody flips by hand, the programme starts within one
 
 ## The scale
 
-`scale` names a context key every value of the programme is multiplied by: the
+A schedule's  is a context **key**; the numeric  of a dataset
+source is a different field on a different source. The spelling keeps them
+apart, because a reader who knows one would otherwise write a number here.
+
+`scale_by` names a context key every value of the programme is multiplied by: the
 published reading and every entry of `state_writes`.
 
 ```json
 "schedule": {
   "state_key": "programme",
-  "scale": "day_type",
+  "scale_by": "day_type",
   "states": [ … ]
 }
 ```
@@ -211,7 +215,7 @@ the editor and be something else in the data.
   publishes.
 - **At least one state**, at most **256**. The runtime walks all of them on
   every evaluation.
-- A **`scale`**, when set, carries no leading or trailing whitespace and names a
+- A **`scale_by`**, when set, carries no leading or trailing whitespace and names a
   key that is in `context` or driven by a context source. It is optional; absent
   means a factor of one.
 - **Names** are non-empty, carry **no leading or trailing whitespace** and are

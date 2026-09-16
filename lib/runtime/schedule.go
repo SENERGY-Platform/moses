@@ -300,15 +300,15 @@ func (this *Runtime) executeSchedule(env *environment, gen *generation, binding 
 // the programme is the statement, the scale only says how hard the machine is
 // worked, and a missing key must not silence a plant.
 func (this *Runtime) scheduleScale(env *environment, gen *generation, source domain.ScheduleSource, now time.Time) float64 {
-	if source.Scale == "" {
+	if source.ScaleBy == "" {
 		return 1
 	}
 	if gen != nil {
-		if value, governed := gen.timeline.effectiveContext(source.Scale, now); governed {
+		if value, governed := gen.timeline.effectiveContext(source.ScaleBy, now); governed {
 			return value
 		}
 	}
-	value, declared := env.contextStates()[source.Scale]
+	value, declared := env.contextStates()[source.ScaleBy]
 	if !declared {
 		return 1
 	}

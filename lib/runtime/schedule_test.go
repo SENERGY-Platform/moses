@@ -969,7 +969,7 @@ func TestAScaledScheduleMultipliesItsValuesAndItsStateWrites(t *testing.T) {
 			StateWrites: map[string]float64{"air_demand": 20},
 		},
 	)
-	source.Scale = "day_type"
+	source.ScaleBy = "day_type"
 	env := testEnvironment(envId, scheduleChannel("ch-1", serviceRefOf(envId), 1, source))
 	env.Context = map[string]interface{}{"day_type": 0.5}
 	publisher := &fakePublisher{}
@@ -998,7 +998,7 @@ func TestAScheduleWithoutTheKeyItScalesByKeepsRunning(t *testing.T) {
 	source := shortSchedule(
 		domain.ScheduleState{Name: "running", DurationSeconds: 1, Value: 1000},
 	)
-	source.Scale = "never_written"
+	source.ScaleBy = "never_written"
 	env := testEnvironment(envId, scheduleChannel("ch-1", serviceRefOf(envId), 1, source))
 	publisher := &fakePublisher{}
 	startRuntime(t, testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), publisher)
@@ -1027,7 +1027,7 @@ func TestAScaleOfZeroIsNotAClosedGate(t *testing.T) {
 			StateWrites: map[string]float64{"air_demand": 20},
 		},
 	)
-	source.Scale = "day_type"
+	source.ScaleBy = "day_type"
 	env := testEnvironment(envId, scheduleChannel("ch-1", serviceRefOf(envId), 1, source))
 	env.Context = map[string]interface{}{"day_type": 0.0}
 	publisher := &fakePublisher{}

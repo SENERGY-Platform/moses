@@ -1887,8 +1887,8 @@ const docTemplate = `{
                     "description": "RunOnce holds the last state instead of starting the cycle over. It is the\nshape of a job rather than of a running plant: a forklift charging once per\nshift stops charging and stays stopped. With a Gate every opening starts a\nnew single run.",
                     "type": "boolean"
                 },
-                "scale": {
-                    "description": "Scale names a context key every value of the programme is multiplied by:\nthe published reading and every state write. A programme says what a\nmachine does; how hard it is worked on a given day is not a property of\nthe cycle, and without this the only way to say it is a state per day.\nEmpty means a factor of one. Unlike Gate it does not start or stop\nanything - a closed gate still publishes zero, and a scale of zero is a\nmachine that draws nothing while its programme keeps running.",
+                "scale_by": {
+                    "description": "ScaleBy names a context key every value of the programme is multiplied by:\nthe published reading and every state write. A programme says what a\nmachine does; how hard it is worked on a given day is not a property of\nthe cycle, and without this the only way to say it is a state per day.\nEmpty means a factor of one. It is spelled scale_by rather than scale\nbecause a dataset source already has a numeric Scale, and a reader who\nknows that one would otherwise write a number here and be told about\ncontext keys. Unlike Gate it does not start or stop\nanything - a closed gate still publishes zero, and a scale of zero is a\nmachine that draws nothing while its programme keeps running.",
                     "type": "string"
                 },
                 "state_key": {
@@ -1925,8 +1925,7 @@ const docTemplate = `{
                     "description": "StateWrites are further asset state values this step declares - the air\ndemand of a machine that is running, the setpoint it asks of the hall -\nread by formulas and by whoever reads the live state.\n\nThe keys of every state of the schedule are written on every evaluation,\nnot only the current state's: a key another state declares is written as 0\nhere, so an air demand set while running does not still stand once the\nmachine is idle.",
                     "type": "object",
                     "additionalProperties": {
-                        "type": "number",
-                        "format": "float64"
+                        "type": "number"
                     }
                 },
                 "value": {
@@ -2031,8 +2030,7 @@ const docTemplate = `{
                     "description": "TimeConstants makes a state value follow a set point instead of jumping to\nit, in seconds per state key - the thermal inertia of a space. A key with\nno time constant is set at once, which is what every stored document does.",
                     "type": "object",
                     "additionalProperties": {
-                        "type": "integer",
-                        "format": "int64"
+                        "type": "integer"
                     }
                 },
                 "type": {

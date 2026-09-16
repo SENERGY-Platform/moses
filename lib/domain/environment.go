@@ -477,14 +477,17 @@ type ScheduleSource struct {
 	// new single run.
 	RunOnce bool `json:"run_once,omitempty" bson:"run_once,omitempty"`
 
-	// Scale names a context key every value of the programme is multiplied by:
+	// ScaleBy names a context key every value of the programme is multiplied by:
 	// the published reading and every state write. A programme says what a
 	// machine does; how hard it is worked on a given day is not a property of
 	// the cycle, and without this the only way to say it is a state per day.
-	// Empty means a factor of one. Unlike Gate it does not start or stop
+	// Empty means a factor of one. It is spelled scale_by rather than scale
+	// because a dataset source already has a numeric Scale, and a reader who
+	// knows that one would otherwise write a number here and be told about
+	// context keys. Unlike Gate it does not start or stop
 	// anything - a closed gate still publishes zero, and a scale of zero is a
 	// machine that draws nothing while its programme keeps running.
-	Scale string `json:"scale,omitempty" bson:"scale,omitempty"`
+	ScaleBy string `json:"scale_by,omitempty" bson:"scale_by,omitempty"`
 }
 
 // ScheduleState is one step of the programme.

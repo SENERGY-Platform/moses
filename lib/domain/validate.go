@@ -985,15 +985,15 @@ func (this *validator) checkSchedule(path string, source Source) {
 		this.checkFinite(gatePath+".threshold", schedule.Gate.Threshold)
 	}
 
-	if schedule.Scale != "" {
-		scalePath := schedulePath + ".scale"
-		if schedule.Scale != strings.TrimSpace(schedule.Scale) {
-			this.fail(scalePath, "must not begin or end with whitespace: the runtime looks the key up in the context exactly as it stands, so %q is a scale that never finds the key the editor shows it reading", schedule.Scale)
+	if schedule.ScaleBy != "" {
+		scalePath := schedulePath + ".scale_by"
+		if schedule.ScaleBy != strings.TrimSpace(schedule.ScaleBy) {
+			this.fail(scalePath, "must not begin or end with whitespace: the runtime looks the key up in the context exactly as it stands, so %q is a scale that never finds the key the editor shows it reading", schedule.ScaleBy)
 		} else {
 			//the same second pass as the gate: the key may be driven by a
 			//context source declared at the top of a document whose zones are
 			//walked here
-			this.scaleRefs = append(this.scaleRefs, channelRef{path: scalePath, id: schedule.Scale})
+			this.scaleRefs = append(this.scaleRefs, channelRef{path: scalePath, id: schedule.ScaleBy})
 		}
 	}
 

@@ -269,7 +269,7 @@ func TestAScaleOnAKeyNobodyWritesIsRefused(t *testing.T) {
 	//document but a lying one: a machine nobody scales, written as though
 	//somebody did
 	env := scheduleEnvironment(func(channel *Channel) {
-		channel.Source.Schedule.Scale = "day_type"
+		channel.Source.Schedule.ScaleBy = "day_type"
 	})
 	err := Validate(env)
 	if err == nil {
@@ -282,7 +282,7 @@ func TestAScaleOnAKeyNobodyWritesIsRefused(t *testing.T) {
 
 func TestAScaleOnADeclaredKeyIsAccepted(t *testing.T) {
 	env := scheduleEnvironment(func(channel *Channel) {
-		channel.Source.Schedule.Scale = "day_type"
+		channel.Source.Schedule.ScaleBy = "day_type"
 	})
 	env.Context["day_type"] = float64(1)
 	if err := Validate(env); err != nil {
@@ -294,7 +294,7 @@ func TestAPaddedScaleKeyIsRefused(t *testing.T) {
 	//the runtime looks the key up exactly as it stands, so a padded name is a
 	//scale that silently reads as one forever
 	env := scheduleEnvironment(func(channel *Channel) {
-		channel.Source.Schedule.Scale = " day_type "
+		channel.Source.Schedule.ScaleBy = " day_type "
 	})
 	env.Context["day_type"] = float64(1)
 	if err := Validate(env); err == nil {
