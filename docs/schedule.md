@@ -102,9 +102,10 @@ for a gate somebody flips by hand, the programme starts within one
 
 ## The scale
 
-A schedule's  is a context **key**; the numeric  of a dataset
+A schedule's `scale_by` is a context **key**; the numeric `scale` of a dataset
 source is a different field on a different source. The spelling keeps them
-apart, because a reader who knows one would otherwise write a number here.
+apart, because a reader who knows the one would otherwise write a number here
+and be told about context keys.
 
 `scale_by` names a context key every value of the programme is multiplied by: the
 published reading and every entry of `state_writes`.
