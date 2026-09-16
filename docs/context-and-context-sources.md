@@ -105,6 +105,10 @@ otherwise silent for every instant after its last point, which for a following
 source is nearly every tick. A source that does not follow keeps falling silent
 outside its range.
 
+A hole *inside* the series is a different matter, and `max_gap` bounds it - see
+`docs/gaps-in-a-replayed-series.md`. Without one the resampling bridges a hole
+however wide it is.
+
 **The hold is bounded at three `follow_every`.** Past that the upstream has
 missed enough refreshes to count as gone, and the channel is silent again, the
 way a non-following original-anchored replay is outside its range — a held
