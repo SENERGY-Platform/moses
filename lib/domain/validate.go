@@ -1218,6 +1218,7 @@ func (this *validator) checkDatasetFields(path string, source Source) {
 		this.fail(path+".dataset.anchor", "unknown anchor mode %q", d.Anchor)
 	}
 	this.checkMaxGap(path, d)
+	this.checkFilters(path, d)
 	this.checkFollow(path, d)
 }
 
@@ -1235,6 +1236,37 @@ func (this *validator) checkMaxGap(path string, d *DatasetSource) {
 	}
 	if limit < MinMaxGap {
 		this.fail(path+".dataset.max_gap", "must be at least %s, got %q", MinMaxGap, d.MaxGap)
+	}
+}
+
+// checkFilters refuses a filter where there is nothing to narrow. Only an export
+// puts several series into one table; a device's service is one series already,
+// and a file is what it is.
+func (this *validator) checkFilters(path string, d *DatasetSource) {
+	if len(d.Filters) == 0 {
+		return
+	}
+	if d.Origin != OriginExport {
+		this.fail(path+".dataset.filters", "only an export carries more than one series to filter, not origin %q", d.Origin)
+		return
+	}
+	for index, filter := range d.Filters {
+		where := fmt.Sprintf("%s.dataset.filters[%d]", path, index)
+		trimmed := strings.TrimSpace(filter.Column)
+		switch {
+		case trimmed == "":
+			this.fail(where+".column", "must name the column to filter on")
+		case trimmed != filter.Column:
+			//the name reaches the query as written, so a stray space comes back
+			//from the wrapper as "column does not exist" - long after this
+			//document was accepted, and as a context key that quietly never moves
+			this.fail(where+".column", "must not be padded with whitespace, the name reaches the query as written")
+		}
+		if strings.TrimSpace(filter.Value) == "" {
+			//a filter on nothing keeps nothing, which reads as a source that
+			//simply never plays
+			this.fail(where+".value", "must not be empty, a filter on nothing keeps nothing")
+		}
 	}
 }
 

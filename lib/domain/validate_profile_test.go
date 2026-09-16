@@ -305,3 +305,35 @@ func TestValidateRefusesAMaxGapThatHoldsNothingBack(t *testing.T) {
 	expectProfileProblem(t, datasetChannel(func(c *Channel) { c.Source.Dataset.MaxGap = "0s" }), "max_gap")
 	expectProfileProblem(t, datasetChannel(func(c *Channel) { c.Source.Dataset.MaxGap = "eine Stunde" }), "max_gap")
 }
+
+func TestValidateAcceptsAFilteredExportDataset(t *testing.T) {
+	channel := exportDatasetChannel(func(c *Channel) {
+		c.Source.Dataset.Filters = []DatasetFilter{{Column: "station_id", Value: "02932"}}
+	})
+	if err := Validate(profileEnvironment(channel)); err != nil {
+		t.Errorf("an export narrowed to one of its series has to be storable: %v", err)
+	}
+}
+
+func TestValidateRefusesAFilterWhereNothingIsToNarrow(t *testing.T) {
+	//a file and a device service are one series already, so a filter there reads
+	//like it does something and does not
+	expectProfileProblem(t, datasetChannel(func(c *Channel) {
+		c.Source.Dataset.Filters = []DatasetFilter{{Column: "station_id", Value: "02932"}}
+	}), "only an export")
+	expectProfileProblem(t, exportDatasetChannel(func(c *Channel) {
+		c.Source.Dataset.Filters = []DatasetFilter{{Column: " ", Value: "02932"}}
+	}), "must name the column")
+	expectProfileProblem(t, exportDatasetChannel(func(c *Channel) {
+		c.Source.Dataset.Filters = []DatasetFilter{{Column: "station_id", Value: ""}}
+	}), "keeps nothing")
+	expectProfileProblem(t, exportDatasetChannel(func(c *Channel) {
+		c.Source.Dataset.Filters = []DatasetFilter{{Column: "station_id", Value: "  "}}
+	}), "keeps nothing")
+	//a padded name is accepted by a trimming check and then reaches the query as
+	//written, where it comes back as "column does not exist" - a document that
+	//validated and a context key that never moves
+	expectProfileProblem(t, exportDatasetChannel(func(c *Channel) {
+		c.Source.Dataset.Filters = []DatasetFilter{{Column: " station_id ", Value: "02932"}}
+	}), "padded with whitespace")
+}

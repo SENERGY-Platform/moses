@@ -45,6 +45,40 @@ each on its own ticker (`lib/runtime/contextsource.go`):
 - **`interval_seconds` is mandatory and > 0** — validation answers
   `a context source has no publish tick to piggyback on, it needs its own interval`.
 
+## One export, several series
+
+An export of an import holds one row per station, meter or sensor in one table,
+told apart by a tag column the export was created with. Read unfiltered, such an
+export replays every one of them at once, interleaved on the instant, and a
+window long enough to matter runs into the row limit before it gets that far.
+
+`filters` narrows it:
+
+```json
+"dataset": {
+  "origin": "export",
+  "ref": "…",
+  "column": "global_irradiance_wm2",
+  "filters": [{"column": "station_id", "value": "02932"}]
+}
+```
+
+Each entry keeps the rows whose column equals the value, and several are
+combined with and. Equality only - picking one series out of a shared table is
+what this is for, and a comparison would be a second thing to validate and to
+explain.
+
+Valid for the **export origin alone**. A device's service is one series already
+and a file is what it is, so validation refuses a filter on either rather than
+accepting one that does nothing. An empty value is refused too: a filter on
+nothing keeps nothing, which would read as a source that simply never plays. So
+is a column name padded with whitespace - the name reaches the query as written,
+and the wrapper would answer `column " station_id " does not exist` long after
+the document was accepted.
+
+The initial fetch and every follow refresh send the same filter. A refresh that
+dropped it would append the other series' rows to the one already loaded.
+
 Replay anchors of dataset context sources persist under the series id
 `"context:" + key`, so they cannot collide with channel anchors.
 

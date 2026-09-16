@@ -1558,6 +1558,17 @@
                 }
             }
         },
+        "domain.DatasetFilter": {
+            "type": "object",
+            "properties": {
+                "column": {
+                    "type": "string"
+                },
+                "value": {
+                    "type": "string"
+                }
+            }
+        },
         "domain.DatasetOrigin": {
             "type": "string",
             "enum": [
@@ -1586,6 +1597,13 @@
                 "cumulative": {
                     "description": "A meter reading keeps counting across a loop boundary instead of jumping\nback to the first value.",
                     "type": "boolean"
+                },
+                "filters": {
+                    "description": "Filters narrow an export that carries more than one series in one table,\nwhich is what an export of an import does: one row per station, meter or\nsensor, told apart by a tag column. Without them such an export replays as\nevery series at once, interleaved on the instant.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/domain.DatasetFilter"
+                    }
                 },
                 "follow": {
                     "description": "Follow keeps a platform or export series current after the initial fetch:\na periodic refresh appends what is new since the last fetched point.\nValid only for the platform and export origins and only with\nanchor \"original\", since a loop replays the frozen window it already has.",

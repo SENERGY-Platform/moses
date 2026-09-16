@@ -385,6 +385,21 @@ type DatasetSource struct {
 	// the resampling then runs across a hole of any width and produces values
 	// nobody measured.
 	MaxGap string `json:"max_gap,omitempty" bson:"max_gap,omitempty"`
+
+	// Filters narrow an export that carries more than one series in one table,
+	// which is what an export of an import does: one row per station, meter or
+	// sensor, told apart by a tag column. Without them such an export replays as
+	// every series at once, interleaved on the instant.
+	Filters []DatasetFilter `json:"filters,omitempty" bson:"filters,omitempty"`
+}
+
+// DatasetFilter keeps the rows whose Column equals Value. Several filters are
+// combined with and. Only equality, because that is what picking one series out
+// of a shared table needs; a comparison would be a second thing to validate and
+// to explain, and nothing asks for it yet.
+type DatasetFilter struct {
+	Column string `json:"column" bson:"column"`
+	Value  string `json:"value" bson:"value"`
 }
 
 // DefaultFollowEvery is the refresh cadence a following source gets when it

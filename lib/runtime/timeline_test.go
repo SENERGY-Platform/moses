@@ -133,7 +133,7 @@ func TestANilIndexAnswersWithTheInlineValues(t *testing.T) {
 		t.Errorf("a nil index changed the profile to %+v", got)
 	}
 	replay := domain.DatasetSource{Origin: domain.OriginFile, Ref: "d1", Scale: 3}
-	if got := index.effectiveDataset(domain.TimelineChannel, "ch-1", replay, timelineKnick); got != replay {
+	if got := index.effectiveDataset(domain.TimelineChannel, "ch-1", replay, timelineKnick); !reflect.DeepEqual(got, replay) {
 		t.Errorf("a nil index changed the dataset to %+v", got)
 	}
 	state := domain.ScheduleState{Name: "run", Value: 9000, SpreadPercent: 5}

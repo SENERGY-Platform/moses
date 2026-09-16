@@ -1276,9 +1276,23 @@ func (this *Runtime) remoteQuery(owner string, source *domain.DatasetSource) (st
 		return "", timeseries.Series{}, fmt.Errorf("unable to obtain a token for the owner: %w", err)
 	}
 	if source.Origin == domain.OriginExport {
-		return token, timeseries.ExportSeries(source.Ref), nil
+		return token, timeseries.ExportSeries(source.Ref, exportFilters(source)...), nil
 	}
 	return token, timeseries.DeviceSeries(source.Ref, source.ServiceRef), nil
+}
+
+// exportFilters is the source's filters in the client's shape. An export of an
+// import holds one row per station or meter in one table, so without them a
+// source of it replays every one of them at once, interleaved on the instant.
+func exportFilters(source *domain.DatasetSource) []timeseries.Filter {
+	if len(source.Filters) == 0 {
+		return nil
+	}
+	filters := make([]timeseries.Filter, 0, len(source.Filters))
+	for _, filter := range source.Filters {
+		filters = append(filters, timeseries.Filter{Column: filter.Column, Value: filter.Value})
+	}
+	return filters
 }
 
 // executeDataset publishes the replay value for now. The anchor of a looping

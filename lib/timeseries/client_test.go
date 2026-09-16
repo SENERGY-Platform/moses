@@ -481,3 +481,61 @@ func TestFetchSinceTakesAnyNumberOfPoints(t *testing.T) {
 		t.Errorf("a value under no instant has to stay a refusal, got %v", err)
 	}
 }
+
+func TestFetchSendsTheFiltersOfAnExportSeries(t *testing.T) {
+	rows := `[[["2026-01-05T00:00:00Z", 1.5],["2026-01-05T00:15:00Z", 2.5]]]`
+	start, end := time.Now().Add(-time.Hour), time.Now()
+
+	//an export of an import holds one row per station in one table, so without
+	//the filter every station replays at once, interleaved on the instant
+	captured := map[string]interface{}{}
+	server := wrapperAnswering(t, rows, &captured)
+	series := ExportSeries("export-1", Filter{Column: "station_id", Value: "02932"})
+	if _, err := New(server.URL).Fetch(context.Background(), "t", series, "value", start, end); err != nil {
+		t.Fatal(err)
+	}
+	server.Close()
+	element := captured["element"].(map[string]interface{})
+	filters, sent := element["filters"].([]interface{})
+	if !sent || len(filters) != 1 {
+		t.Fatalf("expected one filter in the request, got %v", element["filters"])
+	}
+	filter := filters[0].(map[string]interface{})
+	if filter["column"] != "station_id" || filter["value"] != "02932" {
+		t.Errorf("the filter has to carry column and value: %v", filter)
+	}
+	if filter["type"] != "=" {
+		t.Errorf("a Series filter is an equality match, so the wrapper's operator is \"=\": %v", filter)
+	}
+
+	//a source without filters sends the request it always sent, key and all
+	captured = map[string]interface{}{}
+	server = wrapperAnswering(t, rows, &captured)
+	if _, err := New(server.URL).Fetch(context.Background(), "t", ExportSeries("export-1"), "value", start, end); err != nil {
+		t.Fatal(err)
+	}
+	server.Close()
+	element = captured["element"].(map[string]interface{})
+	if _, sent := element["filters"]; sent {
+		t.Errorf("an unfiltered series must not send a filters key: %v", element)
+	}
+}
+
+func TestFetchSinceSendsTheFiltersToo(t *testing.T) {
+	//the follow refresh asks for the newest slice of the same series, and a
+	//refresh that dropped the filter would append every other station's rows
+	rows := `[[["2026-01-05T00:00:00Z", 1.5],["2026-01-05T00:15:00Z", 2.5]]]`
+	captured := map[string]interface{}{}
+	server := wrapperAnswering(t, rows, &captured)
+	series := ExportSeries("export-1", Filter{Column: "station_id", Value: "02932"})
+	if _, err := New(server.URL).FetchSince(context.Background(), "t", series, "value",
+		time.Now().Add(-time.Hour), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	server.Close()
+	element := captured["element"].(map[string]interface{})
+	filters, sent := element["filters"].([]interface{})
+	if !sent || len(filters) != 1 {
+		t.Fatalf("the refresh has to send the filter as well, got %v", element["filters"])
+	}
+}

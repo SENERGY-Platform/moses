@@ -73,6 +73,14 @@ type queryTime struct {
 	End   string `json:"end"`
 }
 
+// queryFilter is the wrapper's filter shape. Type is its comparison operator
+// and stays "=": Series.Filter is an equality match by definition.
+type queryFilter struct {
+	Column string `json:"column"`
+	Type   string `json:"type"`
+	Value  string `json:"value"`
+}
+
 type queryColumn struct {
 	Name string `json:"name"`
 }
@@ -80,10 +88,20 @@ type queryColumn struct {
 // Series addresses one timeseries the wrapper can answer: a device's service,
 // or an analytics-serving export - never both, so exactly one constructor
 // fills the fields a request needs.
+//
+// Filters narrow the rows within it, for an export whose table carries several
+// series told apart by a tag column.
 type Series struct {
 	DeviceId  string
 	ServiceId string
 	ExportId  string
+	Filters   []Filter
+}
+
+// Filter keeps the rows whose Column equals Value.
+type Filter struct {
+	Column string
+	Value  string
 }
 
 // DeviceSeries addresses a device's service.
@@ -91,9 +109,10 @@ func DeviceSeries(deviceId string, serviceId string) Series {
 	return Series{DeviceId: deviceId, ServiceId: serviceId}
 }
 
-// ExportSeries addresses an analytics-serving export.
-func ExportSeries(exportId string) Series {
-	return Series{ExportId: exportId}
+// ExportSeries addresses an analytics-serving export, optionally narrowed to
+// the rows a tag column marks.
+func ExportSeries(exportId string, filters ...Filter) Series {
+	return Series{ExportId: exportId, Filters: filters}
 }
 
 type queryElement struct {
@@ -101,6 +120,7 @@ type queryElement struct {
 	ServiceId string        `json:"serviceId,omitempty"`
 	ExportId  string        `json:"exportId,omitempty"`
 	Columns   []queryColumn `json:"columns"`
+	Filters   []queryFilter `json:"filters,omitempty"`
 	Time      queryTime     `json:"time"`
 	Limit     int           `json:"limit"`
 
@@ -191,6 +211,7 @@ func (this *Client) fetchPoints(ctx context.Context, token string, series Series
 		ServiceId: series.ServiceId,
 		ExportId:  series.ExportId,
 		Columns:   []queryColumn{{Name: column}},
+		Filters:   queryFilters(series),
 		Time: queryTime{
 			Start: start.UTC().Format(time.RFC3339),
 			End:   end.UTC().Format(time.RFC3339),
@@ -259,6 +280,7 @@ func (this *Client) HasReadings(ctx context.Context, token string, series Series
 		ServiceId: series.ServiceId,
 		ExportId:  series.ExportId,
 		Columns:   []queryColumn{{Name: column}},
+		Filters:   queryFilters(series),
 		Time: queryTime{
 			//the wrapper's SQL is exclusive at both ends, so the start goes back a
 			//millisecond for a reading exactly at start to be seen; RFC3339Nano
@@ -295,4 +317,17 @@ func (this *Client) HasReadings(ctx context.Context, token string, series Series
 		return true, nil
 	}
 	return false, nil
+}
+
+// queryFilters is the series' filters in the wrapper's shape. Nil for a series
+// without any, so the request of an unfiltered source stays the one it was.
+func queryFilters(series Series) []queryFilter {
+	if len(series.Filters) == 0 {
+		return nil
+	}
+	filters := make([]queryFilter, 0, len(series.Filters))
+	for _, filter := range series.Filters {
+		filters = append(filters, queryFilter{Column: filter.Column, Type: "=", Value: filter.Value})
+	}
+	return filters
 }

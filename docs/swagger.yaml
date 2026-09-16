@@ -303,6 +303,13 @@ definitions:
       unit:
         type: string
     type: object
+  domain.DatasetFilter:
+    properties:
+      column:
+        type: string
+      value:
+        type: string
+    type: object
   domain.DatasetOrigin:
     enum:
     - platform
@@ -331,6 +338,15 @@ definitions:
           A meter reading keeps counting across a loop boundary instead of jumping
           back to the first value.
         type: boolean
+      filters:
+        description: |-
+          Filters narrow an export that carries more than one series in one table,
+          which is what an export of an import does: one row per station, meter or
+          sensor, told apart by a tag column. Without them such an export replays as
+          every series at once, interleaved on the instant.
+        items:
+          $ref: '#/definitions/domain.DatasetFilter'
+        type: array
       follow:
         description: |-
           Follow keeps a platform or export series current after the initial fetch:
