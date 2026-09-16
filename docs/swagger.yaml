@@ -344,6 +344,14 @@ definitions:
           Window; empty defaults to DefaultFollowEvery and it may not be shorter
           than MinFollowEvery.
         type: string
+      max_gap:
+        description: |-
+          MaxGap is the widest distance between two neighbouring points of the
+          series the replay still bridges, a duration like Window. Empty means no
+          bound, which is what every document written before the field carries:
+          the resampling then runs across a hole of any width and produces values
+          nobody measured.
+        type: string
       origin:
         $ref: '#/definitions/domain.DatasetOrigin'
       ref:

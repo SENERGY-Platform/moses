@@ -22,7 +22,17 @@ import (
 
 	"github.com/SENERGY-Platform/moses/lib/dataset"
 	"github.com/SENERGY-Platform/moses/lib/domain"
+	"github.com/SENERGY-Platform/moses/lib/util"
 )
+
+// replayGap is the distance a replay refused to bridge and the instant it opens
+// at. The zero value says there was no gap. The opening instant is what a
+// reporter keys on: a source stands in one gap for as many ticks as it is wide,
+// and a history run walks those in milliseconds.
+type replayGap struct {
+	StartUnix int64
+	Seconds   int64
+}
 
 // replayValue is the value a dataset channel publishes at now. The bool is
 // false when there is nothing to play: an original-anchored series outside its
@@ -32,6 +42,14 @@ import (
 // with the loop anchor the series plays relative to it and repeats, so a
 // restart resumes mid-loop instead of starting over.
 func replayValue(source domain.DatasetSource, points []dataset.Point, anchorUnix int64, now time.Time, tickSeconds int64) (float64, bool) {
+	value, _, playable := replayReading(source, points, anchorUnix, now, tickSeconds)
+	return value, playable
+}
+
+// replayReading is replayValue with the reason behind a silence, for the live
+// callers that report it: gap is set only for a silence a max_gap caused, and
+// stays zero for every other silence and for a played value.
+func replayReading(source domain.DatasetSource, points []dataset.Point, anchorUnix int64, now time.Time, tickSeconds int64) (value float64, gap replayGap, playable bool) {
 	first, last := points[0].Unix, points[len(points)-1].Unix
 	span := last - first
 
@@ -41,11 +59,11 @@ func replayValue(source domain.DatasetSource, points []dataset.Point, anchorUnix
 	case domain.AnchorOriginal:
 		virtual = now.Unix()
 		if virtual < first {
-			return 0, false
+			return 0, replayGap{}, false
 		}
 		if virtual > last {
 			if !followHolds(source, last, virtual) {
-				return 0, false
+				return 0, replayGap{}, false
 			}
 			//a following source is re-read on its own cadence, so between two
 			//refreshes the newest measurement is what the present holds -
@@ -56,7 +74,7 @@ func replayValue(source domain.DatasetSource, points []dataset.Point, anchorUnix
 	default: //loop
 		elapsed := now.Unix() - anchorUnix
 		if elapsed < 0 {
-			return 0, false
+			return 0, replayGap{}, false
 		}
 		if span <= 0 {
 			//a series whose points all sit on one second has nothing to loop
@@ -69,7 +87,11 @@ func replayValue(source domain.DatasetSource, points []dataset.Point, anchorUnix
 		virtual = first + elapsed%span
 	}
 
-	value := resample(source.Resample, points, virtual, tickSeconds)
+	if gap, wide := gapAt(source, points, virtual); wide {
+		return 0, gap, false
+	}
+
+	value = resample(source.Resample, points, virtual, tickSeconds)
 	if source.Cumulative && loops > 0 {
 		//a meter reading keeps counting across the loop boundary: every
 		//completed loop contributes the full sweep of the series
@@ -78,7 +100,53 @@ func replayValue(source domain.DatasetSource, points []dataset.Point, anchorUnix
 	if source.Scale != 0 {
 		value *= source.Scale
 	}
-	return value, true
+	return value, replayGap{}, true
+}
+
+// gapAt is the distance the replay would have to bridge at virtual, and whether
+// that distance is wider than the source's max_gap. Without a max_gap nothing
+// is a gap, which is what every document written before the field does.
+//
+// The instant of a point is not in a gap for "hold" and "linear": it is a
+// measurement, whatever the source did around it. For "distribute" it is, and
+// the distance measured there is the slot rather than the span across virtual -
+// that mode hands a tick its share of the slot the point opens, so an oversized
+// slot has already thinned the sample out at the slot's first instant.
+//
+// "hold" is bounded like "linear" on purpose. The mode says a state persists
+// between two samples, but max_gap is the document's statement that past this
+// distance it no longer vouches for the source at all, and a state a day and a
+// half old is as much a claim about an unobserved instant as an interpolated
+// one. Keeping the rule the same across the modes also means switching the
+// resample mode cannot silently start bridging holes again.
+//
+// A loop's seam needs no case of its own: virtual runs over [first, last), so
+// it never falls between the last point of one round and the first of the next.
+func gapAt(source domain.DatasetSource, points []dataset.Point, virtual int64) (replayGap, bool) {
+	limit, set, err := domain.ParseMaxGap(source.MaxGap)
+	if !set || err != nil {
+		//validation refuses an unreadable max_gap, so such a document bypassed
+		//the api; a bound nobody can read holds nothing back
+		return replayGap{}, false
+	}
+	//truncated to whole seconds, which is exact rather than lenient: the
+	//instants of a series are whole seconds, so an integer distance exceeds a
+	//bound of 90.5 s in exactly the cases where it exceeds 90
+	seconds := int64(limit / time.Second)
+	next := sort.Search(len(points), func(i int) bool { return points[i].Unix > virtual })
+	previous := next - 1 //>= 0, virtual is never before the first point
+	if source.Resample == domain.ResampleDistribute {
+		slot := slotSeconds(points, previous)
+		return replayGap{StartUnix: points[previous].Unix, Seconds: slot}, slot > seconds
+	}
+	//virtual never exceeds the last point - a loop runs over [first, last) and
+	//the original anchor either returns early or clamps to last - so the bounds
+	//check guards a caller that changes that rather than a case reachable today.
+	if next >= len(points) || points[previous].Unix == virtual {
+		return replayGap{}, false
+	}
+	span := points[next].Unix - points[previous].Unix
+	return replayGap{StartUnix: points[previous].Unix, Seconds: span}, span > seconds
 }
 
 func resample(mode domain.ResampleMode, points []dataset.Point, virtual int64, tickSeconds int64) float64 {
@@ -149,4 +217,25 @@ func slotSeconds(points []dataset.Point, index int) int64 {
 		return points[index+1].Unix - points[index].Unix
 	}
 	return points[index].Unix - points[index-1].Unix
+}
+
+// reportGap warns that a source stands in a gap it will not bridge, once per gap
+// rather than once per tick. Must be called with env.mux held, like every other
+// touch of a generation's maps.
+//
+// A silence a max_gap causes is the one silence worth a line: the others are the
+// document saying where its series begins and ends, while this one says the
+// source has a hole the document refuses to paper over. It was invisible before
+// the bound existed, which is why a 27 hour hole in a weather series went
+// unnoticed for months.
+// The bool says whether this call was the one that reported, which is what a
+// test can hold on to: the log line itself is not observable.
+func reportGap(gen *generation, id string, gap replayGap, maxGap string) bool {
+	if reported, seen := gen.gapReported[id]; seen && reported == gap.StartUnix {
+		return false
+	}
+	gen.gapReported[id] = gap.StartUnix
+	util.Logger.Warn("a dataset source publishes nothing inside a gap wider than its max_gap",
+		"source", id, "gap_seconds", gap.Seconds, "max_gap", maxGap)
+	return true
 }

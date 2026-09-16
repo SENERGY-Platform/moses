@@ -173,6 +173,10 @@ reading reports a meter whose value stopped moving. Which one a document wants
 is a modelling decision. `anchor: loop` sidesteps it entirely and is what a
 long running demonstration should use.
 
+A **hole inside** a series produces the same two shapes, once the source declares
+a `max_gap` - see `docs/gaps-in-a-replayed-series.md`. Without one a hole is
+bridged by the resampling rather than reported, however wide it is.
+
 ## A document that bypassed the api
 
 Every rule above is enforced by validation. A document that carries an unusable

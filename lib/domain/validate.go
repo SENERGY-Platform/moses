@@ -1217,7 +1217,25 @@ func (this *validator) checkDatasetFields(path string, source Source) {
 	default:
 		this.fail(path+".dataset.anchor", "unknown anchor mode %q", d.Anchor)
 	}
+	this.checkMaxGap(path, d)
 	this.checkFollow(path, d)
+}
+
+// checkMaxGap refuses a gap bound that could hold nothing back. The lower bound
+// is not a taste question: the instants of a series are whole seconds, so a
+// bound below one is exceeded by every distance there is.
+func (this *validator) checkMaxGap(path string, d *DatasetSource) {
+	limit, set, err := ParseMaxGap(d.MaxGap)
+	if !set {
+		return
+	}
+	if err != nil {
+		this.fail(path+".dataset.max_gap", "%s", err.Error())
+		return
+	}
+	if limit < MinMaxGap {
+		this.fail(path+".dataset.max_gap", "must be at least %s, got %q", MinMaxGap, d.MaxGap)
+	}
 }
 
 // checkFollow refuses a follow that could not do what it reads like: an

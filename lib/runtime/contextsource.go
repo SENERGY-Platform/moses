@@ -80,8 +80,13 @@ func (this *Runtime) tickContextSource(env *environment, gen *generation, key st
 		}
 		replay := gen.timeline.effectiveDataset(domain.TimelineContextSource, key, *source.Dataset, now)
 		anchor := this.anchorFor(env, contextSeriesId(key), source.Dataset, now)
-		value, playable := replayValue(replay, points, anchor, now, source.IntervalSeconds)
+		value, gap, playable := replayReading(replay, points, anchor, now, source.IntervalSeconds)
 		if !playable {
+			if gap.Seconds > 0 {
+				//the key keeps what it last held: a consumer that reads it sees
+				//a value that stopped moving rather than one nobody measured
+				reportGap(gen, contextSeriesId(key), gap, replay.MaxGap)
+			}
 			return
 		}
 		env.contextStates()[key] = value

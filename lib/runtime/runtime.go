@@ -1300,8 +1300,13 @@ func (this *Runtime) executeDataset(env *environment, gen *generation, binding c
 	//share of a sample one computation stands for, and with a change trigger the
 	//value is computed on the evaluation cadence. Without a trigger the two are
 	//the same number.
-	value, playable := replayValue(source, gen.series[binding.channel.Id], anchor, now, binding.stepSeconds)
+	value, gap, playable := replayReading(source, gen.series[binding.channel.Id], anchor, now, binding.stepSeconds)
 	if !playable {
+		if gap.Seconds > 0 {
+			//the channel stays silent for the width of the gap; nothing is
+			//published rather than a value the source never carried
+			reportGap(gen, binding.channel.Id, gap, source.MaxGap)
+		}
 		return
 	}
 	send(value)

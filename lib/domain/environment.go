@@ -378,6 +378,13 @@ type DatasetSource struct {
 	// Window; empty defaults to DefaultFollowEvery and it may not be shorter
 	// than MinFollowEvery.
 	FollowEvery string `json:"follow_every,omitempty" bson:"follow_every,omitempty"`
+
+	// MaxGap is the widest distance between two neighbouring points of the
+	// series the replay still bridges, a duration like Window. Empty means no
+	// bound, which is what every document written before the field carries:
+	// the resampling then runs across a hole of any width and produces values
+	// nobody measured.
+	MaxGap string `json:"max_gap,omitempty" bson:"max_gap,omitempty"`
 }
 
 // DefaultFollowEvery is the refresh cadence a following source gets when it
@@ -390,6 +397,23 @@ const DefaultFollowEvery = "30m"
 // ParseFollowEvery enforces: the runtime trusts a stored document to already
 // satisfy it.
 const MinFollowEvery = time.Minute
+
+// MinMaxGap is the shortest gap bound a document may declare. The instants of a
+// series are whole seconds, so a bound below one second is met by no distance
+// at all and would silence a source rather than bound it.
+const MinMaxGap = time.Second
+
+// ParseMaxGap reads max_gap. The empty string is the unset field and means no
+// bound, which is why the caller learns that separately instead of having to
+// read it out of a zero duration.
+func ParseMaxGap(maxGap string) (limit time.Duration, set bool, err error) {
+	trimmed := strings.TrimSpace(maxGap)
+	if trimmed == "" {
+		return 0, false, nil
+	}
+	limit, err = ParseWindow(trimmed)
+	return limit, true, err
+}
 
 // ParseFollowEvery reads follow_every the way validation and the runtime both
 // need it: an empty string defaults to DefaultFollowEvery. It does not refuse

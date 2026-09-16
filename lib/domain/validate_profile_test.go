@@ -289,3 +289,19 @@ func TestValidateRefusesBrokenContextSources(t *testing.T) {
 	expect(contextSourceEnvironment(" ", Source{Kind: SourceProfile, IntervalSeconds: 60, Profile: &ProfileSource{Base: 1}}),
 		"context key must not be empty")
 }
+
+func TestValidateAcceptsAMaxGap(t *testing.T) {
+	for _, maxGap := range []string{"", "1s", "90m", "2d"} {
+		channel := datasetChannel(func(c *Channel) { c.Source.Dataset.MaxGap = maxGap })
+		if err := Validate(profileEnvironment(channel)); err != nil {
+			t.Errorf("max_gap %q has to be storable: %v", maxGap, err)
+		}
+	}
+}
+
+func TestValidateRefusesAMaxGapThatHoldsNothingBack(t *testing.T) {
+	//the instants of a series are whole seconds, so a bound under one of them is
+	//exceeded by every distance there is and would silence the source outright
+	expectProfileProblem(t, datasetChannel(func(c *Channel) { c.Source.Dataset.MaxGap = "0s" }), "max_gap")
+	expectProfileProblem(t, datasetChannel(func(c *Channel) { c.Source.Dataset.MaxGap = "eine Stunde" }), "max_gap")
+}

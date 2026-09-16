@@ -141,6 +141,12 @@ type generation struct {
 	// keeps the points for longer than one tick takes a snapshotSeries copy.
 	series map[string][]dataset.Point
 
+	// gapReported is the first instant of the gap a source last reported, keyed
+	// like series and guarded by the same mutex. A gap is reported once rather
+	// than per tick: a source sits in one for as many ticks as it is wide, and a
+	// history run walks those in milliseconds.
+	gapReported map[string]int64
+
 	// aggregateInputs maps an aggregate channel's id to the ids of the channels
 	// it sums: the channels carrying the same characteristic on every asset
 	// whose submetered_by names the aggregate's asset, in document order so the
@@ -293,6 +299,7 @@ func newGeneration(def domain.Environment, series map[string][]dataset.Point) *g
 		aggregateInputs:  map[string][]string{},
 		aggregateAwaited: map[string][]string{},
 		series:           series,
+		gapReported:      map[string]int64{},
 		//a pure function of the definition, so it needs no pass of its own
 		timeline: newTimelineIndex(def),
 	}

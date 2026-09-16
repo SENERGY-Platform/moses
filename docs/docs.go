@@ -1602,6 +1602,10 @@ const docTemplate = `{
                     "description": "FollowEvery is how often a following source is refreshed, a duration like\nWindow; empty defaults to DefaultFollowEvery and it may not be shorter\nthan MinFollowEvery.",
                     "type": "string"
                 },
+                "max_gap": {
+                    "description": "MaxGap is the widest distance between two neighbouring points of the\nseries the replay still bridges, a duration like Window. Empty means no\nbound, which is what every document written before the field carries:\nthe resampling then runs across a hole of any width and produces values\nnobody measured.",
+                    "type": "string"
+                },
                 "origin": {
                     "$ref": "#/definitions/domain.DatasetOrigin"
                 },
