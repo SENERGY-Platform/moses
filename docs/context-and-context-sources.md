@@ -24,6 +24,15 @@ dropped. Such a key must be declared here and must *not* also be driven by a
 context source, which would overwrite the dated value on its next tick
 (`docs/dated-changes.md`).
 
+**A key nobody has written reads as 0.** `moses.environment.state.get` seeds a
+missing key with `0` and answers `0`, and a formula's `context.<key>` does the
+same; neither returns `null` or `undefined`. A rule that tests a context key
+against zero therefore fires before the first value arrives, and a context
+source that has not started yet (an export series whose window is not filled)
+leaves the key at that seed. Where `0` has a meaning, declare the key in
+`context` with a starting value the rules treat as neutral; the source
+overwrites it at its first point.
+
 ## Context sources
 
 `context_sources` map a context key to a `Source` that drives it over time,
