@@ -596,8 +596,8 @@ func TestGetReturnsWhatPutAccepts(t *testing.T) {
 	}
 }
 
-// An admin lists everyone's environments, so the owner has to be readable;
-// what must not work is claiming one through the body.
+// The owner is part of the export and of every listed environment, so it has to
+// be readable; what must not work is claiming one through the body.
 func TestGetDisclosesTheOwnerAndAPutCannotChangeIt(t *testing.T) {
 	store := newFakeEnvironments()
 	env := minimalEnvironment()
@@ -1238,32 +1238,109 @@ func TestPatchStateOfAnEnvironmentThatIsNotRunningIs404(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// An administrator sees every environment
+// An administrator sees every environment only when asking for it
 // ---------------------------------------------------------------------------
 
-// The list used to filter by owner unconditionally, while mayAccess already let
-// an admin open any environment: what the detail route served was invisible in
-// the list, and an environment of another user was in practice unfindable.
-func TestAnAdminListsEveryEnvironment(t *testing.T) {
-	store := newFakeEnvironments()
-	router := testRouter(store)
+// routerWithTwoOwners stores env-a for user-a and env-b for user-b.
+func routerWithTwoOwners(t *testing.T) *gin.Engine {
+	t.Helper()
+	router := testRouter(newFakeEnvironments())
 	if resp := do(t, router, "PUT", "/environments/env-a", "user-a", minimalEnvironment()); resp.Code != http.StatusOK {
 		t.Fatalf("setup failed: %d %s", resp.Code, resp.Body.String())
 	}
 	if resp := do(t, router, "PUT", "/environments/env-b", "user-b", minimalEnvironment()); resp.Code != http.StatusOK {
 		t.Fatalf("setup failed: %d %s", resp.Code, resp.Body.String())
 	}
+	return router
+}
 
-	//a plain user still sees only their own
+// The admin role used to widen the list by itself, which made a tool that looks
+// an environment up by name hit a foreign one of the same name.
+func TestAnAdminListsOnlyTheirOwnUnlessAllIsAskedFor(t *testing.T) {
+	router := routerWithTwoOwners(t)
+
+	//a plain user sees only their own
 	resp := do(t, router, "GET", "/environments", "user-a", nil)
 	if strings.Contains(resp.Body.String(), "env-b") {
 		t.Errorf("a plain user must not see another user's environment: %s", resp.Body.String())
 	}
 
-	//the admin sees both, including one they do not own
-	resp = doAsAdmin(t, router, "GET", "/environments", "user-c")
+	//and so does an admin who did not ask for more; user-a here is the admin
+	for _, path := range []string{"/environments", "/environments?all=false"} {
+		resp = doAsAdmin(t, router, "GET", path, "user-a")
+		if resp.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d: %s", path, resp.Code, resp.Body.String())
+		}
+		if !strings.Contains(resp.Body.String(), "env-a") {
+			t.Errorf("%s: an admin has to see their own environment, got %s", path, resp.Body.String())
+		}
+		if strings.Contains(resp.Body.String(), "env-b") {
+			t.Errorf("%s: an admin must not see a foreign environment without all=true, got %s", path, resp.Body.String())
+		}
+	}
+}
+
+func TestAnAdminListsEveryEnvironmentWithAllTrue(t *testing.T) {
+	router := routerWithTwoOwners(t)
+
+	//user-c owns nothing, so everything in the answer is somebody else's
+	resp := doAsAdmin(t, router, "GET", "/environments?all=true", "user-c")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
 	if !strings.Contains(resp.Body.String(), "env-a") || !strings.Contains(resp.Body.String(), "env-b") {
-		t.Errorf("an admin has to see every environment, got %s", resp.Body.String())
+		t.Errorf("an admin asking for all has to see every environment, got %s", resp.Body.String())
+	}
+}
+
+func TestANonAdminAskingForEveryEnvironmentIsForbidden(t *testing.T) {
+	router := routerWithTwoOwners(t)
+
+	resp := do(t, router, "GET", "/environments?all=true", "user-a", nil)
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if strings.Contains(resp.Body.String(), "env-b") {
+		t.Errorf("a refusal must not carry a foreign environment: %s", resp.Body.String())
+	}
+
+	//all=false is not a claim to anything, so it is served like no parameter
+	resp = do(t, router, "GET", "/environments?all=false", "user-a", nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if strings.Contains(resp.Body.String(), "env-b") {
+		t.Errorf("a plain user must not see another user's environment: %s", resp.Body.String())
+	}
+}
+
+// The value is parsed before the role is looked at, so a non-admin sending
+// nonsense is told what is wrong with the request rather than being refused.
+func TestAnAllThatIsNoBooleanIsRejected(t *testing.T) {
+	router := routerWithTwoOwners(t)
+
+	for _, query := range []string{"?all=maybe", "?all=", "?all=1.0"} {
+		resp := do(t, router, "GET", "/environments"+query, "user-a", nil)
+		if resp.Code != http.StatusBadRequest {
+			t.Errorf("%s: expected 400 for a plain user, got %d: %s", query, resp.Code, resp.Body.String())
+		}
+		resp = doAsAdmin(t, router, "GET", "/environments"+query, "user-a")
+		if resp.Code != http.StatusBadRequest {
+			t.Errorf("%s: expected 400 for an admin, got %d: %s", query, resp.Code, resp.Body.String())
+		}
+		if strings.Contains(resp.Body.String(), "env-b") {
+			t.Errorf("%s: a refusal must not carry an environment: %s", query, resp.Body.String())
+		}
+	}
+
+	//strconv.ParseBool accepts these, and so must the route
+	for _, query := range []string{"?all=1", "?all=TRUE", "?all=t"} {
+		if resp := doAsAdmin(t, router, "GET", "/environments"+query, "user-c"); resp.Code != http.StatusOK {
+			t.Errorf("%s: expected 200, got %d: %s", query, resp.Code, resp.Body.String())
+		}
+		if resp := do(t, router, "GET", "/environments"+query, "user-a", nil); resp.Code != http.StatusForbidden {
+			t.Errorf("%s: expected 403, got %d: %s", query, resp.Code, resp.Body.String())
+		}
 	}
 }
 

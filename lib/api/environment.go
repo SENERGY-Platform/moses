@@ -21,6 +21,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/config"
@@ -57,13 +58,15 @@ func EnvironmentEndpoints(config config.Config, environments repo.Environments, 
 }
 
 // @Summary List environments
-// @Description Every environment owned by the caller, ordered by name. Empty list, never null.
+// @Description Every environment owned by the caller, ordered by name. Empty list, never null. An administrator asks for every environment with `all=true`; that list is not ordered, and anybody else asking for it gets 403.
 // @Tags Environment
 // @Produce json
 // @Security Bearer
+// @Param all query bool false "list every environment instead of only the caller's; requires the admin role"
 // @Success 200 {array} domain.Environment
-// @Failure 400 {string} string "the token is missing or unreadable"
+// @Failure 400 {string} string "the token is missing or unreadable, or all is not a boolean"
 // @Failure 401 {string} string "the token carries no subject"
+// @Failure 403 {string} string "all=true without the admin role"
 // @Failure 500 {string} string "error message"
 // @Router /environments [get]
 func listEnvironmentsH(environments repo.Environments, shares repo.Shares, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier, permissions Permissions) (string, string, gin.HandlerFunc) {
@@ -72,10 +75,15 @@ func listEnvironmentsH(environments repo.Environments, shares repo.Shares, catal
 		if !ok {
 			return
 		}
-		//an admin sees every environment, matching mayAccess, which already lets
-		//one open any of them: a list that hid what the detail route serves
-		//would only make them unfindable
-		result, err := listFor(gc, environments, token)
+		//everybody, an admin included, lists only their own unless all=true is
+		//asked for: a tool that looks an environment up by name would otherwise
+		//find a foreign one of the same name and start runs in it. mayAccess is
+		//untouched, so an admin still opens any single environment.
+		all, ok := listAllRequested(gc, token)
+		if !ok {
+			return
+		}
+		result, err := listFor(gc, environments, token, all)
 		if err != nil {
 			util.Logger.Error("unable to list environments", attributes.ErrorKey, err)
 			gc.String(http.StatusInternalServerError, "unable to list environments")
@@ -554,8 +562,34 @@ func requireUser(gc *gin.Context) (sc_jwt.Token, bool) {
 	return token, true
 }
 
-func listFor(gc *gin.Context, environments repo.Environments, token sc_jwt.Token) ([]domain.Environment, error) {
-	if token.IsAdmin() {
+// listAllRequested reads the all query parameter of the list route. ok is false
+// when the answer was already written: the value is not a boolean, or a caller
+// without the admin role asked for every environment.
+func listAllRequested(gc *gin.Context, token sc_jwt.Token) (all bool, ok bool) {
+	raw, present := gc.GetQuery("all")
+	if !present {
+		return false, true
+	}
+	all, err := strconv.ParseBool(raw)
+	if err != nil {
+		gc.String(http.StatusBadRequest, "all has to be a boolean, got %q", raw)
+		return false, false
+	}
+	if all && !token.IsAdmin() {
+		//403 and not the 404 the single environment routes answer with: this is
+		//about a right the caller does not have, not about whether one document
+		//exists
+		gc.String(http.StatusForbidden, "only an administrator may list every environment")
+		return false, false
+	}
+	return all, true
+}
+
+// listFor serves the whole store only for an admin who asked for it. The role is
+// checked again here, and not only in listAllRequested, so that a caller which
+// skips that check lists too little rather than everybody's environments.
+func listFor(gc *gin.Context, environments repo.Environments, token sc_jwt.Token, all bool) ([]domain.Environment, error) {
+	if all && token.IsAdmin() {
 		return environments.All(gc.Request.Context())
 	}
 	return environments.ListByOwner(gc.Request.Context(), token.GetUserId())

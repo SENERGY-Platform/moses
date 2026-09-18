@@ -1258,7 +1258,14 @@ paths:
   /environments:
     get:
       description: Every environment owned by the caller, ordered by name. Empty list,
-        never null.
+        never null. An administrator asks for every environment with `all=true`; that
+        list is not ordered, and anybody else asking for it gets 403.
+      parameters:
+      - description: list every environment instead of only the caller's; requires
+          the admin role
+        in: query
+        name: all
+        type: boolean
       produces:
       - application/json
       responses:
@@ -1269,11 +1276,15 @@ paths:
               $ref: '#/definitions/domain.Environment'
             type: array
         "400":
-          description: the token is missing or unreadable
+          description: the token is missing or unreadable, or all is not a boolean
           schema:
             type: string
         "401":
           description: the token carries no subject
+          schema:
+            type: string
+        "403":
+          description: all=true without the admin role
           schema:
             type: string
         "500":

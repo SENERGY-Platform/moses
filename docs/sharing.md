@@ -25,7 +25,8 @@ environment and on the graph it is mirrored as. Everyone who was in the stored
 set and is not named any more loses their entry. `GET` on the same path serves
 the stored set together with `devices`, the number of devices it acts on, and
 `graph`, whether a graph is shared with them. Both need the owner or an
-administrator; anybody else gets `404`, as everywhere else in this api.
+administrator; anybody else gets `404`, as on every single-environment route
+of this api.
 
 At most **100** users and groups together, and at most **256** characters per
 entry. The limit is checked against the set that would be stored, not against
