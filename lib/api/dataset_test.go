@@ -118,6 +118,39 @@ func upload(t *testing.T, router *gin.Engine, path string, userId string, body s
 	return response
 }
 
+// uploadAsAdmin is upload with the admin realm role, which is what it takes for
+// an administrator to own a dataset of their own.
+func uploadAsAdmin(t *testing.T, router *gin.Engine, path string, userId string, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest("POST", path, bytes.NewReader([]byte(body)))
+	request.Header.Set("Authorization", adminTokenFor(userId))
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	return response
+}
+
+func mustUpload(t *testing.T, response *httptest.ResponseRecorder) repo.DatasetMeta {
+	t.Helper()
+	if response.Code != http.StatusCreated {
+		t.Fatalf("setup failed: %d %s", response.Code, response.Body.String())
+	}
+	meta := repo.DatasetMeta{}
+	if err := json.Unmarshal(response.Body.Bytes(), &meta); err != nil {
+		t.Fatal(err)
+	}
+	return meta
+}
+
+// routerWithTwoDatasetOwners stores one dataset for the plain user-a and one for
+// the administrator admin-1, so a list can be checked for both.
+func routerWithTwoDatasetOwners(t *testing.T) (router *gin.Engine, foreign repo.DatasetMeta, own repo.DatasetMeta) {
+	t.Helper()
+	router = datasetRouter(newFakeDatasets())
+	foreign = mustUpload(t, upload(t, router, "/datasets?name=fremd", "user-a", germanCSV))
+	own = mustUpload(t, uploadAsAdmin(t, router, "/datasets?name=eigen", "admin-1", germanCSV))
+	return router, foreign, own
+}
+
 const germanCSV = "Zeit;Wirkleistung\n05.01.2026 00:00;1,5\n05.01.2026 00:15;2,5\n"
 
 func TestUploadParsesStoresAndAnswersTheMetadata(t *testing.T) {
@@ -198,33 +231,125 @@ func TestDeleteIsIdempotent(t *testing.T) {
 	}
 }
 
-// An administrator sees every dataset, for the same reason as the environments:
-// requireDataset lets one open a foreign dataset, so hiding it in the list would
-// only make it unfindable.
-func TestAnAdminListsAndOpensEveryDataset(t *testing.T) {
-	store := newFakeDatasets()
-	router := datasetRouter(store)
-	resp := upload(t, router, "/datasets?name=fremd", "user-a", germanCSV)
-	if resp.Code != http.StatusCreated {
-		t.Fatalf("setup failed: %d %s", resp.Code, resp.Body.String())
+// ---------------------------------------------------------------------------
+// An administrator sees every dataset only when asking for it
+// ---------------------------------------------------------------------------
+
+// The admin role used to widen the list by itself, which made a tool that looks
+// a dataset up by name hit a foreign one of the same name.
+func TestAnAdminListsOnlyTheirOwnDatasetsUnlessAllIsAskedFor(t *testing.T) {
+	router, foreign, own := routerWithTwoDatasetOwners(t)
+
+	//a plain user who owns nothing sees nothing, and an empty list, not null
+	resp := do(t, router, "GET", "/datasets", "user-b", nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
 	}
-	meta := repo.DatasetMeta{}
-	if err := json.Unmarshal(resp.Body.Bytes(), &meta); err != nil {
-		t.Fatal(err)
+	if strings.TrimSpace(resp.Body.String()) != "[]" {
+		t.Errorf("a caller without datasets has to get an empty list, got %s", resp.Body.String())
 	}
 
-	//a plain user does not see it
-	if body := do(t, router, "GET", "/datasets", "user-b", nil).Body.String(); strings.Contains(body, meta.Id) {
-		t.Errorf("a plain user must not see a foreign dataset: %s", body)
+	//and so does an admin who did not ask for more
+	for _, path := range []string{"/datasets", "/datasets?all=false"} {
+		resp = doAsAdmin(t, router, "GET", path, "admin-1")
+		if resp.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d: %s", path, resp.Code, resp.Body.String())
+		}
+		if !strings.Contains(resp.Body.String(), own.Id) {
+			t.Errorf("%s: an admin has to see their own dataset, got %s", path, resp.Body.String())
+		}
+		if strings.Contains(resp.Body.String(), foreign.Id) {
+			t.Errorf("%s: an admin must not see a foreign dataset without all=true, got %s", path, resp.Body.String())
+		}
 	}
-	//the admin does, and may open it
-	if body := doAsAdmin(t, router, "GET", "/datasets", "admin-1").Body.String(); !strings.Contains(body, meta.Id) {
-		t.Errorf("an admin has to see every dataset, got %s", body)
+}
+
+func TestAnAdminListsEveryDatasetWithAllTrue(t *testing.T) {
+	router, foreign, own := routerWithTwoDatasetOwners(t)
+
+	//admin-2 owns nothing, so everything in the answer is somebody else's
+	resp := doAsAdmin(t, router, "GET", "/datasets?all=true", "admin-2")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
 	}
-	if code := doAsAdmin(t, router, "GET", "/datasets/"+meta.Id, "admin-1").Code; code != http.StatusOK {
+	if !strings.Contains(resp.Body.String(), foreign.Id) || !strings.Contains(resp.Body.String(), own.Id) {
+		t.Errorf("an admin asking for all has to see every dataset, got %s", resp.Body.String())
+	}
+}
+
+func TestANonAdminAskingForEveryDatasetIsForbidden(t *testing.T) {
+	router, foreign, _ := routerWithTwoDatasetOwners(t)
+
+	//user-b owns nothing, so a widened list would be pure disclosure
+	resp := do(t, router, "GET", "/datasets?all=true", "user-b", nil)
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if strings.Contains(resp.Body.String(), foreign.Id) {
+		t.Errorf("a refusal must not carry a foreign dataset: %s", resp.Body.String())
+	}
+	//the refusal is shared with the environments route, so it has to name which
+	//list was asked for
+	if !strings.Contains(resp.Body.String(), "every dataset") {
+		t.Errorf("the refusal has to name what was asked for, got %s", resp.Body.String())
+	}
+
+	//all=false is not a claim to anything, so it is served like no parameter
+	resp = do(t, router, "GET", "/datasets?all=false", "user-b", nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if strings.Contains(resp.Body.String(), foreign.Id) {
+		t.Errorf("a plain user must not see another user's dataset: %s", resp.Body.String())
+	}
+}
+
+// The value is parsed before the role is looked at, so a non-admin sending
+// nonsense is told what is wrong with the request rather than being refused.
+func TestAnAllThatIsNoBooleanIsRejectedOnDatasets(t *testing.T) {
+	router, foreign, own := routerWithTwoDatasetOwners(t)
+
+	for _, query := range []string{"?all=maybe", "?all=", "?all=1.0"} {
+		resp := do(t, router, "GET", "/datasets"+query, "user-a", nil)
+		if resp.Code != http.StatusBadRequest {
+			t.Errorf("%s: expected 400 for a plain user, got %d: %s", query, resp.Code, resp.Body.String())
+		}
+		if strings.Contains(resp.Body.String(), foreign.Id) {
+			t.Errorf("%s: a refusal must not carry a dataset: %s", query, resp.Body.String())
+		}
+		resp = doAsAdmin(t, router, "GET", "/datasets"+query, "admin-1")
+		if resp.Code != http.StatusBadRequest {
+			t.Errorf("%s: expected 400 for an admin, got %d: %s", query, resp.Code, resp.Body.String())
+		}
+		if strings.Contains(resp.Body.String(), own.Id) {
+			t.Errorf("%s: a refusal must not carry a dataset: %s", query, resp.Body.String())
+		}
+	}
+
+	//strconv.ParseBool accepts these, and so must the route
+	for _, query := range []string{"?all=1", "?all=TRUE", "?all=t"} {
+		resp := doAsAdmin(t, router, "GET", "/datasets"+query, "admin-2")
+		if resp.Code != http.StatusOK {
+			t.Errorf("%s: expected 200, got %d: %s", query, resp.Code, resp.Body.String())
+		}
+		if !strings.Contains(resp.Body.String(), foreign.Id) {
+			t.Errorf("%s: has to widen the list, got %s", query, resp.Body.String())
+		}
+		if resp := do(t, router, "GET", "/datasets"+query, "user-b", nil); resp.Code != http.StatusForbidden {
+			t.Errorf("%s: expected 403, got %d: %s", query, resp.Code, resp.Body.String())
+		}
+	}
+}
+
+// The single dataset routes are untouched by the narrowed list: requireDataset
+// still lets an administrator open and delete a foreign dataset.
+func TestAnAdminOpensAndDeletesEveryDataset(t *testing.T) {
+	router, foreign, _ := routerWithTwoDatasetOwners(t)
+
+	if code := doAsAdmin(t, router, "GET", "/datasets/"+foreign.Id, "admin-1").Code; code != http.StatusOK {
 		t.Errorf("an admin has to be able to open a foreign dataset, got %d", code)
 	}
-	if code := doAsAdmin(t, router, "DELETE", "/datasets/"+meta.Id, "admin-1").Code; code != http.StatusNoContent {
+	if code := doAsAdmin(t, router, "DELETE", "/datasets/"+foreign.Id, "admin-1").Code; code != http.StatusNoContent {
 		t.Errorf("an admin has to be able to delete a foreign dataset, got %d", code)
 	}
 }

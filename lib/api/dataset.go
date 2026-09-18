@@ -132,12 +132,15 @@ func postDatasetH(datasets repo.Datasets) (string, string, gin.HandlerFunc) {
 }
 
 // @Summary List datasets
-// @Description Every dataset owned by the caller, ordered by name. Empty list, never null.
+// @Description Every dataset owned by the caller, ordered by name. Empty list, never null. An administrator asks for every dataset with `all=true`, ordered by name as well; anybody else asking for it gets 403.
 // @Tags Dataset
 // @Produce json
 // @Security Bearer
+// @Param all query bool false "list every dataset instead of only the caller's; requires the admin role"
 // @Success 200 {array} repo.DatasetMeta
+// @Failure 400 {string} string "the token is missing or unreadable, or all is not a boolean"
 // @Failure 401 {string} string "the token carries no subject"
+// @Failure 403 {string} string "all=true without the admin role"
 // @Failure 500 {string} string "error message"
 // @Router /datasets [get]
 func listDatasetsH(datasets repo.Datasets) (string, string, gin.HandlerFunc) {
@@ -146,8 +149,14 @@ func listDatasetsH(datasets repo.Datasets) (string, string, gin.HandlerFunc) {
 		if !ok {
 			return
 		}
-		//an admin sees every dataset, for the same reason as the environments
-		list, err := listDatasetsFor(gc, datasets, token)
+		//everybody, an admin included, lists only their own unless all=true is
+		//asked for, so a lookup by name cannot hit a foreign dataset of the same
+		//name. requireDataset is untouched, so an admin still opens any single one.
+		all, ok := listAllRequested(gc, token, "dataset")
+		if !ok {
+			return
+		}
+		list, err := listDatasetsFor(gc, datasets, token, all)
 		if err != nil {
 			util.Logger.Error("unable to list datasets", attributes.ErrorKey, err)
 			gc.String(http.StatusInternalServerError, "unable to list datasets")
@@ -219,16 +228,19 @@ func deleteDatasetH(datasets repo.Datasets) (string, string, gin.HandlerFunc) {
 	}
 }
 
-// requireDataset answers 404 for a missing dataset and, deliberately with the
-// same status, for somebody else's: existence is not information a caller
-// without access should get.
-func listDatasetsFor(gc *gin.Context, datasets repo.Datasets, token sc_jwt.Token) ([]repo.DatasetMeta, error) {
-	if token.IsAdmin() {
+// listDatasetsFor serves the whole store only for an admin who asked for it. The
+// role is checked again here, and not only in listAllRequested, so that a caller
+// which skips that check lists too little rather than everybody's datasets.
+func listDatasetsFor(gc *gin.Context, datasets repo.Datasets, token sc_jwt.Token, all bool) ([]repo.DatasetMeta, error) {
+	if all && token.IsAdmin() {
 		return datasets.All(gc.Request.Context())
 	}
 	return datasets.ListByOwner(gc.Request.Context(), token.GetUserId())
 }
 
+// requireDataset answers 404 for a missing dataset and, deliberately with the
+// same status, for somebody else's: existence is not information a caller
+// without access should get.
 func requireDataset(gc *gin.Context, datasets repo.Datasets, token sc_jwt.Token) (repo.DatasetMeta, error) {
 	meta, err := datasets.Get(gc.Request.Context(), gc.Param("id"))
 	switch {

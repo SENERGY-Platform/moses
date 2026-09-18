@@ -79,7 +79,7 @@ func listEnvironmentsH(environments repo.Environments, shares repo.Shares, catal
 		//asked for: a tool that looks an environment up by name would otherwise
 		//find a foreign one of the same name and start runs in it. mayAccess is
 		//untouched, so an admin still opens any single environment.
-		all, ok := listAllRequested(gc, token)
+		all, ok := listAllRequested(gc, token, "environment")
 		if !ok {
 			return
 		}
@@ -562,10 +562,11 @@ func requireUser(gc *gin.Context) (sc_jwt.Token, bool) {
 	return token, true
 }
 
-// listAllRequested reads the all query parameter of the list route. ok is false
-// when the answer was already written: the value is not a boolean, or a caller
-// without the admin role asked for every environment.
-func listAllRequested(gc *gin.Context, token sc_jwt.Token) (all bool, ok bool) {
+// listAllRequested reads the all query parameter of a list route; resource names
+// what is listed, so the refusal fits the route it came from. ok is false when
+// the answer was already written: the value is not a boolean, or a caller
+// without the admin role asked for every document.
+func listAllRequested(gc *gin.Context, token sc_jwt.Token, resource string) (all bool, ok bool) {
 	raw, present := gc.GetQuery("all")
 	if !present {
 		return false, true
@@ -576,10 +577,10 @@ func listAllRequested(gc *gin.Context, token sc_jwt.Token) (all bool, ok bool) {
 		return false, false
 	}
 	if all && !token.IsAdmin() {
-		//403 and not the 404 the single environment routes answer with: this is
+		//403 and not the 404 the single document routes answer with: this is
 		//about a right the caller does not have, not about whether one document
 		//exists
-		gc.String(http.StatusForbidden, "only an administrator may list every environment")
+		gc.String(http.StatusForbidden, "only an administrator may list every %s", resource)
 		return false, false
 	}
 	return all, true

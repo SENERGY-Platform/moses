@@ -1303,6 +1303,11 @@ func TestANonAdminAskingForEveryEnvironmentIsForbidden(t *testing.T) {
 	if strings.Contains(resp.Body.String(), "env-b") {
 		t.Errorf("a refusal must not carry a foreign environment: %s", resp.Body.String())
 	}
+	//the refusal is shared with the datasets route, so it has to name which list
+	//was asked for
+	if !strings.Contains(resp.Body.String(), "every environment") {
+		t.Errorf("the refusal has to name what was asked for, got %s", resp.Body.String())
+	}
 
 	//all=false is not a claim to anything, so it is served like no parameter
 	resp = do(t, router, "GET", "/environments?all=false", "user-a", nil)

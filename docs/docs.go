@@ -22,7 +22,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "Every dataset owned by the caller, ordered by name. Empty list, never null.",
+                "description": "Every dataset owned by the caller, ordered by name. Empty list, never null. An administrator asks for every dataset with ` + "`" + `all=true` + "`" + `, ordered by name as well; anybody else asking for it gets 403.",
                 "produces": [
                     "application/json"
                 ],
@@ -30,6 +30,14 @@ const docTemplate = `{
                     "Dataset"
                 ],
                 "summary": "List datasets",
+                "parameters": [
+                    {
+                        "type": "boolean",
+                        "description": "list every dataset instead of only the caller's; requires the admin role",
+                        "name": "all",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -40,8 +48,20 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "400": {
+                        "description": "the token is missing or unreadable, or all is not a boolean",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
                     "401": {
                         "description": "the token carries no subject",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "all=true without the admin role",
                         "schema": {
                             "type": "string"
                         }

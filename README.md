@@ -93,9 +93,9 @@ A script source runs with `moses` bound in the VM:
   other users and groups, read and execute, without sharing the environment
   itself. The set is stored beside the document, not in it — rules and failure
   behaviour in `docs/sharing.md`.
-- Everybody lists their own environments, the platform `admin` role included; an
-  administrator gets every one of them by asking with `all=true`, and may open
-  any single one either way. Ownership never transfers.
+- Everybody lists their own environments and datasets, the platform `admin` role
+  included; an administrator gets every one of them by asking with `all=true`,
+  and may open any single one either way. Ownership never transfers.
 
 ## Legacy model
 
