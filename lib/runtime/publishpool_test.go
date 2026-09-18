@@ -762,7 +762,7 @@ func TestABackfillPublishesEveryChannelOfAJobInOrder(t *testing.T) {
 	statuses := []BackfillChannelStatus{}
 	for _, channel := range backfillChannels(document) {
 		status := BackfillChannelStatus{ChannelId: channel.channel.Id}
-		rt.runBackfillChannel(context.Background(), pool, job, gen, channel, nil, from, to, &status)
+		rt.runBackfillChannel(context.Background(), pool, job, gen, channel, replaySeries{}, from, to, &status)
 		statuses = append(statuses, status)
 	}
 

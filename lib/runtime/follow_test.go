@@ -94,7 +94,7 @@ func seriesOf(t *testing.T, rt *Runtime, envId string, channelId string) []datas
 	}
 	env.mux.Lock()
 	defer env.mux.Unlock()
-	return append([]dataset.Point{}, env.gen.series[channelId]...)
+	return append([]dataset.Point{}, env.gen.series[channelId].points...)
 }
 
 func TestAFollowRefreshAppendsNewerPointsWithoutDuplicates(t *testing.T) {
@@ -556,7 +556,7 @@ func TestAFollowingSeriesIsTrimmedToItsWindow(t *testing.T) {
 // TestTrimToWindowKeepsTheLastTwoPoints pins the two boundaries the trim is
 // written for: a point exactly at the cutoff still belongs to the window, and a
 // series whose newest point is older than its own window keeps two points, or
-// the channel would lose its binding and replayValue its span.
+// the channel would lose its binding and the replay its span.
 func TestTrimToWindowKeepsTheLastTwoPoints(t *testing.T) {
 	cutoff := time.Unix(1_000_000, 0)
 	for _, tc := range []struct {
@@ -611,7 +611,7 @@ func TestOnlyAPollableOriginFollows(t *testing.T) {
 	file.Id = "ch-file"
 	file.Source.Dataset.Origin = domain.OriginFile
 	kept := followingChannel(id, "20ms")
-	followers := followersOf(testEnvironment(id, file, kept))
+	followers := followersOf(testEnvironment(id, file, kept), nil)
 	if len(followers) != 1 {
 		t.Fatalf("expected only the platform source to follow, got %d followers", len(followers))
 	}
@@ -632,7 +632,7 @@ func TestAFollowingReplayHoldsItsNewestPoint(t *testing.T) {
 
 	//half an hour after the newest point, which is what a source that
 	//publishes hourly looks like on the tick after a refresh
-	held, playable := replayValue(source, points, 0, time.Unix(3600, 0), 30)
+	held, _, playable := replayReading(source, points, 0, time.Unix(3600, 0), 30)
 	if !playable {
 		t.Fatal("a following source has to keep playing after its newest point")
 	}
@@ -641,13 +641,13 @@ func TestAFollowingReplayHoldsItsNewestPoint(t *testing.T) {
 	}
 
 	//before the first point there is still nothing to say, following or not
-	if _, playable = replayValue(source, points, 0, time.Unix(500, 0), 30); playable {
+	if _, _, playable = replayReading(source, points, 0, time.Unix(500, 0), 30); playable {
 		t.Error("before its first point a replay has nothing to hold")
 	}
 
 	//and a source that does not follow stays silent, as it did
 	still := replaySource(domain.ResampleHold, domain.AnchorOriginal)
-	if _, playable = replayValue(still, points, 0, time.Unix(3600, 0), 30); playable {
+	if _, _, playable = replayReading(still, points, 0, time.Unix(3600, 0), 30); playable {
 		t.Error("a source that does not follow must not hold past its last point")
 	}
 }
@@ -880,7 +880,7 @@ func TestAFollowingReplayStopsHoldingWhenItsUpstreamStops(t *testing.T) {
 		source := replaySource(domain.ResampleHold, domain.AnchorOriginal)
 		source.Follow = true
 		source.FollowEvery = tc.followEvery
-		value, playable := replayValue(source, points, 0, time.Unix(tc.at, 0), 30)
+		value, _, playable := replayReading(source, points, 0, time.Unix(tc.at, 0), 30)
 		if playable != tc.want {
 			t.Errorf("%s: playable is %v at %d, want %v", tc.name, playable, tc.at, tc.want)
 			continue
@@ -903,11 +903,11 @@ func TestADistributingFollowerStaysSilentPastItsLastPoint(t *testing.T) {
 	source.FollowEvery = "1m"
 
 	//well inside the hold a "hold" source would still answer over
-	if _, playable := replayValue(source, points, 0, time.Unix(1830, 0), 30); playable {
+	if _, _, playable := replayReading(source, points, 0, time.Unix(1830, 0), 30); playable {
 		t.Error("a distributing follower kept playing past its last point")
 	}
 	//inside its own range it distributes as it always did
-	value, playable := replayValue(source, points, 0, time.Unix(1200, 0), 30)
+	value, _, playable := replayReading(source, points, 0, time.Unix(1200, 0), 30)
 	if !playable {
 		t.Fatal("a distributing follower has to play inside its own range")
 	}
@@ -919,7 +919,7 @@ func TestADistributingFollowerStaysSilentPastItsLastPoint(t *testing.T) {
 	holding := replaySource(domain.ResampleHold, domain.AnchorOriginal)
 	holding.Follow = true
 	holding.FollowEvery = "1m"
-	if _, playable = replayValue(holding, points, 0, time.Unix(1830, 0), 30); !playable {
+	if _, _, playable = replayReading(holding, points, 0, time.Unix(1830, 0), 30); !playable {
 		t.Error("a holding follower has to keep playing there, or this test proves nothing about distribute")
 	}
 }

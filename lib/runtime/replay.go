@@ -34,36 +34,100 @@ type replayGap struct {
 	Seconds   int64
 }
 
-// replayValue is the value a dataset channel publishes at now. The bool is
-// false when there is nothing to play: an original-anchored series outside its
-// time range stays silent rather than inventing a value.
+// gapReport is what a reporter remembers about the gap a source last reported:
+// the instant it opens at and whether a fallback series covered it. Both,
+// because a substitute that falls silent inside one gap is a second event.
+type gapReport struct {
+	startUnix int64
+	covered   bool
+}
+
+// replaySeries is what one dataset source replays: its own points, and the
+// substitute series of a source that declared a fallback, read only inside a
+// gap the main one refuses to bridge.
+type replaySeries struct {
+	points   []dataset.Point
+	fallback []dataset.Point
+}
+
+// replayReading is the value one series of a dataset source produces at now,
+// with the reason behind a silence. playable is false when there is nothing to
+// play - an original-anchored series outside its time range stays silent rather
+// than inventing a value - and gap is set only for a silence a max_gap caused,
+// staying zero for every other silence and for a played value.
 //
 // anchorUnix is the persisted start of the replay (see RuntimeState.Anchors):
 // with the loop anchor the series plays relative to it and repeats, so a
 // restart resumes mid-loop instead of starting over.
-func replayValue(source domain.DatasetSource, points []dataset.Point, anchorUnix int64, now time.Time, tickSeconds int64) (float64, bool) {
-	value, _, playable := replayReading(source, points, anchorUnix, now, tickSeconds)
-	return value, playable
+//
+// The live tick and the backfill go through replayWithFallback, which is this
+// over a source's two series.
+func replayReading(source domain.DatasetSource, points []dataset.Point, anchorUnix int64, now time.Time, tickSeconds int64) (value float64, gap replayGap, playable bool) {
+	virtual, loops, inRange := virtualInstant(source, points, anchorUnix, now)
+	if !inRange {
+		return 0, replayGap{}, false
+	}
+	if gap, wide := gapAt(source, points, virtual); wide {
+		return 0, gap, false
+	}
+	return adjusted(source, points, resample(source.Resample, points, virtual, tickSeconds), loops), replayGap{}, true
 }
 
-// replayReading is replayValue with the reason behind a silence, for the live
-// callers that report it: gap is set only for a silence a max_gap caused, and
-// stays zero for every other silence and for a played value.
-func replayReading(source domain.DatasetSource, points []dataset.Point, anchorUnix int64, now time.Time, tickSeconds int64) (value float64, gap replayGap, playable bool) {
+// replayWithFallback is replayReading over both series of a source: where the
+// main one stands in a gap wider than max_gap, the substitute series is read at
+// the same virtual instant, on the same resample mode and the same bound.
+//
+// gap is set whenever the main series stood in such a gap, whether or not the
+// substitute covered it, and covered says the value came from the substitute -
+// which is what the one line per gap reports.
+//
+// Outside the range of the main series - before it starts, after it ends -
+// there is no fallback: max_gap is about the middle of a series and not its
+// edges, and so is the series that stands in for it.
+func replayWithFallback(source domain.DatasetSource, series replaySeries, anchorUnix int64, now time.Time, tickSeconds int64) (value float64, gap replayGap, covered bool, playable bool) {
+	value, gap, playable = replayReading(source, series.points, anchorUnix, now, tickSeconds)
+	if playable || gap.Seconds == 0 || len(series.fallback) < 2 {
+		return value, gap, false, playable
+	}
+	//the main series stood in a gap, so its virtual instant is inside its range
+	//and was computed once already; the substitute is read at exactly that one
+	virtual, loops, inRange := virtualInstant(source, series.points, anchorUnix, now)
+	if !inRange {
+		return 0, gap, false, false
+	}
+	substitute := series.fallback
+	if virtual < substitute[0].Unix || virtual > substitute[len(substitute)-1].Unix {
+		//the substitute has no measurement around this instant at all, which is
+		//the same silence a hole in it would produce
+		return 0, gap, false, false
+	}
+	if _, wide := gapAt(source, substitute, virtual); wide {
+		return 0, gap, false, false
+	}
+	//the loop offset and the scale are the source's and stay the source's: the
+	//substitute stands in for a value of the main series at this instant, so it
+	//carries the same adjustments that value would have carried
+	return adjusted(source, series.points, resample(source.Resample, substitute, virtual, tickSeconds), loops), gap, true, true
+}
+
+// virtualInstant is the instant of the series a replay reads at now: the wall
+// clock for an original anchor, the position inside the loop for a loop anchor.
+// loops is the number of complete rounds a looping replay has behind it, and
+// the bool is false where there is nothing to play - a series that has not
+// begun or has ended.
+func virtualInstant(source domain.DatasetSource, points []dataset.Point, anchorUnix int64, now time.Time) (virtual int64, loops int64, inRange bool) {
 	first, last := points[0].Unix, points[len(points)-1].Unix
 	span := last - first
 
-	var virtual int64
-	loops := int64(0)
 	switch source.Anchor {
 	case domain.AnchorOriginal:
 		virtual = now.Unix()
 		if virtual < first {
-			return 0, replayGap{}, false
+			return 0, 0, false
 		}
 		if virtual > last {
 			if !followHolds(source, last, virtual) {
-				return 0, replayGap{}, false
+				return 0, 0, false
 			}
 			//a following source is re-read on its own cadence, so between two
 			//refreshes the newest measurement is what the present holds -
@@ -74,24 +138,25 @@ func replayReading(source domain.DatasetSource, points []dataset.Point, anchorUn
 	default: //loop
 		elapsed := now.Unix() - anchorUnix
 		if elapsed < 0 {
-			return 0, replayGap{}, false
+			return 0, 0, false
 		}
 		if span <= 0 {
 			//a series whose points all sit on one second has nothing to loop
 			//over; dividing by its span would panic the tick. It replays as
 			//the constant it is.
-			virtual = first
-			break
+			return first, 0, true
 		}
 		loops = elapsed / span
 		virtual = first + elapsed%span
 	}
+	return virtual, loops, true
+}
 
-	if gap, wide := gapAt(source, points, virtual); wide {
-		return 0, gap, false
-	}
-
-	value = resample(source.Resample, points, virtual, tickSeconds)
+// adjusted applies the two source-level corrections a replayed value carries:
+// the sweep of the completed loops of a cumulative meter, and the scale.
+// points is always the source's own series, since the meter that keeps counting
+// is the one the source declares.
+func adjusted(source domain.DatasetSource, points []dataset.Point, value float64, loops int64) float64 {
 	if source.Cumulative && loops > 0 {
 		//a meter reading keeps counting across the loop boundary: every
 		//completed loop contributes the full sweep of the series
@@ -100,7 +165,7 @@ func replayReading(source domain.DatasetSource, points []dataset.Point, anchorUn
 	if source.Scale != 0 {
 		value *= source.Scale
 	}
-	return value, replayGap{}, true
+	return value
 }
 
 // gapAt is the distance the replay would have to bridge at virtual, and whether
@@ -139,9 +204,9 @@ func gapAt(source domain.DatasetSource, points []dataset.Point, virtual int64) (
 		slot := slotSeconds(points, previous)
 		return replayGap{StartUnix: points[previous].Unix, Seconds: slot}, slot > seconds
 	}
-	//virtual never exceeds the last point - a loop runs over [first, last) and
-	//the original anchor either returns early or clamps to last - so the bounds
-	//check guards a caller that changes that rather than a case reachable today.
+	//virtual past the last point means there is no distance to bridge: for the
+	//source's own series that is the clamp to last, and for a fallback read at
+	//the main series' instant it is that series' newest measurement.
 	if next >= len(points) || points[previous].Unix == virtual {
 		return replayGap{}, false
 	}
@@ -230,12 +295,27 @@ func slotSeconds(points []dataset.Point, index int) int64 {
 // unnoticed for months.
 // The bool says whether this call was the one that reported, which is what a
 // test can hold on to: the log line itself is not observable.
-func reportGap(gen *generation, id string, gap replayGap, maxGap string) bool {
-	if reported, seen := gen.gapReported[id]; seen && reported == gap.StartUnix {
+//
+// A source with a fallback reports the same gap again when the substitute stops
+// covering it, or starts to: the bookkeeping is keyed on the opening instant and
+// the coverage together, so a substitute that falls silent halfway through a gap
+// is a second event rather than a repetition.
+func reportGap(gen *generation, id string, gap replayGap, maxGap string, fallback bool, covered bool) bool {
+	report := gapReport{startUnix: gap.StartUnix, covered: covered}
+	if reported, seen := gen.gapReported[id]; seen && reported == report {
 		return false
 	}
-	gen.gapReported[id] = gap.StartUnix
-	util.Logger.Warn("a dataset source publishes nothing inside a gap wider than its max_gap",
-		"source", id, "gap_seconds", gap.Seconds, "max_gap", maxGap)
+	gen.gapReported[id] = report
+	switch {
+	case covered:
+		util.Logger.Info("a dataset source reads its fallback series inside a gap wider than its max_gap",
+			"source", id, "gap_seconds", gap.Seconds, "max_gap", maxGap)
+	case fallback:
+		util.Logger.Warn("a dataset source publishes nothing inside a gap wider than its max_gap, its fallback series does not cover it",
+			"source", id, "gap_seconds", gap.Seconds, "max_gap", maxGap)
+	default:
+		util.Logger.Warn("a dataset source publishes nothing inside a gap wider than its max_gap",
+			"source", id, "gap_seconds", gap.Seconds, "max_gap", maxGap)
+	}
 	return true
 }

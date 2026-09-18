@@ -67,13 +67,13 @@ func TestLoadSeriesFetchesASharedUploadOnce(t *testing.T) {
 	if got := store.contentCallsFor("d1"); got != 1 {
 		t.Fatalf("two channels and a context source on the same upload have to fetch it once, got %d calls", got)
 	}
-	if got := result["ch-a"]; len(got) != 3 || got[0].Value != 1 {
+	if got := result["ch-a"].points; len(got) != 3 || got[0].Value != 1 {
 		t.Fatalf("channel a did not get its own column out of the shared parse, got %v", got)
 	}
-	if got := result["ch-b"]; len(got) != 3 || got[0].Value != 10 {
+	if got := result["ch-b"].points; len(got) != 3 || got[0].Value != 10 {
 		t.Fatalf("channel b did not get its own column out of the shared parse, got %v", got)
 	}
-	if got := result[contextSeriesId("weather")]; len(got) != 3 || got[0].Value != 1 {
+	if got := result[contextSeriesId("weather")].points; len(got) != 3 || got[0].Value != 1 {
 		t.Fatalf("the context source did not get its column out of the shared parse, got %v", got)
 	}
 }
@@ -104,10 +104,10 @@ func TestLoadSeriesFetchesTwoDatasetsEachOnce(t *testing.T) {
 	if got := store.contentCallsFor("d2"); got != 1 {
 		t.Errorf("dataset d2 expected exactly one fetch, got %d", got)
 	}
-	if got := result["ch-a"]; len(got) != 2 || got[0].Value != 1 {
+	if got := result["ch-a"].points; len(got) != 2 || got[0].Value != 1 {
 		t.Errorf("channel a did not load dataset d1, got %v", got)
 	}
-	if got := result["ch-b"]; len(got) != 2 || got[0].Value != 10 {
+	if got := result["ch-b"].points; len(got) != 2 || got[0].Value != 10 {
 		t.Errorf("channel b did not load dataset d2, got %v", got)
 	}
 }

@@ -30,7 +30,7 @@ import (
 func TestAZeroSpanSeriesReplaysAsAConstantInsteadOfPanicking(t *testing.T) {
 	points := []dataset.Point{{Unix: 1000, Value: 42}}
 	source := domain.DatasetSource{Anchor: "loop"}
-	value, ok := replayValue(source, points, 500, time.Unix(2000, 0), 60)
+	value, _, ok := replayReading(source, points, 500, time.Unix(2000, 0), 60)
 	if !ok {
 		t.Fatal("expected a playable value")
 	}

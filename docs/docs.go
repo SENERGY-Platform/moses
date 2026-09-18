@@ -1599,6 +1599,26 @@ const docTemplate = `{
                 }
             }
         },
+        "domain.DatasetFallback": {
+            "type": "object",
+            "properties": {
+                "column": {
+                    "description": "Column names a different column, empty means the source's own.",
+                    "type": "string"
+                },
+                "filters": {
+                    "description": "Filters pick the substitute series out of the shared table. Mandatory:\nwithout them the fallback would select what the source already selects.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/domain.DatasetFilter"
+                    }
+                },
+                "ref": {
+                    "description": "Ref names a different export, empty means the source's own.",
+                    "type": "string"
+                }
+            }
+        },
         "domain.DatasetFilter": {
             "type": "object",
             "properties": {
@@ -1638,6 +1658,14 @@ const docTemplate = `{
                 "cumulative": {
                     "description": "A meter reading keeps counting across a loop boundary instead of jumping\nback to the first value.",
                     "type": "boolean"
+                },
+                "fallback": {
+                    "description": "Fallback is a second series read only where this one has a gap wider than\nMaxGap, so a hole in one station's rows is filled from a neighbouring one\ninstead of leaving a context key standing at its last value. Only with\nMaxGap, since without a bound there is no gap to fill, and never with\nCumulative, since a second meter's register is not this meter's count.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/domain.DatasetFallback"
+                        }
+                    ]
                 },
                 "filters": {
                     "description": "Filters narrow an export that carries more than one series in one table,\nwhich is what an export of an import does: one row per station, meter or\nsensor, told apart by a tag column. Without them such an export replays as\nevery series at once, interleaved on the instant.",

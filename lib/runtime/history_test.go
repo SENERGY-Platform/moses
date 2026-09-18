@@ -50,7 +50,7 @@ func historyFixture(t *testing.T, def domain.Environment, series map[string][]da
 func historyFixtureAt(t *testing.T, def domain.Environment, series map[string][]dataset.Point, publisher *fakePublisher, jobs repo.HistoryJobs, from time.Time) (*Runtime, *environment, *generation) {
 	t.Helper()
 	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, jobs, publisher)
-	gen := newGeneration(def, series)
+	gen := newGeneration(def, loadedSeries(series))
 	env := &environment{id: def.Id, gen: gen, state: repo.RuntimeState{EnvironmentId: def.Id}}
 	env.resetForHistory()
 	//seeded with the window start, exactly as StartHistory does
@@ -269,7 +269,7 @@ func TestAHistoryRunAnchorsALoopingReplayAtTheWindowStart(t *testing.T) {
 		t.Fatalf("expected 13 readings over an hour on a five minute channel, got %d", len(events))
 	}
 	for i, event := range events {
-		want, playable := replayValue(source, replayPoints, historyFrom.Unix(), event.at, 300)
+		want, _, playable := replayReading(source, replayPoints, historyFrom.Unix(), event.at, 300)
 		if !playable {
 			t.Fatalf("reading %d at %v is not playable from the window anchor", i, event.at)
 		}

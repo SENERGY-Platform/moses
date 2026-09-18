@@ -253,7 +253,7 @@ func faultParityJob(t *testing.T, def domain.Environment, from time.Time, to tim
 	pool := testPublishPool(t, rt)
 	for _, channel := range backfillChannels(def) {
 		status := BackfillChannelStatus{ChannelId: channel.channel.Id}
-		rt.runBackfillChannel(context.Background(), pool, job, gen, channel, nil, from, to, &status)
+		rt.runBackfillChannel(context.Background(), pool, job, gen, channel, replaySeries{}, from, to, &status)
 		if status.Failed > 0 {
 			t.Fatalf("the backfill of %v failed %d readings: %v", channel.channel.Id, status.Failed, status.LastError)
 		}
@@ -451,7 +451,7 @@ func TestASuppressedReadingIsBookedAsSilentOnBothPaths(t *testing.T) {
 			continue
 		}
 		jobStatus := BackfillChannelStatus{ChannelId: channel.channel.Id}
-		rt.runBackfillChannel(context.Background(), pool, job, gen, channel, nil, from, to, &jobStatus)
+		rt.runBackfillChannel(context.Background(), pool, job, gen, channel, replaySeries{}, from, to, &jobStatus)
 		if jobStatus.Failed != 0 {
 			t.Errorf("a suppressed reading is never failed in the job either, got %d", jobStatus.Failed)
 		}

@@ -125,7 +125,7 @@ func TestProfileTheHistoryRunOfADocument(t *testing.T) {
 	to := from.Add(time.Duration(days) * 24 * time.Hour)
 
 	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), discardingPublisher{})
-	gen := newGeneration(def, series)
+	gen := newGeneration(def, loadedSeries(series))
 	env := &environment{id: def.Id, gen: gen, state: repo.RuntimeState{EnvironmentId: def.Id}}
 	env.resetForHistory()
 	env.seed(gen, from)

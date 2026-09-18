@@ -548,7 +548,7 @@ func (this *Runtime) prepareEnvironment(ctx context.Context, def domain.Environm
 		env.runners.Add(1)
 		go this.runContextSource(envCtx, env, gen, key, source)
 	}
-	if followers := followersOf(gen.def); len(followers) > 0 {
+	if followers := followersOf(gen.def, gen.series); len(followers) > 0 {
 		env.runners.Add(1)
 		go this.runFollowLoop(envCtx, env, gen, followers)
 	}
@@ -1141,8 +1141,8 @@ type fileSeriesCache map[string][]dataset.Series
 // channels reference. A channel whose dataset cannot be loaded is reported and
 // skipped by newGeneration; the environment still starts, because one deleted
 // upload should not take a whole site down.
-func (this *Runtime) loadSeries(ctx context.Context, def domain.Environment) map[string][]dataset.Point {
-	result := map[string][]dataset.Point{}
+func (this *Runtime) loadSeries(ctx context.Context, def domain.Environment) map[string]replaySeries {
+	result := map[string]replaySeries{}
 	cache := fileSeriesCache{}
 	for _, zone := range def.Zones {
 		this.loadZoneSeries(ctx, def.Id, def.Owner, zone, result, cache)
@@ -1151,7 +1151,7 @@ func (this *Runtime) loadSeries(ctx context.Context, def domain.Environment) map
 	return result
 }
 
-func (this *Runtime) loadZoneSeries(ctx context.Context, envId string, owner string, zone domain.Zone, result map[string][]dataset.Point, cache fileSeriesCache) {
+func (this *Runtime) loadZoneSeries(ctx context.Context, envId string, owner string, zone domain.Zone, result map[string]replaySeries, cache fileSeriesCache) {
 	for _, nested := range zone.Zones {
 		this.loadZoneSeries(ctx, envId, owner, nested, result, cache)
 	}
@@ -1170,7 +1170,11 @@ func (this *Runtime) loadZoneSeries(ctx context.Context, envId string, owner str
 					attributes.ErrorKey, err, "environment", envId, "channel", channel.Id, "dataset", source.Dataset.Ref)
 				continue
 			}
-			result[channel.Id] = points
+			result[channel.Id] = replaySeries{
+				points: points,
+				fallback: this.fetchFallbackSeries(ctx, owner, source.Dataset, cache,
+					envId, "channel", channel.Id),
+			}
 		}
 	}
 }
@@ -1295,6 +1299,25 @@ func exportFilters(source *domain.DatasetSource) []timeseries.Filter {
 	return filters
 }
 
+// fetchFallbackSeries loads the substitute series of a source that declared a
+// fallback, or nil where it declared none. A substitute that cannot be loaded
+// is reported and left out: the source itself plays either way, it only stops
+// covering its gaps - so one unreachable neighbouring station does not silence
+// a channel whose own series is there.
+func (this *Runtime) fetchFallbackSeries(ctx context.Context, owner string, source *domain.DatasetSource, cache fileSeriesCache, envId string, field string, label string) []dataset.Point {
+	substitute := source.FallbackSource()
+	if substitute == nil {
+		return nil
+	}
+	points, err := this.fetchSeries(ctx, owner, substitute, cache)
+	if err != nil {
+		util.Logger.Warn("unable to load the fallback series of a dataset source, its gaps stay open",
+			attributes.ErrorKey, err, "environment", envId, field, label, "dataset", substitute.Ref)
+		return nil
+	}
+	return points
+}
+
 // executeDataset publishes the replay value for now. The anchor of a looping
 // replay is set on first use and persisted with the state, so a restart
 // resumes mid-loop.
@@ -1314,13 +1337,14 @@ func (this *Runtime) executeDataset(env *environment, gen *generation, binding c
 	//share of a sample one computation stands for, and with a change trigger the
 	//value is computed on the evaluation cadence. Without a trigger the two are
 	//the same number.
-	value, gap, playable := replayReading(source, gen.series[binding.channel.Id], anchor, now, binding.stepSeconds)
+	value, gap, covered, playable := replayWithFallback(source, gen.series[binding.channel.Id], anchor, now, binding.stepSeconds)
+	if gap.Seconds > 0 {
+		//one line per gap: the channel stays silent for its width unless a
+		//fallback series covers it, and nothing is published rather than a value
+		//the source never carried
+		reportGap(gen, binding.channel.Id, gap, source.MaxGap, source.Fallback != nil, covered)
+	}
 	if !playable {
-		if gap.Seconds > 0 {
-			//the channel stays silent for the width of the gap; nothing is
-			//published rather than a value the source never carried
-			reportGap(gen, binding.channel.Id, gap, source.MaxGap)
-		}
 		return
 	}
 	send(value)

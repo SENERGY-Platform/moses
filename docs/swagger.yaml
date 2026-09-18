@@ -303,6 +303,22 @@ definitions:
       unit:
         type: string
     type: object
+  domain.DatasetFallback:
+    properties:
+      column:
+        description: Column names a different column, empty means the source's own.
+        type: string
+      filters:
+        description: |-
+          Filters pick the substitute series out of the shared table. Mandatory:
+          without them the fallback would select what the source already selects.
+        items:
+          $ref: '#/definitions/domain.DatasetFilter'
+        type: array
+      ref:
+        description: Ref names a different export, empty means the source's own.
+        type: string
+    type: object
   domain.DatasetFilter:
     properties:
       column:
@@ -338,6 +354,15 @@ definitions:
           A meter reading keeps counting across a loop boundary instead of jumping
           back to the first value.
         type: boolean
+      fallback:
+        allOf:
+        - $ref: '#/definitions/domain.DatasetFallback'
+        description: |-
+          Fallback is a second series read only where this one has a gap wider than
+          MaxGap, so a hole in one station's rows is filled from a neighbouring one
+          instead of leaving a context key standing at its last value. Only with
+          MaxGap, since without a bound there is no gap to fill, and never with
+          Cumulative, since a second meter's register is not this meter's count.
       filters:
         description: |-
           Filters narrow an export that carries more than one series in one table,

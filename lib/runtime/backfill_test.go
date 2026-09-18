@@ -258,14 +258,14 @@ func TestABackfillDoesNotMoveTheAnchorOfTheLiveSimulation(t *testing.T) {
 	if len(events) == 0 {
 		t.Fatal("the backfill published nothing")
 	}
-	wanted, playable := replayValue(source, points, backfillFrom.Unix(), backfillFrom.In(time.Local), 3600)
+	wanted, _, playable := replayReading(source, points, backfillFrom.Unix(), backfillFrom.In(time.Local), 3600)
 	if !playable {
 		t.Fatal("the window anchor produces nothing, so the test cannot tell the two apart")
 	}
 	if events[0].value != wanted {
 		t.Errorf("the first reading was %v, expected %v from an anchor at the window start", events[0].value, wanted)
 	}
-	withLiveAnchor, _ := replayValue(source, points, liveAnchor, backfillFrom.In(time.Local), 3600)
+	withLiveAnchor, _, _ := replayReading(source, points, liveAnchor, backfillFrom.In(time.Local), 3600)
 	if withLiveAnchor == wanted {
 		t.Skip("both anchors happen to produce the same first value here, so this cannot discriminate")
 	}

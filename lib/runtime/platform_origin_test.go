@@ -19,6 +19,7 @@ package runtime
 import (
 	"context"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -171,11 +172,21 @@ func (this *fakeFetcher) FetchSince(ctx context.Context, token string, series ti
 	return this.fetch(ctx, token, series, column, start, end, true)
 }
 
+// filterKey renders the filters of one query, so a test can tell the fetch of a
+// source from the fetch of its fallback series.
+func filterKey(filters []timeseries.Filter) string {
+	parts := make([]string, 0, len(filters))
+	for _, filter := range filters {
+		parts = append(parts, filter.Column+"="+filter.Value)
+	}
+	return strings.Join(parts, ",")
+}
+
 func (this *fakeFetcher) fetch(ctx context.Context, token string, series timeseries.Series, column string, start time.Time, end time.Time, since bool) ([]dataset.Point, error) {
 	this.mux.Lock()
 	this.calls = append(this.calls, map[string]string{
 		"token": token, "device": series.DeviceId, "service": series.ServiceId, "export": series.ExportId, "column": column,
-		"window": end.Sub(start).String(), "since": strconv.FormatBool(since),
+		"window": end.Sub(start).String(), "since": strconv.FormatBool(since), "filters": filterKey(series.Filters),
 	})
 	this.budgets = append(this.budgets, budgetOf(ctx))
 	this.starts = append(this.starts, start)

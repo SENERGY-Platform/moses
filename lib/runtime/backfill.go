@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
-	"github.com/SENERGY-Platform/moses/lib/dataset"
 	"github.com/SENERGY-Platform/moses/lib/domain"
 	"github.com/SENERGY-Platform/moses/lib/repo"
 	"github.com/SENERGY-Platform/moses/lib/util"
@@ -34,7 +33,7 @@ import (
 // publishes the readings with the timestamps they would have had, so a model
 // can be trained on weeks of data as soon as the environment is defined. It
 // runs the same arithmetic as the live simulation, driven by a different
-// clock - profileValue and replayValue are functions of the instant alone, so
+// clock - profileValue and the replay are functions of the instant alone, so
 // seed plus window determine the result - but touches nothing the live
 // simulation owns; see runBackfillChannel.
 
@@ -456,16 +455,17 @@ func backfillSkipsByDefinition(channel domain.Channel) string {
 
 // skipReason says why a channel cannot be backfilled, or "" when it can. The
 // cheap reasons come first: the last one costs a device type read.
-func (this *Runtime) skipReason(channel backfillChannel, points []dataset.Point) string {
+func (this *Runtime) skipReason(channel backfillChannel, series replaySeries) string {
 	if reason := backfillSkipsByDefinition(channel.channel); reason != "" {
 		return reason
 	}
 	if channel.channel.Source.Kind == domain.SourceDataset {
+		points := series.points
 		if len(points) < 2 {
 			return "the dataset of this channel is not loaded, so there is nothing to replay"
 		}
 		if points[len(points)-1].Unix <= points[0].Unix {
-			//replayValue divides the elapsed time by this span
+			//the replay divides the elapsed time by this span
 			return "the dataset of this channel covers no time span"
 		}
 	}
@@ -486,7 +486,7 @@ func (this *Runtime) skipReason(channel backfillChannel, points []dataset.Point)
 // overlap between computing and sending and nothing more.
 // series is the frozen set of points of this job, snapshotted by StartBackfill:
 // gen.series itself is written by the follow loop while the job runs.
-func (this *Runtime) runBackfill(ctx context.Context, job *backfillJob, gen *generation, series map[string][]dataset.Point, channels []backfillChannel, from time.Time, to time.Time) {
+func (this *Runtime) runBackfill(ctx context.Context, job *backfillJob, gen *generation, series map[string]replaySeries, channels []backfillChannel, from time.Time, to time.Time) {
 	defer this.backfillWorkers.Done()
 	defer close(job.done)
 	//a bug in the reconstruction of one environment must not take the service
@@ -527,13 +527,13 @@ func (this *Runtime) runBackfill(ctx context.Context, job *backfillJob, gen *gen
 		if ctx.Err() != nil {
 			break
 		}
-		points := series[channel.channel.Id]
+		channelSeries := series[channel.channel.Id]
 		status := BackfillChannelStatus{
 			ChannelId: channel.channel.Id,
 			AssetId:   channel.assetId,
 			Name:      channel.channel.Name,
 		}
-		if reason := this.skipReason(channel, points); reason != "" {
+		if reason := this.skipReason(channel, channelSeries); reason != "" {
 			status.SkipReason = reason
 			job.update(func(current *BackfillStatus) {
 				current.Channels = append(current.Channels, status)
@@ -545,7 +545,7 @@ func (this *Runtime) runBackfill(ctx context.Context, job *backfillJob, gen *gen
 		job.update(func(current *BackfillStatus) {
 			current.CurrentChannel = channel.channel.Id
 		})
-		this.runBackfillChannel(ctx, pool, job, gen, channel, points, from, to, &status)
+		this.runBackfillChannel(ctx, pool, job, gen, channel, channelSeries, from, to, &status)
 		published += status.Published
 		job.update(func(current *BackfillStatus) {
 			current.Channels = append(current.Channels, status)
@@ -584,7 +584,7 @@ func (this *Runtime) runBackfill(ctx context.Context, job *backfillJob, gen *gen
 // simulation keeps running while the job does, and moving the persisted loop
 // anchor backwards would make the live channel jump to a different point in
 // its data.
-func (this *Runtime) runBackfillChannel(ctx context.Context, pool *publishPool, job *backfillJob, gen *generation, channel backfillChannel, points []dataset.Point, from time.Time, to time.Time, status *BackfillChannelStatus) {
+func (this *Runtime) runBackfillChannel(ctx context.Context, pool *publishPool, job *backfillJob, gen *generation, channel backfillChannel, series replaySeries, from time.Time, to time.Time, status *BackfillChannelStatus) {
 	//every reading is acked before this returns, on every way out: the caller
 	//reads these counters afterwards
 	defer pool.Drain()
@@ -612,7 +612,7 @@ func (this *Runtime) runBackfillChannel(ctx context.Context, pool *publishPool, 
 	steps := backfillTicks(step, from, to)
 
 	//a looping replay plays relative to an anchor: the live anchor is the moment
-	//the simulation started, which lies after this window, so replayValue would
+	//the simulation started, which lies after this window, so the replay would
 	//report every instant as "not yet started". The window's own start is used
 	//instead, since it is both usable and reproducible - the same window
 	//replays the same data.
@@ -657,7 +657,7 @@ func (this *Runtime) runBackfillChannel(ctx context.Context, pool *publishPool, 
 		//day profile by this server's zone offset
 		at := from.Add(time.Duration(i*step) * time.Second).In(time.Local)
 
-		value, ok := this.backfillValue(gen, channel, points, anchor, at, &counter, cumulative, step)
+		value, ok := this.backfillValue(gen, channel, series, anchor, at, &counter, cumulative, step)
 		if !ok {
 			silent()
 			continue
@@ -808,7 +808,7 @@ func covBackfillSends(cov covSettings, lastPublished *float64, lastPublishedAt i
 // stepSeconds is the span one computation stands for - the publish interval, or
 // the evaluation interval of a change trigger - and is what the live path passes
 // as binding.stepSeconds for exactly the same three uses.
-func (this *Runtime) backfillValue(gen *generation, channel backfillChannel, points []dataset.Point, anchor int64, at time.Time, counter *float64, cumulative bool, stepSeconds int64) (float64, bool) {
+func (this *Runtime) backfillValue(gen *generation, channel backfillChannel, series replaySeries, anchor int64, at time.Time, counter *float64, cumulative bool, stepSeconds int64) (float64, bool) {
 	source := channel.channel.Source
 	switch source.Kind {
 	case domain.SourceProfile:
@@ -824,7 +824,11 @@ func (this *Runtime) backfillValue(gen *generation, channel backfillChannel, poi
 		return value, true
 	case domain.SourceDataset:
 		replay := gen.timeline.effectiveDataset(domain.TimelineChannel, channel.channel.Id, *source.Dataset, at)
-		return replayValue(replay, points, anchor, at, stepSeconds)
+		//the same two series the live tick reads, and the same silence where
+		//neither covers the instant; the job deliberately logs no gap, since it
+		//rebuilds a whole window at once
+		value, _, _, playable := replayWithFallback(replay, series, anchor, at, stepSeconds)
+		return value, playable
 	}
 	return 0, false
 }

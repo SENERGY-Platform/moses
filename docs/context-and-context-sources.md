@@ -79,6 +79,10 @@ the document was accepted.
 The initial fetch and every follow refresh send the same filter. A refresh that
 dropped it would append the other series' rows to the one already loaded.
 
+A source may name a second series of the same export under `fallback`, read
+only where its own has a hole wider than `max_gap` - a neighbouring station for
+the days one of them is missing (`docs/gaps-in-a-replayed-series.md`).
+
 Replay anchors of dataset context sources persist under the series id
 `"context:" + key`, so they cannot collide with channel anchors.
 

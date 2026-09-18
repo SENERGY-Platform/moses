@@ -299,7 +299,7 @@ func TestACumulativeProfileChangesItsSlopeWithoutAJump(t *testing.T) {
 	values := []float64{}
 	instants := []time.Time{}
 	for at := from; !at.After(to); at = at.Add(time.Duration(step) * time.Second) {
-		value, ok := rt.backfillValue(gen, channel, nil, from.Unix(), at, &counter, true, step)
+		value, ok := rt.backfillValue(gen, channel, replaySeries{}, from.Unix(), at, &counter, true, step)
 		if !ok {
 			t.Fatalf("the meter produced no reading at %v", at)
 		}
@@ -804,7 +804,7 @@ func TestAReplayingContextSourceFollowsItsScaleChange(t *testing.T) {
 	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), &fakePublisher{})
 	//the anchor is created on the first tick, so both ticks below replay from the
 	//same position and only the scale differs between them
-	gen := newGeneration(def, map[string][]dataset.Point{contextSeriesId("sun"): parityPoints()})
+	gen := newGeneration(def, loadedSeries(map[string][]dataset.Point{contextSeriesId("sun"): parityPoints()}))
 	env := &environment{id: id, state: repo.RuntimeState{EnvironmentId: id}}
 	env.seed(gen, timelineKnick.Add(-time.Hour))
 	source := def.ContextSources["sun"]

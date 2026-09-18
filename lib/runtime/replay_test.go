@@ -51,7 +51,7 @@ func TestReplayResampling(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			//anchor 0, now = tc.second: the loop plays the series 1:1
-			got, playable := replayValue(replaySource(tc.mode, domain.AnchorLoop), replayPoints, 0, time.Unix(tc.second, 0), 30)
+			got, _, playable := replayReading(replaySource(tc.mode, domain.AnchorLoop), replayPoints, 0, time.Unix(tc.second, 0), 30)
 			if !playable {
 				t.Fatal("expected a value")
 			}
@@ -64,17 +64,17 @@ func TestReplayResampling(t *testing.T) {
 
 func TestReplayLoopsAndOriginalStaysSilentOutsideItsRange(t *testing.T) {
 	//span is 1800s; at elapsed 1800+450 the loop is back at 450
-	looped, playable := replayValue(replaySource(domain.ResampleLinear, domain.AnchorLoop), replayPoints, 0, time.Unix(2250, 0), 30)
+	looped, _, playable := replayReading(replaySource(domain.ResampleLinear, domain.AnchorLoop), replayPoints, 0, time.Unix(2250, 0), 30)
 	if !playable || looped != 150 {
 		t.Errorf("expected the second loop to replay 150, got %v (playable=%v)", looped, playable)
 	}
 	//original anchored: before and after the data there is nothing to say
-	if _, playable = replayValue(replaySource(domain.ResampleHold, domain.AnchorOriginal), replayPoints, 0, time.Unix(5000, 0), 30); playable {
+	if _, _, playable = replayReading(replaySource(domain.ResampleHold, domain.AnchorOriginal), replayPoints, 0, time.Unix(5000, 0), 30); playable {
 		t.Error("original anchor outside the range has to stay silent")
 	}
 	//the loop never reaches the last point (it wraps first); the original
 	//anchor does, exactly at the end of the data
-	atEnd, playable := replayValue(replaySource(domain.ResampleLinear, domain.AnchorOriginal), replayPoints, 0, time.Unix(1800, 0), 30)
+	atEnd, _, playable := replayReading(replaySource(domain.ResampleLinear, domain.AnchorOriginal), replayPoints, 0, time.Unix(1800, 0), 30)
 	if !playable || atEnd != 400 {
 		t.Errorf("expected the last point at the end of the range, got %v (playable=%v)", atEnd, playable)
 	}
@@ -85,8 +85,8 @@ func TestReplayLoopsAndOriginalStaysSilentOutsideItsRange(t *testing.T) {
 func TestReplayCumulativeKeepsCountingAcrossTheLoop(t *testing.T) {
 	source := replaySource(domain.ResampleHold, domain.AnchorLoop)
 	source.Cumulative = true
-	endOfFirst, _ := replayValue(source, replayPoints, 0, time.Unix(1799, 0), 30)
-	startOfSecond, _ := replayValue(source, replayPoints, 0, time.Unix(1800, 0), 30)
+	endOfFirst, _, _ := replayReading(source, replayPoints, 0, time.Unix(1799, 0), 30)
+	startOfSecond, _, _ := replayReading(source, replayPoints, 0, time.Unix(1800, 0), 30)
 	if startOfSecond < endOfFirst {
 		t.Errorf("the reading fell from %v to %v at the loop boundary", endOfFirst, startOfSecond)
 	}
@@ -99,7 +99,7 @@ func TestReplayCumulativeKeepsCountingAcrossTheLoop(t *testing.T) {
 func TestReplayScales(t *testing.T) {
 	source := replaySource(domain.ResampleHold, domain.AnchorLoop)
 	source.Scale = 2.5
-	got, _ := replayValue(source, replayPoints, 0, time.Unix(0, 0), 30)
+	got, _, _ := replayReading(source, replayPoints, 0, time.Unix(0, 0), 30)
 	if got != 250 {
 		t.Errorf("expected 250, got %v", got)
 	}

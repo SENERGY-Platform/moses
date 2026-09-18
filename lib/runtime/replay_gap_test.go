@@ -50,7 +50,7 @@ func TestAWideGapSilencesEveryResampleMode(t *testing.T) {
 		domain.ResampleLinear, domain.ResampleHold, domain.ResampleDistribute,
 	} {
 		t.Run(string(mode), func(t *testing.T) {
-			if _, playable := replayValue(gapSource(mode, ""), gapPoints, 0, time.Unix(inside, 0), 30); !playable {
+			if _, _, playable := replayReading(gapSource(mode, ""), gapPoints, 0, time.Unix(inside, 0), 30); !playable {
 				t.Fatal("without a max_gap the hole is bridged, as it always was")
 			}
 			value, gap, playable := replayReading(gapSource(mode, "1h"), gapPoints, 0, time.Unix(inside, 0), 30)
@@ -78,7 +78,7 @@ func TestAGapIsWiderThanTheBoundAndNotAsWide(t *testing.T) {
 		{"6599s", false},
 	} {
 		t.Run(tc.maxGap, func(t *testing.T) {
-			_, playable := replayValue(gapSource(domain.ResampleLinear, tc.maxGap), gapPoints, 0, time.Unix(3900, 0), 30)
+			_, _, playable := replayReading(gapSource(domain.ResampleLinear, tc.maxGap), gapPoints, 0, time.Unix(3900, 0), 30)
 			if playable != tc.playable {
 				t.Errorf("max_gap %s: expected playable %v, got %v", tc.maxGap, tc.playable, playable)
 			}
@@ -91,7 +91,7 @@ func TestAMeasuredInstantIsNotInAGap(t *testing.T) {
 	//between them, so hold and linear answer with them
 	for _, mode := range []domain.ResampleMode{domain.ResampleLinear, domain.ResampleHold} {
 		for _, second := range []int64{600, 7200} {
-			value, playable := replayValue(gapSource(mode, "1h"), gapPoints, 0, time.Unix(second, 0), 30)
+			value, _, playable := replayReading(gapSource(mode, "1h"), gapPoints, 0, time.Unix(second, 0), 30)
 			if !playable {
 				t.Fatalf("%s at %d: the instant of a point is not in a gap", mode, second)
 			}
@@ -109,7 +109,7 @@ func TestTheSeamOfALoopIsNotAGap(t *testing.T) {
 	source := gapSource(domain.ResampleLinear, "90s")
 	//one second before the loop closes, and the first second of the next round
 	for _, second := range []int64{119, 120, 121} {
-		if _, playable := replayValue(source, points, 0, time.Unix(second, 0), 30); !playable {
+		if _, _, playable := replayReading(source, points, 0, time.Unix(second, 0), 30); !playable {
 			t.Errorf("second %d: the seam of a loop is not a gap", second)
 		}
 	}
@@ -122,7 +122,7 @@ func TestTheNewestPointOfAFollowingSourceIsNotInAGap(t *testing.T) {
 	source.Anchor = domain.AnchorOriginal
 	source.Follow = true
 	source.FollowEvery = "30m"
-	value, playable := replayValue(source, gapPoints, 0, time.Unix(7800+60, 0), 30)
+	value, _, playable := replayReading(source, gapPoints, 0, time.Unix(7800+60, 0), 30)
 	if !playable {
 		t.Fatal("a following source holds its newest point rather than calling it a gap")
 	}
@@ -144,21 +144,21 @@ func TestADistributingReplayIsBoundedByItsSlot(t *testing.T) {
 }
 
 func TestAGapIsReportedOncePerGap(t *testing.T) {
-	gen := &generation{gapReported: map[string]int64{}}
+	gen := &generation{gapReported: map[string]gapReport{}}
 	first := replayGap{StartUnix: 600, Seconds: 6600}
 	//the same gap over and over is one event, whatever the tick does
-	if !reportGap(gen, "ch-1", first, "1h") {
+	if !reportGap(gen, "ch-1", first, "1h", false, false) {
 		t.Fatal("the first sighting of a gap is reported")
 	}
-	if reportGap(gen, "ch-1", first, "1h") {
+	if reportGap(gen, "ch-1", first, "1h", false, false) {
 		t.Error("the same gap is reported once, not once per tick")
 	}
 	//the next loop of the same series opens the same gap again at a new instant
-	if !reportGap(gen, "ch-1", replayGap{StartUnix: 8400, Seconds: 6600}, "1h") {
+	if !reportGap(gen, "ch-1", replayGap{StartUnix: 8400, Seconds: 6600}, "1h", false, false) {
 		t.Error("a gap at a new instant is a new event")
 	}
 	//a second source keeps its own bookkeeping
-	if !reportGap(gen, "ch-2", first, "1h") {
+	if !reportGap(gen, "ch-2", first, "1h", false, false) {
 		t.Error("a second source is tracked on its own")
 	}
 }
@@ -168,17 +168,17 @@ func TestTheBackfillIsBoundedByTheSameGap(t *testing.T) {
 	//and the bound has to hold there too: a window rebuilt after the fact may
 	//not carry rows the live path refused to publish
 	runtime := &Runtime{}
-	gen := &generation{gapReported: map[string]int64{}, timeline: newTimelineIndex(domain.Environment{})}
+	gen := &generation{gapReported: map[string]gapReport{}, timeline: newTimelineIndex(domain.Environment{})}
 	source := gapSource(domain.ResampleLinear, "1h")
 	channel := backfillChannel{channel: domain.Channel{
 		Id:     "ch-1",
 		Source: domain.Source{Kind: domain.SourceDataset, Dataset: &source},
 	}}
 	counter := 0.0
-	if _, playable := runtime.backfillValue(gen, channel, gapPoints, 0, time.Unix(3900, 0), &counter, false, 30); playable {
+	if _, playable := runtime.backfillValue(gen, channel, replaySeries{points: gapPoints}, 0, time.Unix(3900, 0), &counter, false, 30); playable {
 		t.Error("the backfill bridged a gap the live path refuses")
 	}
-	if _, playable := runtime.backfillValue(gen, channel, gapPoints, 0, time.Unix(300, 0), &counter, false, 30); !playable {
+	if _, playable := runtime.backfillValue(gen, channel, replaySeries{points: gapPoints}, 0, time.Unix(300, 0), &counter, false, 30); !playable {
 		t.Error("the backfill went silent outside the gap")
 	}
 }

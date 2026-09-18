@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/SENERGY-Platform/moses/lib/config"
+	"github.com/SENERGY-Platform/moses/lib/dataset"
 	"github.com/SENERGY-Platform/moses/lib/devices"
 	"github.com/SENERGY-Platform/moses/lib/domain"
 	"github.com/SENERGY-Platform/moses/lib/repo"
@@ -37,6 +38,19 @@ import (
 
 // The fakes below implement the real interfaces rather than mocking single
 // calls, so the assertions are about stored values and published events.
+
+// loadedSeries is the loaded-series map of a generation built from plain point
+// slices, for every fixture whose sources declare no fallback series.
+func loadedSeries(points map[string][]dataset.Point) map[string]replaySeries {
+	if points == nil {
+		return nil
+	}
+	result := make(map[string]replaySeries, len(points))
+	for id, series := range points {
+		result[id] = replaySeries{points: series}
+	}
+	return result
+}
 
 // ctxBudget is what a fake recorded about the context it was called with: how
 // much time was left on it and whether it was already spent. It is how the

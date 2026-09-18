@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
-	"github.com/SENERGY-Platform/moses/lib/dataset"
 	"github.com/SENERGY-Platform/moses/lib/domain"
 	"github.com/SENERGY-Platform/moses/lib/formula"
 	"github.com/SENERGY-Platform/moses/lib/repo"
@@ -107,12 +106,12 @@ type environment struct {
 //
 // The point slices themselves are shared rather than copied: a stored slice is
 // never written into, a refresh always replaces the map entry with a fresh one.
-func snapshotSeries(env *environment, gen *generation) map[string][]dataset.Point {
+func snapshotSeries(env *environment, gen *generation) map[string]replaySeries {
 	env.mux.Lock()
 	defer env.mux.Unlock()
-	result := make(map[string][]dataset.Point, len(gen.series))
-	for id, points := range gen.series {
-		result[id] = points
+	result := make(map[string]replaySeries, len(gen.series))
+	for id, series := range gen.series {
+		result[id] = series
 	}
 	return result
 }
@@ -136,16 +135,17 @@ type generation struct {
 	commands map[commandKey]channelBinding
 
 	// series carries the points of every dataset source, keyed by channel id or
-	// context series id. It is guarded by environment.mux: a following source
+	// context series id, together with the substitute series of a source that
+	// declared a fallback. It is guarded by environment.mux: a following source
 	// appends to it while the environment runs (follow.go), so a reader that
 	// keeps the points for longer than one tick takes a snapshotSeries copy.
-	series map[string][]dataset.Point
+	series map[string]replaySeries
 
-	// gapReported is the first instant of the gap a source last reported, keyed
-	// like series and guarded by the same mutex. A gap is reported once rather
-	// than per tick: a source sits in one for as many ticks as it is wide, and a
-	// history run walks those in milliseconds.
-	gapReported map[string]int64
+	// gapReported is the gap a source last reported, keyed like series and
+	// guarded by the same mutex. A gap is reported once rather than per tick: a
+	// source sits in one for as many ticks as it is wide, and a history run
+	// walks those in milliseconds.
+	gapReported map[string]gapReport
 
 	// aggregateInputs maps an aggregate channel's id to the ids of the channels
 	// it sums: the channels carrying the same characteristic on every asset
@@ -289,7 +289,7 @@ func (this *latest) get() (interface{}, bool) {
 // than dropping it silently: validation prevents all of these from being stored
 // through the api, so anything found here came from a hand written document or
 // from a future version of the format.
-func newGeneration(def domain.Environment, series map[string][]dataset.Point) *generation {
+func newGeneration(def domain.Environment, series map[string]replaySeries) *generation {
 	result := &generation{
 		def:              def,
 		zones:            map[string]*zoneInfo{},
@@ -299,7 +299,7 @@ func newGeneration(def domain.Environment, series map[string][]dataset.Point) *g
 		aggregateInputs:  map[string][]string{},
 		aggregateAwaited: map[string][]string{},
 		series:           series,
-		gapReported:      map[string]int64{},
+		gapReported:      map[string]gapReport{},
 		//a pure function of the definition, so it needs no pass of its own
 		timeline: newTimelineIndex(def),
 	}
@@ -472,7 +472,7 @@ func (this *generation) addAsset(envId string, zoneId string, asset domain.Asset
 		profile := channel.Source.Kind == domain.SourceProfile && channel.Source.Profile != nil
 		//a dataset channel is executable only with its series loaded; a failed
 		//load was already reported by the loader
-		replay := channel.Source.Kind == domain.SourceDataset && len(this.series[channel.Id]) >= 2
+		replay := channel.Source.Kind == domain.SourceDataset && len(this.series[channel.Id].points) >= 2
 		//an aggregate needs nothing loaded or compiled: its inputs are resolved
 		//by indexAggregates below, and an aggregate over no children is a
 		//meaningful channel too - a distribution meter without sub-meters

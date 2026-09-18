@@ -1250,6 +1250,7 @@ func (this *validator) checkDatasetFields(path string, source Source) {
 	}
 	this.checkMaxGap(path, d)
 	this.checkFilters(path, d)
+	this.checkFallback(path, d)
 	this.checkFollow(path, d)
 }
 
@@ -1281,8 +1282,14 @@ func (this *validator) checkFilters(path string, d *DatasetSource) {
 		this.fail(path+".dataset.filters", "only an export carries more than one series to filter, not origin %q", d.Origin)
 		return
 	}
-	for index, filter := range d.Filters {
-		where := fmt.Sprintf("%s.dataset.filters[%d]", path, index)
+	this.checkFilterEntries(path+".dataset.filters", d.Filters)
+}
+
+// checkFilterEntries is the per-entry part, shared by a source's own filters and
+// those of its fallback: the two select a series on exactly the same terms.
+func (this *validator) checkFilterEntries(path string, filters []DatasetFilter) {
+	for index, filter := range filters {
+		where := fmt.Sprintf("%s[%d]", path, index)
 		trimmed := strings.TrimSpace(filter.Column)
 		switch {
 		case trimmed == "":
@@ -1299,6 +1306,69 @@ func (this *validator) checkFilters(path string, d *DatasetSource) {
 			this.fail(where+".value", "must not be empty, a filter on nothing keeps nothing")
 		}
 	}
+}
+
+// checkFallback refuses a substitute series that could not do what it reads
+// like: one where the origin carries a single series anyway, one where no
+// max_gap says which hole it is supposed to fill, one that selects the very
+// series it stands in for, and one standing in for a meter.
+func (this *validator) checkFallback(path string, d *DatasetSource) {
+	if d.Fallback == nil {
+		return
+	}
+	where := path + ".dataset.fallback"
+	if d.Origin != OriginExport {
+		this.fail(where, "only an export carries more than one series to fall back on, not origin %q", d.Origin)
+		return
+	}
+	if _, set, _ := ParseMaxGap(d.MaxGap); !set {
+		//without a bound the resampling bridges every hole, so there is no gap
+		//left for a substitute series to fill
+		this.fail(where, "needs max_gap: without a bound nothing is a gap, so the fallback series would never be read")
+	}
+	if len(d.Fallback.Filters) == 0 {
+		this.fail(where+".filters", "must name the filters that pick the substitute series out of the export")
+	}
+	this.checkFilterEntries(where+".filters", d.Fallback.Filters)
+	if d.Fallback.Ref != "" && strings.TrimSpace(d.Fallback.Ref) == "" {
+		this.fail(where+".ref", "must name the export, or be empty to read the source's own")
+	}
+	if d.Fallback.Column != "" && strings.TrimSpace(d.Fallback.Column) == "" {
+		this.fail(where+".column", "must name the export's column, or be empty to read the source's own")
+	}
+	if substitute := d.FallbackSource(); sameSeries(*d, *substitute) {
+		this.fail(where+".filters", "must select a different series than the source itself, which reads the same ref, column and filters")
+	}
+	if d.Cumulative {
+		//two meters have two registers: the neighbour's count says nothing about
+		//this one, and a reading taken from it inside a gap would step the
+		//channel's counter to a foreign absolute value and back again
+		this.fail(where, "must not be combined with cumulative: the substitute is a different meter, and its register inside a gap breaks the monotonic count of this one")
+	}
+}
+
+// sameSeries says two dataset sources address the same rows of the same export:
+// same ref, same column and the same set of filters. The filters are compared
+// as a set, since they are combined with and and their order decides nothing.
+func sameSeries(a DatasetSource, b DatasetSource) bool {
+	if a.Ref != b.Ref || a.Column != b.Column || len(a.Filters) != len(b.Filters) {
+		return false
+	}
+	key := func(filters []DatasetFilter) []string {
+		result := make([]string, 0, len(filters))
+		for _, filter := range filters {
+			result = append(result, fmt.Sprintf("%q=%q", filter.Column, filter.Value))
+		}
+		sort.Strings(result)
+		return result
+	}
+	left, right := key(a.Filters), key(b.Filters)
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // checkFollow refuses a follow that could not do what it reads like: an

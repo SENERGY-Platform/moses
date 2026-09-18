@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
-	"github.com/SENERGY-Platform/moses/lib/dataset"
 	"github.com/SENERGY-Platform/moses/lib/domain"
 	"github.com/SENERGY-Platform/moses/lib/util"
 )
@@ -74,19 +73,20 @@ func (this *Runtime) tickContextSource(env *environment, gen *generation, key st
 		env.contextStates()[key] = value
 		env.dirty = true
 	case domain.SourceDataset:
-		points := gen.series[contextSeriesId(key)]
-		if len(points) < 2 {
+		series := gen.series[contextSeriesId(key)]
+		if len(series.points) < 2 {
 			return //the loader already reported the missing dataset
 		}
 		replay := gen.timeline.effectiveDataset(domain.TimelineContextSource, key, *source.Dataset, now)
 		anchor := this.anchorFor(env, contextSeriesId(key), source.Dataset, now)
-		value, gap, playable := replayReading(replay, points, anchor, now, source.IntervalSeconds)
+		value, gap, covered, playable := replayWithFallback(replay, series, anchor, now, source.IntervalSeconds)
+		if gap.Seconds > 0 {
+			//without a covering fallback the key keeps what it last held: a
+			//consumer that reads it sees a value that stopped moving rather than
+			//one nobody measured
+			reportGap(gen, contextSeriesId(key), gap, replay.MaxGap, replay.Fallback != nil, covered)
+		}
 		if !playable {
-			if gap.Seconds > 0 {
-				//the key keeps what it last held: a consumer that reads it sees
-				//a value that stopped moving rather than one nobody measured
-				reportGap(gen, contextSeriesId(key), gap, replay.MaxGap)
-			}
 			return
 		}
 		env.contextStates()[key] = value
@@ -118,7 +118,7 @@ func (this *Runtime) anchorFor(env *environment, id string, source *domain.Datas
 // the same fileSeriesCache loadSeries threads through the zone walk, so a
 // context source that shares an upload with a channel does not fetch it a
 // second time.
-func (this *Runtime) loadContextSeries(ctx context.Context, def domain.Environment, result map[string][]dataset.Point, cache fileSeriesCache) {
+func (this *Runtime) loadContextSeries(ctx context.Context, def domain.Environment, result map[string]replaySeries, cache fileSeriesCache) {
 	for key, source := range def.ContextSources {
 		if source.Kind != domain.SourceDataset || source.Dataset == nil {
 			continue
@@ -132,6 +132,9 @@ func (this *Runtime) loadContextSeries(ctx context.Context, def domain.Environme
 				attributes.ErrorKey, err, "environment", def.Id, "key", key, "dataset", source.Dataset.Ref)
 			continue
 		}
-		result[contextSeriesId(key)] = points
+		result[contextSeriesId(key)] = replaySeries{
+			points:   points,
+			fallback: this.fetchFallbackSeries(ctx, def.Owner, source.Dataset, cache, def.Id, "key", key),
+		}
 	}
 }

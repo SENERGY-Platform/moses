@@ -36,7 +36,7 @@ var clockT = time.Date(2026, 3, 2, 6, 15, 0, 0, time.UTC)
 // together with an environment that has never run.
 func bindingFor(t *testing.T, def domain.Environment, series map[string][]dataset.Point) (*generation, *environment, channelBinding) {
 	t.Helper()
-	gen := newGeneration(def, series)
+	gen := newGeneration(def, loadedSeries(series))
 	if len(gen.sensors) != 1 {
 		t.Fatalf("expected exactly one ticking channel, got %d", len(gen.sensors))
 	}

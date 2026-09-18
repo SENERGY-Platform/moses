@@ -56,9 +56,64 @@ already treat it the way they treat that:
   heartbeat, exactly as it does for a series that has run out;
 - a **context key** keeps what it last held, because nothing overwrites it.
 
-None of the three invents a number. A consumer that wants something better than
-the last value - a clear sky estimate for an irradiance hole, say - builds that
-itself; the bound is only the point at which the runtime stops guessing.
+None of the three invents a number. Where a second measured series of the same
+quantity exists, `fallback` below reads it instead; a consumer that wants
+something better than that - a clear sky estimate for an irradiance hole, say -
+builds it itself, because the bound is the point at which the runtime stops
+guessing.
+
+## A fallback series fills the gap
+
+A source of an export may name a second series of the same export to be read
+where its own has a gap wider than `max_gap`:
+
+```json
+"dataset": {
+  "origin": "export",
+  "ref": "…",
+  "column": "global_irradiance_wm2",
+  "resample": "linear",
+  "anchor": "original",
+  "max_gap": "2h",
+  "filters": [{"column": "station_id", "value": "02932"}],
+  "fallback": {
+    "filters": [{"column": "station_id", "value": "01048"}]
+  }
+}
+```
+
+`fallback` carries the selection and nothing else: `filters` is mandatory, and
+`ref` and `column` are the source's own unless it names others. Origin,
+`resample`, `anchor`, `window`, `follow`, `follow_every`, `max_gap` and `scale`
+are the source's and hold for both series, so the two can never be read on different
+terms. Both are fetched and refreshed alike; a substitute that cannot be loaded
+costs the coverage and nothing else, the source itself keeps playing, and a
+following source retries it on its own cadence while reporting the failure once.
+A source whose own series did not load has no substitute either: there is
+nothing for one to stand in for.
+
+At an instant where the source stands in a gap wider than `max_gap`, the
+substitute is read at that same instant. The gap is still reported, with a line
+saying whether the substitute covered it.
+
+Valid only with a `max_gap` - without a bound nothing is a gap and the
+substitute would never be read - only for the export origin, and only for a
+selection that differs from the source's own. Refused on a `cumulative` source:
+a meter's value is a count of its own, and the neighbour's register inside a gap
+would step the channel to a foreign absolute value and back out of it again.
+
+What it deliberately does not do:
+
+- **No fallback at the edges.** Outside the range of the source's own series -
+  before it begins, after it ends - the substitute is not read. `max_gap` is
+  about the middle of a series, and so is the series that stands in for it.
+- **No chain.** A fallback has no fallback of its own; where both series have a
+  hole, the source is silent exactly as it was before.
+- **No mixing inside one point.** A value is either the source's or the
+  substitute's, never an average of the two. Under `hold` and `linear` a
+  measurement of the source's own series wins at its instant; under `distribute`
+  the instant of a point opening an oversized slot is itself part of the gap, as
+  it is without a fallback, so the substitute answers there too.
 
 ## It holds for every resample mode
 
@@ -88,7 +143,10 @@ against the distance across the instant being asked for.
 
 A source that stands in a gap reports it once, keyed on the instant the gap
 opens - not once per tick. A source sits in one gap for as many ticks as it is
-wide, and a history run walks those in milliseconds.
+wide, and a history run walks those in milliseconds. The line says whether a
+declared `fallback` covered the gap, and a substitute that stops covering one
+halfway through is a line of its own: otherwise the first line would claim a
+coverage the channel no longer has.
 
 The line is worth having because the failure is otherwise perfectly quiet: the
 27 hour hole above sat in a production series for months, and what eventually

@@ -382,7 +382,7 @@ func TestABackfillNeverTouchesTheLiveMeterOffsets(t *testing.T) {
 	pool := testPublishPool(t, rt)
 	for _, channel := range backfillChannels(def) {
 		status := BackfillChannelStatus{ChannelId: channel.channel.Id}
-		rt.runBackfillChannel(context.Background(), pool, job, gen, channel, nil, from, to, &status)
+		rt.runBackfillChannel(context.Background(), pool, job, gen, channel, replaySeries{}, from, to, &status)
 		if status.Published == 0 {
 			t.Fatal("the job is meant to publish something")
 		}

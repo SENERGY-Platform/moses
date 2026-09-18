@@ -299,6 +299,58 @@ func TestMongoPutAndGetPreserveTheTimeline(t *testing.T) {
 	}
 }
 
+// A dataset source's fallback series is a nested pointer, and a field a
+// document carries but the store drops is the failure nobody sees: the
+// environment reloads, plays on, and stops covering its gaps.
+func TestMongoPutAndGetPreserveADatasetFallback(t *testing.T) {
+	store := testStore(t)
+	ctx := testContext(t)
+	env := testEnvironment("env-fallback", "Metallbau", "owner-1")
+	env.Zones[0].Assets[0].Channels[0].Source = domain.Source{
+		Kind: domain.SourceDataset,
+		Dataset: &domain.DatasetSource{
+			Origin: domain.OriginExport, Ref: "export-1", Column: "temperature",
+			Window: "7d", Resample: domain.ResampleLinear, Anchor: domain.AnchorOriginal,
+			MaxGap:  "2h",
+			Filters: []domain.DatasetFilter{{Column: "station_id", Value: "02932"}},
+			Fallback: &domain.DatasetFallback{
+				Filters: []domain.DatasetFilter{{Column: "station_id", Value: "01048"}},
+				Column:  "temperature_2m",
+			},
+		},
+	}
+	if _, err := store.Put(ctx, env); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Get(ctx, "env-fallback")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallback := got.Zones[0].Assets[0].Channels[0].Source.Dataset.Fallback
+	if fallback == nil {
+		t.Fatal("the fallback series did not survive the store")
+	}
+	if len(fallback.Filters) != 1 || fallback.Filters[0].Column != "station_id" || fallback.Filters[0].Value != "01048" {
+		t.Errorf("the fallback came back as %#v", fallback.Filters)
+	}
+	if fallback.Column != "temperature_2m" || fallback.Ref != "" {
+		t.Errorf("the fallback's own selection came back as %#v", fallback)
+	}
+
+	//and a source without one reads back without one, which is what every
+	//document stored before the field existed looks like
+	if _, err = store.Put(ctx, testEnvironment("env-no-fallback", "Metallbau", "owner-1")); err != nil {
+		t.Fatal(err)
+	}
+	none, err := store.Get(ctx, "env-no-fallback")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if none.Zones[0].Assets[0].Channels[0].Source.Dataset != nil {
+		t.Errorf("expected no dataset source at all, got %#v", none.Zones[0].Assets[0].Channels[0].Source.Dataset)
+	}
+}
+
 func TestMongoGetReportsAnUnknownEnvironmentAsNotFound(t *testing.T) {
 	store := testStore(t)
 	_, err := store.Get(testContext(t), "does-not-exist")

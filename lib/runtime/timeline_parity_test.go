@@ -102,7 +102,7 @@ func parityReference(def domain.Environment, from time.Time, steps int64) map[st
 			if after {
 				replay.Scale = 2
 			}
-			value, playable := replayValue(replay, parityPoints(), from.Unix(), at, parityStep)
+			value, _, playable := replayReading(replay, parityPoints(), from.Unix(), at, parityStep)
 			if !playable {
 				continue
 			}
@@ -118,7 +118,7 @@ func parityHistory(t *testing.T, def domain.Environment, series map[string][]dat
 	t.Helper()
 	publisher := &fakePublisher{}
 	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), publisher)
-	gen := newGeneration(def, series)
+	gen := newGeneration(def, loadedSeries(series))
 	env := &environment{id: def.Id, gen: gen, state: repo.RuntimeState{EnvironmentId: def.Id}}
 	env.resetForHistory()
 	env.seed(gen, from)
@@ -139,7 +139,7 @@ func parityBackfill(t *testing.T, def domain.Environment, series map[string][]da
 	t.Helper()
 	publisher := &fakePublisher{}
 	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), publisher)
-	gen := newGeneration(def, series)
+	gen := newGeneration(def, loadedSeries(series))
 	job := &backfillJob{done: make(chan struct{}), status: BackfillStatus{EnvironmentId: def.Id}}
 	//one pool for every channel, as the job has it: with one per channel the
 	//channels would never share a worker and the parity would not cover the pool
@@ -147,7 +147,7 @@ func parityBackfill(t *testing.T, def domain.Environment, series map[string][]da
 	result := map[string][]float64{}
 	for _, channel := range backfillChannels(def) {
 		status := BackfillChannelStatus{ChannelId: channel.channel.Id}
-		rt.runBackfillChannel(context.Background(), pool, job, gen, channel, series[channel.channel.Id], from, to, &status)
+		rt.runBackfillChannel(context.Background(), pool, job, gen, channel, replaySeries{points: series[channel.channel.Id]}, from, to, &status)
 		if status.Failed > 0 {
 			t.Fatalf("the backfill of %v failed %d readings: %v", channel.channel.Id, status.Failed, status.LastError)
 		}
@@ -214,7 +214,7 @@ func TestADocumentWithoutATimelineIsUnchangedByTheFeature(t *testing.T) {
 	to := timelineKnick.Add(2 * time.Hour)
 	steps := backfillTicks(parityStep, from, to)
 
-	gen := newGeneration(def, series)
+	gen := newGeneration(def, loadedSeries(series))
 	if gen.timeline != nil {
 		t.Fatal("a document without a timeline has to carry no index")
 	}

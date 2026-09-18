@@ -73,12 +73,17 @@ func (this *Runtime) followClockOf() followClock {
 // after the initial fetch, a channel or a context source. seriesId is the key
 // its points are stored under in generation.series; label is what a warning
 // names it by - the channel id, or the context key for a context source.
+//
+// A source that declared a fallback appears twice, once for each of its two
+// series: they are fetched on the same cadence and the same window but from
+// different rows, so each needs a refresh of its own.
 type followSource struct {
-	seriesId  string
-	label     string
-	isContext bool
-	owner     string
-	dataset   *domain.DatasetSource
+	seriesId   string
+	label      string
+	isContext  bool
+	isFallback bool
+	owner      string
+	dataset    *domain.DatasetSource
 }
 
 // field names this source the way the loader that first fetched it logs it:
@@ -91,10 +96,40 @@ func (this followSource) field() (string, string) {
 	return "channel", this.label
 }
 
+// attributes names this source in a log line: its loader's field, plus the mark
+// of the substitute series, whose trouble is not the main series' trouble.
+func (this followSource) attributes() []any {
+	key, value := this.field()
+	if this.isFallback {
+		return []any{key, value, "series", "fallback"}
+	}
+	return []any{key, value}
+}
+
+// stored is this source's points in a generation, and store puts a refreshed
+// series back. Both must be called with env.mux held, like every other touch of
+// that map.
+func (this followSource) stored(gen *generation) []dataset.Point {
+	series := gen.series[this.seriesId]
+	if this.isFallback {
+		return series.fallback
+	}
+	return series.points
+}
+
+func (this followSource) store(gen *generation, points []dataset.Point) {
+	series := gen.series[this.seriesId]
+	if this.isFallback {
+		series.fallback = points
+	} else {
+		series.points = points
+	}
+	gen.series[this.seriesId] = series
+}
+
 // warn reports one problem of this source, under the field its loader uses.
 func (this followSource) warn(msg string, err error, envId string) {
-	key, value := this.field()
-	util.Logger.Warn(msg, attributes.ErrorKey, err, "environment", envId, key, value)
+	util.Logger.Warn(msg, append([]any{attributes.ErrorKey, err, "environment", envId}, this.attributes()...)...)
 }
 
 // resolvedFollower is a followSource with its two durations parsed, the
@@ -118,7 +153,7 @@ type resolvedFollower struct {
 }
 
 // missed counts one refresh that brought nothing and reports the source as
-// stale at the cadence where replayValue stops holding its newest value: from
+// stale at the cadence where the replay stops holding its newest value: from
 // there on the channel is silent, and one line says why.
 func (this *resolvedFollower) missed(envId string, newest time.Time) {
 	this.emptyRefreshes++
@@ -126,10 +161,10 @@ func (this *resolvedFollower) missed(envId string, newest time.Time) {
 		return
 	}
 	this.staleWarned = true
-	key, value := this.field()
 	util.Logger.Warn("a following dataset source has gone stale",
-		"environment", envId, key, value,
-		"newest", newest.UTC().Format(time.RFC3339), "empty_refreshes", this.emptyRefreshes)
+		append([]any{"environment", envId,
+			"newest", newest.UTC().Format(time.RFC3339), "empty_refreshes", this.emptyRefreshes},
+			this.attributes()...)...)
 }
 
 // delivered clears that bookkeeping, and says the source plays again if it had
@@ -140,8 +175,8 @@ func (this *resolvedFollower) delivered(envId string) {
 		return
 	}
 	this.staleWarned = false
-	key, value := this.field()
-	util.Logger.Info("a following dataset source is delivering again", "environment", envId, key, value)
+	util.Logger.Info("a following dataset source is delivering again",
+		append([]any{"environment", envId}, this.attributes()...)...)
 }
 
 // followersOf collects every dataset source of a definition that declared
@@ -149,7 +184,17 @@ func (this *resolvedFollower) delivered(envId string) {
 // refresh interval and its window resolved. A source whose follow_every or
 // window does not parse is dropped and logged: validation refuses both on the
 // way in, so it bypassed the api.
-func followersOf(def domain.Environment) []resolvedFollower {
+//
+// series is what the load this generation was built from produced. A substitute
+// series follows only where the source's own series is in it: without one there
+// is nothing for a substitute to stand in for, and following it anyway would
+// have it recover a source that keeps failing to load, once per cadence and for
+// as long as the environment runs.
+//
+// The map is read here rather than under env.mux because the caller runs it
+// before the follow loop starts and holds the runtime's lifecycle lock, so
+// nothing writes it yet.
+func followersOf(def domain.Environment, series map[string]replaySeries) []resolvedFollower {
 	var raw []followSource
 	var walkZones func(zones []domain.Zone)
 	walkZones = func(zones []domain.Zone) {
@@ -164,6 +209,14 @@ func followersOf(def domain.Environment) []resolvedFollower {
 					raw = append(raw, followSource{
 						seriesId: channel.Id, label: channel.Id, owner: def.Owner, dataset: source.Dataset,
 					})
+					if _, loaded := series[channel.Id]; !loaded {
+						continue
+					}
+					if substitute := source.Dataset.FallbackSource(); substitute != nil {
+						raw = append(raw, followSource{
+							seriesId: channel.Id, label: channel.Id, isFallback: true, owner: def.Owner, dataset: substitute,
+						})
+					}
 				}
 			}
 		}
@@ -176,6 +229,14 @@ func followersOf(def domain.Environment) []resolvedFollower {
 		raw = append(raw, followSource{
 			seriesId: contextSeriesId(key), label: key, isContext: true, owner: def.Owner, dataset: source.Dataset,
 		})
+		if _, loaded := series[contextSeriesId(key)]; !loaded {
+			continue
+		}
+		if substitute := source.Dataset.FallbackSource(); substitute != nil {
+			raw = append(raw, followSource{
+				seriesId: contextSeriesId(key), label: key, isContext: true, isFallback: true, owner: def.Owner, dataset: substitute,
+			})
+		}
 	}
 
 	result := make([]resolvedFollower, 0, len(raw))
@@ -236,7 +297,7 @@ func (this *Runtime) runFollowLoop(ctx context.Context, env *environment, gen *g
 	//empty refreshes later
 	env.mux.Lock()
 	for i := range followers {
-		points := gen.series[followers[i].seriesId]
+		points := followers[i].stored(gen)
 		if len(points) == 0 {
 			continue
 		}
@@ -316,13 +377,17 @@ func (this *Runtime) refreshFollowers(ctx context.Context, env *environment, gen
 // exactly as it was, to be retried at the next tick.
 func (this *Runtime) refreshFollower(ctx context.Context, env *environment, gen *generation, f *resolvedFollower) bool {
 	env.mux.Lock()
-	stored := gen.series[f.seriesId]
+	stored := f.stored(gen)
 	pending := env.reloadPending
 	env.mux.Unlock()
 	if len(stored) == 0 {
 		//a reload an earlier probe triggered is still running and loads this
 		//source itself; probing again would only spend a fetch
 		if pending {
+			return false
+		}
+		if f.isFallback {
+			this.loadMissingFallback(ctx, env, gen, f)
 			return false
 		}
 		return this.loadMissingFollower(ctx, env, gen, f)
@@ -365,10 +430,11 @@ func (this *Runtime) refreshFollower(ctx context.Context, env *environment, gen 
 		env.mux.Unlock()
 		return false
 	}
-	grown := appendNewer(gen.series[f.seriesId], fresh)
-	appended := len(grown) != len(gen.series[f.seriesId])
+	current := f.stored(gen)
+	grown := appendNewer(current, fresh)
+	appended := len(grown) != len(current)
 	if appended {
-		gen.series[f.seriesId] = trimToWindow(grown, now.Add(-f.window))
+		f.store(gen, trimToWindow(grown, now.Add(-f.window)))
 	}
 	env.mux.Unlock()
 	if !appended {
@@ -443,7 +509,48 @@ func (this *Runtime) loadMissingFollower(ctx context.Context, env *environment, 
 	f.probeWarned = false
 	env.mux.Lock()
 	defer env.mux.Unlock()
-	return !env.underHistory && !env.removed && len(gen.series[f.seriesId]) == 0
+	return !env.underHistory && !env.removed && len(f.stored(gen)) == 0
+}
+
+// loadMissingFallback fetches the substitute series of a source whose own series
+// is loaded but whose fallback is not, because its initial load failed. Unlike a
+// missing main series this needs no reload: nothing binds a substitute, the
+// channel is already running, and the only thing missing is the coverage of its
+// gaps - so the points go straight into the entry the main series holds.
+//
+// The failure is reported once rather than per cadence. A neighbouring export
+// that stays unreadable costs the coverage and nothing else, and a line per
+// cadence for a channel that plays is noise that buries the lines that matter.
+func (this *Runtime) loadMissingFallback(ctx context.Context, env *environment, gen *generation, f *resolvedFollower) {
+	fetchCtx, cancel := context.WithTimeout(ctx, followFetchTimeout)
+	fresh, err := this.fetchRemoteSeries(fetchCtx, f.owner, f.dataset)
+	cancel()
+	if err != nil {
+		if followAbandoned(ctx, env, err) {
+			return
+		}
+		if !f.probeWarned {
+			f.probeWarned = true
+			//fetchRemoteSeries refuses fewer than two points, so a substitute
+			//whose rows are simply not there arrives here as an error too
+			f.warn("unable to load the fallback series of a following dataset source, the gaps of that source stay open until it answers again", err, gen.def.Id)
+		}
+		return
+	}
+	f.probeWarned = false
+	env.mux.Lock()
+	defer env.mux.Unlock()
+	if env.underHistory || env.removed {
+		//a history run took the environment over while this fetch was in
+		//flight; its own frozen series is what the run reads
+		return
+	}
+	if _, loaded := gen.series[f.seriesId]; !loaded {
+		//the source's own series left this generation, so there is nothing for
+		//a substitute to stand in for
+		return
+	}
+	f.store(gen, fresh)
 }
 
 // followAbandoned says a failed fetch is nobody's problem any more, so it is
@@ -491,7 +598,7 @@ func appendNewer(stored []dataset.Point, fresh []dataset.Point) []dataset.Point 
 // trimToWindow drops the points before cutoff, which is now minus the source's
 // window, so that a following series stays bounded by what its window declares
 // rather than growing for as long as the environment runs. The last two points
-// are always kept: replayValue divides by the span of the series and a
+// are always kept: the replay divides by the span of the series and a
 // generation binds nothing shorter than two points.
 //
 // The result shares the array of points and is never written into, see

@@ -391,6 +391,49 @@ type DatasetSource struct {
 	// sensor, told apart by a tag column. Without them such an export replays as
 	// every series at once, interleaved on the instant.
 	Filters []DatasetFilter `json:"filters,omitempty" bson:"filters,omitempty"`
+
+	// Fallback is a second series read only where this one has a gap wider than
+	// MaxGap, so a hole in one station's rows is filled from a neighbouring one
+	// instead of leaving a context key standing at its last value. Only with
+	// MaxGap, since without a bound there is no gap to fill, and never with
+	// Cumulative, since a second meter's register is not this meter's count.
+	Fallback *DatasetFallback `json:"fallback,omitempty" bson:"fallback,omitempty"`
+}
+
+// DatasetFallback selects the substitute series of a DatasetSource. It carries
+// the selection and nothing else: origin, resample, anchor, window, follow and
+// max_gap are the source's and hold for both series, so the two can never be
+// read on different terms. Ref and Column are inherited from the source where
+// they are empty, which is the ordinary case of a neighbouring series in the
+// same export.
+type DatasetFallback struct {
+	// Filters pick the substitute series out of the shared table. Mandatory:
+	// without them the fallback would select what the source already selects.
+	Filters []DatasetFilter `json:"filters" bson:"filters"`
+	// Ref names a different export, empty means the source's own.
+	Ref string `json:"ref,omitempty" bson:"ref,omitempty"`
+	// Column names a different column, empty means the source's own.
+	Column string `json:"column,omitempty" bson:"column,omitempty"`
+}
+
+// FallbackSource is the dataset source the substitute series is loaded and read
+// with: this source with the fallback's selection put in. Everything that is
+// not a selection therefore holds for both series by construction. Nil where
+// the document declared no fallback.
+func (this DatasetSource) FallbackSource() *DatasetSource {
+	if this.Fallback == nil {
+		return nil
+	}
+	substitute := this
+	substitute.Fallback = nil
+	substitute.Filters = this.Fallback.Filters
+	if this.Fallback.Ref != "" {
+		substitute.Ref = this.Fallback.Ref
+	}
+	if this.Fallback.Column != "" {
+		substitute.Column = this.Fallback.Column
+	}
+	return &substitute
 }
 
 // DatasetFilter keeps the rows whose Column equals Value. Several filters are
