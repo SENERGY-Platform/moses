@@ -33,6 +33,12 @@ leaves the key at that seed. Where `0` has a meaning, declare the key in
 `context` with a starting value the rules treat as neutral; the source
 overwrites it at its first point.
 
+The usual guard does not catch this. `typeof key === 'number' && isFinite(key)`
+rejects `null`, a foreign type and either infinity, but `0` passes both tests, so
+a rule guarded that way still fires on a key nobody has written. The seeded
+starting value is the only thing that keeps it from firing, which makes the seed
+load-bearing rather than cosmetic wherever `0` is a value the rules act on.
+
 ## Context sources
 
 `context_sources` map a context key to a `Source` that drives it over time,
