@@ -19,12 +19,12 @@ package state
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/config"
+	"github.com/SENERGY-Platform/moses/lib/mongoclient"
 	"github.com/SENERGY-Platform/moses/lib/util"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/bsoncodec"
@@ -73,31 +73,22 @@ type MongoPersistence struct {
 	client                 *mongo.Client
 	worldCollectionName    string
 	templateCollectionName string
-	tableName              string
+	database               string
 }
 
 func NewMongoPersistence(config config.Config) (result MongoPersistence, err error) {
 	result.worldCollectionName = config.WorldCollectionName
 	result.templateCollectionName = config.TemplateCollectionName
-	result.tableName = config.MongoTable
-	//mgo.Dial() accepted urls without a scheme, ApplyURI() rejects them
-	mongoUrl := config.MongoUrl.Value()
-	if !strings.Contains(mongoUrl, "://") {
-		mongoUrl = "mongodb://" + mongoUrl
-	}
-	//server selection may legitimately take longer than a single operation, for example
-	//while a replica set is electing a new primary
-	ctx, cancel := context.WithTimeout(context.Background(), mongoLoadTimeout)
-	defer cancel()
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoUrl).SetRegistry(mongoRegistry).SetMaxPoolSize(mongoMaxPoolSize))
+	result.database = config.MongoDatabase
+	opts, err := mongoclient.Options(config)
 	if err != nil {
-		util.Logger.Error("unable to connect to mongodb", attributes.ErrorKey, err)
 		return result, err
 	}
-	err = client.Ping(ctx, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), mongoLoadTimeout)
+	defer cancel()
+	client, err := mongoclient.Connect(ctx, opts.SetRegistry(mongoRegistry).SetMaxPoolSize(mongoMaxPoolSize), result.database)
 	if err != nil {
-		util.Logger.Error("unable to reach mongodb", attributes.ErrorKey, err)
-		disconnect(client)
+		util.Logger.Error("unable to connect to mongodb", attributes.ErrorKey, err)
 		return result, err
 	}
 	result.client = client
@@ -129,11 +120,11 @@ func newLoadContext() (context.Context, context.CancelFunc) {
 }
 
 func (this MongoPersistence) getWorldCollection() *mongo.Collection {
-	return this.client.Database(this.tableName).Collection(this.worldCollectionName)
+	return this.client.Database(this.database).Collection(this.worldCollectionName)
 }
 
 func (this MongoPersistence) getTemplateCollection() *mongo.Collection {
-	return this.client.Database(this.tableName).Collection(this.templateCollectionName)
+	return this.client.Database(this.database).Collection(this.templateCollectionName)
 }
 
 func (this MongoPersistence) PersistWorld(world World) (err error) {

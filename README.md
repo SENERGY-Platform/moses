@@ -112,12 +112,48 @@ them, and no current client calls them.
 * Publishes and consumes messages via Kafka (through `platform-connector-lib`)
 * Golang library dependencies are managed by the go.mod file
 
+## MongoDB configuration
+
+| Env var | Default (`config.json`) | Notes |
+|---|---|---|
+| `MONGO_URL` | `mongodb://localhost:27017` | Full connection string including the scheme, passed to the driver unchanged. |
+| `MONGO_USER` | empty | No authentication when empty. |
+| `MONGO_PASSWORD` | empty | Required when `MONGO_USER` is set; masked wherever the config is formatted. |
+| `MONGO_AUTH_SOURCE` | `admin` | Database the user is defined in. |
+| `MONGO_DATABASE` | `moses` | Must not be empty. Replaces `MONGO_TABLE`, which is no longer read. |
+
+In `config.json` these are `mongo_url`, `mongo_user`, `mongo_password`,
+`mongo_auth_source` and `mongo_database`. They apply to the service and to
+`tools/migratelegacy` alike.
+
+When `MONGO_USER` is set, the credentials are built from `MONGO_USER`,
+`MONGO_PASSWORD` and `MONGO_AUTH_SOURCE` alone: they replace any user,
+password, `authSource` and `authMechanism` given in `MONGO_URL`. Keep
+credentials out of `MONGO_URL`.
+
+Startup fails on an empty `MONGO_DATABASE`, on `MONGO_USER` without
+`MONGO_PASSWORD`, and unless an authenticated `listCollections` on
+`MONGO_DATABASE` succeeds within 10 seconds (`mongo startup check failed: ...`).
+Both stores (`lib/state` and `lib/repo`) open their own connection with a pool
+of up to 4096 connections each.
+
 ## Tests
 
 * `go test -short ./...` runs the fast unit tests only
 * `go test ./...` additionally runs the integration tests, which start docker
   containers via testcontainers (kafka, mongodb, memcached,
   ghcr.io/senergy-platform/device-repository, ghcr.io/senergy-platform/permissions-v2)
+* `TestStoresAuthenticate` (`lib/mongoclient`) runs only without `-short` and
+  when `MONGO_AUTH_TEST_URL`, `MONGO_AUTH_TEST_USER` and
+  `MONGO_AUTH_TEST_PASSWORD` are set. The user and password are root
+  credentials of a throwaway server with access control; the test creates and
+  removes its own users and databases there:
+
+      docker run -d --rm --name moses-auth-test -p 127.0.0.1:27018:27017 \
+        -e MONGO_INITDB_ROOT_USERNAME=root -e MONGO_INITDB_ROOT_PASSWORD=rootpw mongo:8.2
+      MONGO_AUTH_TEST_URL=mongodb://127.0.0.1:27018 MONGO_AUTH_TEST_USER=root \
+        MONGO_AUTH_TEST_PASSWORD=rootpw go test -run TestStoresAuthenticate ./lib/mongoclient/
+      docker stop moses-auth-test
 
 ## Releases
 

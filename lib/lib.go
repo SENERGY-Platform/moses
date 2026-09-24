@@ -150,12 +150,18 @@ func New(config config.Config, ctx context.Context) (err error) {
 		util.Logger.Error("unable to connect to the database", attributes.ErrorKey, err)
 		return err
 	}
+	//a later startup failure must not leave the connection open; after a
+	//successful start the shutdown goroutine below closes it
+	var cleanup startupCleanup
+	defer func() { cleanup.runIf(err) }()
+	cleanup.add(persistence.Close)
 
 	environments, err := repo.NewMongo(config)
 	if err != nil {
 		util.Logger.Error("unable to connect to the environment store", attributes.ErrorKey, err)
 		return err
 	}
+	cleanup.add(environments.Close)
 
 	util.Logger.Info("loading states from the database")
 	staterepo := &state.StateRepo{Persistence: persistence, Config: config, Connector: connector, StateLogger: logger}
@@ -175,6 +181,7 @@ func New(config config.Config, ctx context.Context) (err error) {
 
 	util.Logger.Info("starting state routines", "skipped_worlds", len(staterepo.SkipWorldIds))
 	staterepo.Start()
+	cleanup.add(func() { staterepo.Stop() })
 
 	util.Logger.Info("starting the environment runtime")
 	environmentRuntime := runtime.New(config, environments, environments.States(), environments.Datasets(), environments.HistoryJobs(), connector, logger)
@@ -183,6 +190,7 @@ func New(config config.Config, ctx context.Context) (err error) {
 		util.Logger.Error("unable to start the environment runtime", attributes.ErrorKey, err)
 		return err
 	}
+	cleanup.add(environmentRuntime.Stop)
 
 	//new model first: only a device that belongs to no environment is offered
 	//to the legacy worlds
@@ -230,6 +238,23 @@ func New(config config.Config, ctx context.Context) (err error) {
 		environments.Close()
 	}()
 	return nil
+}
+
+// startupCleanup undoes the steps of a failed startup in reverse order, so the
+// routines stop before the stores they write to are closed.
+type startupCleanup []func()
+
+func (this *startupCleanup) add(undo func()) {
+	*this = append(*this, undo)
+}
+
+func (this startupCleanup) runIf(err error) {
+	if err == nil {
+		return
+	}
+	for i := len(this) - 1; i >= 0; i-- {
+		this[i]()
+	}
 }
 
 // migratedWorldIds relies on the migration keeping the id of the world it

@@ -102,11 +102,9 @@ func testStore(t *testing.T) *Mongo {
 	if err != nil {
 		t.Fatal(err)
 	}
-	//the url is passed without a scheme on purpose: the legacy config allows it
-	//and the store has to keep tolerating it
 	store, err := NewMongo(config.Config{
-		MongoUrl:                  sb_config_types.Secret(url[len("mongodb://"):]),
-		MongoTable:                fmt.Sprintf("moses_repo_test_%d", databaseCounter.Add(1)),
+		MongoUrl:                  sb_config_types.Secret(url),
+		MongoDatabase:             fmt.Sprintf("moses_repo_test_%d", databaseCounter.Add(1)),
 		EnvironmentCollectionName: "environments",
 		StateCollectionName:       "environment_states",
 		DatasetCollectionName:     "datasets",

@@ -42,8 +42,11 @@ type Config struct {
 	LoggerLevel            string                 `json:"logger_level" env_var:"LOGGER_LEVEL"`     //debug | info | warn | error
 	WorldCollectionName    string                 `json:"world_collection_name" env_var:"WORLD_COLLECTION_NAME"`
 	TemplateCollectionName string                 `json:"template_collection_name" env_var:"TEMPLATE_COLLECTION_NAME"`
-	MongoUrl               sb_config_types.Secret `json:"mongo_url" env_var:"MONGO_URL"` //may embed credentials
-	MongoTable             string                 `json:"mongo_table" env_var:"MONGO_TABLE"`
+	MongoUrl               sb_config_types.Secret `json:"mongo_url" env_var:"MONGO_URL"`   //full connection string with scheme, credentials belong in MongoUser/MongoPassword
+	MongoUser              string                 `json:"mongo_user" env_var:"MONGO_USER"` //empty: no authentication
+	MongoPassword          sb_config_types.Secret `json:"mongo_password" env_var:"MONGO_PASSWORD"`
+	MongoAuthSource        string                 `json:"mongo_auth_source" env_var:"MONGO_AUTH_SOURCE"`
+	MongoDatabase          string                 `json:"mongo_database" env_var:"MONGO_DATABASE"`
 	JsTimeout              time.Duration          `json:"js_timeout" env_var:"JS_TIMEOUT"` //json: nanoseconds, env: duration string ("2s")
 	ProtocolSegmentName    string                 `json:"protocol_segment_name" env_var:"PROTOCOL_SEGMENT_NAME"`
 

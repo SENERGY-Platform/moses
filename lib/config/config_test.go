@@ -312,8 +312,18 @@ func TestLoadConfigLocationLoadsTheShippedConfigJson(t *testing.T) {
 	if config.JsTimeout != 2*time.Second {
 		t.Errorf("JsTimeout: expected 2s from js_timeout=2000000000, got %v", config.JsTimeout)
 	}
-	if config.MongoUrl.Value() != "mongodb://db" {
-		t.Errorf("MongoUrl: expected \"mongodb://db\", got %q", config.MongoUrl.Value())
+	if config.MongoUrl.Value() != "mongodb://localhost:27017" {
+		t.Errorf("MongoUrl: expected \"mongodb://localhost:27017\", got %q", config.MongoUrl.Value())
+	}
+	// the database the service has always used, so the data needs no rename
+	if config.MongoDatabase != "moses" {
+		t.Errorf("MongoDatabase: expected \"moses\", got %q", config.MongoDatabase)
+	}
+	if config.MongoAuthSource != "admin" {
+		t.Errorf("MongoAuthSource: expected \"admin\", got %q", config.MongoAuthSource)
+	}
+	if config.MongoUser != "" || config.MongoPassword.Value() != "" {
+		t.Errorf("expected no mongo credentials in the shipped config, got user %q", config.MongoUser)
 	}
 	if len(config.KafkaTopicConfigs) == 0 {
 		t.Error("KafkaTopicConfigs: expected the shipped topic configs, got none")
@@ -397,8 +407,11 @@ func TestConfigFieldsMapToTheExpectedEnvironmentVariableNames(t *testing.T) {
 		"KafkaUrl":                  "KAFKA_URL",
 		"LoggerHandler":             "LOGGER_HANDLER",
 		"LoggerLevel":               "LOGGER_LEVEL",
-		"MongoTable":                "MONGO_TABLE",
+		"MongoAuthSource":           "MONGO_AUTH_SOURCE",
+		"MongoDatabase":             "MONGO_DATABASE",
+		"MongoPassword":             "MONGO_PASSWORD",
 		"MongoUrl":                  "MONGO_URL",
+		"MongoUser":                 "MONGO_USER",
 		"NotificationUrl":           "NOTIFICATION_URL",
 		"PermissionsV2Url":          "PERMISSIONS_V2_URL",
 		"PostgresDb":                "POSTGRES_DB",
@@ -456,7 +469,11 @@ func TestTheVariablesSetByTheDeploymentArriveInTheConfig(t *testing.T) {
 	neutralizeConfigEnv(t)
 	location := writeConfigFile(t, `{"server_port": "8080"}`)
 
-	t.Setenv("MONGO_URL", "mongodb://user:pw@mongo-0.mongo:27017/?replicaSet=rs0")
+	t.Setenv("MONGO_URL", "mongodb://mongo-0.mongo:27017/?replicaSet=rs0")
+	t.Setenv("MONGO_USER", "moses")
+	t.Setenv("MONGO_PASSWORD", "mongo-password-fixture")
+	t.Setenv("MONGO_AUTH_SOURCE", "admin")
+	t.Setenv("MONGO_DATABASE", "moses")
 	t.Setenv("KAFKA_URL", "kafka.kafka:9092")
 	t.Setenv("AUTH_ENDPOINT", "http://keycloak.keycloak:8080")
 	t.Setenv("AUTH_CLIENT_ID", "moses")
@@ -480,8 +497,26 @@ func TestTheVariablesSetByTheDeploymentArriveInTheConfig(t *testing.T) {
 		t.Fatalf("expected the deployment variables to load, got %v", err)
 	}
 
-	if config.MongoUrl.Value() != "mongodb://user:pw@mongo-0.mongo:27017/?replicaSet=rs0" {
+	if config.MongoUrl.Value() != "mongodb://mongo-0.mongo:27017/?replicaSet=rs0" {
 		t.Errorf("MongoUrl: got %q", config.MongoUrl.Value())
+	}
+	if config.MongoUser != "moses" {
+		t.Errorf("MongoUser: got %q", config.MongoUser)
+	}
+	if config.MongoPassword.Value() != "mongo-password-fixture" {
+		t.Errorf("MongoPassword: got %q", config.MongoPassword.Value())
+	}
+	if config.MongoAuthSource != "admin" {
+		t.Errorf("MongoAuthSource: got %q", config.MongoAuthSource)
+	}
+	if config.MongoDatabase != "moses" {
+		t.Errorf("MongoDatabase: got %q", config.MongoDatabase)
+	}
+	if rendered := fmt.Sprintf("%+v", config); strings.Contains(rendered, "mongo-password-fixture") {
+		t.Errorf("the mongo password leaked into %q", rendered)
+	}
+	if marshalled, err := json.Marshal(config); err != nil || strings.Contains(string(marshalled), "mongo-password-fixture") {
+		t.Errorf("the mongo password leaked into the json config (err %v)", err)
 	}
 	if config.KafkaUrl != "kafka.kafka:9092" {
 		t.Errorf("KafkaUrl: got %q", config.KafkaUrl)
@@ -535,6 +570,23 @@ func TestTheVariablesSetByTheDeploymentArriveInTheConfig(t *testing.T) {
 	}
 	if config.NotificationUrl != "http://notifications.notifications:8080" {
 		t.Errorf("NotificationUrl: got %q", config.NotificationUrl)
+	}
+}
+
+// MONGO_TABLE was renamed to MONGO_DATABASE without a fallback: a deployment
+// still setting the old name gets the database of the file.
+func TestTheRemovedMongoTableVariableIsIgnored(t *testing.T) {
+	neutralizeConfigEnv(t)
+	unsetEnv(t, "MONGO_TABLE")
+	location := writeConfigFile(t, `{"mongo_database": "moses"}`)
+	t.Setenv("MONGO_TABLE", "other")
+
+	config, err := LoadConfigLocation(location)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if config.MongoDatabase != "moses" {
+		t.Errorf("MongoDatabase: expected the file value \"moses\", got %q", config.MongoDatabase)
 	}
 }
 
@@ -1045,7 +1097,7 @@ func TestTheSecretTypedFieldsOfConfigAreTheExpectedOnes(t *testing.T) {
 			actual = append(actual, configType.Field(index).Name)
 		}
 	}
-	expected := []string{"MongoUrl", "AuthClientSecret", "JwtPrivateKey", "PostgresUser", "PostgresPw"}
+	expected := []string{"MongoUrl", "MongoPassword", "AuthClientSecret", "JwtPrivateKey", "PostgresUser", "PostgresPw"}
 	if !reflect.DeepEqual(actual, expected) {
 		t.Errorf("expected secret fields %v, got %v", expected, actual)
 	}

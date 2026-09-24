@@ -27,6 +27,7 @@ import (
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/config"
 	"github.com/SENERGY-Platform/moses/lib/domain"
+	"github.com/SENERGY-Platform/moses/lib/mongoclient"
 	"github.com/SENERGY-Platform/moses/lib/util"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/bsoncodec"
@@ -105,7 +106,7 @@ func (this *Mongo) States() *MongoStates {
 // NewMongo connects, checks the connection and ensures the indexes exist.
 func NewMongo(config config.Config) (result *Mongo, err error) {
 	result = &Mongo{
-		database:                  config.MongoTable,
+		database:                  config.MongoDatabase,
 		environmentCollectionName: config.EnvironmentCollectionName,
 		stateCollectionName:       config.StateCollectionName,
 		datasetCollectionName:     config.DatasetCollectionName,
@@ -124,24 +125,15 @@ func NewMongo(config config.Config) (result *Mongo, err error) {
 	if result.environmentCollectionName == "" || result.stateCollectionName == "" || result.datasetCollectionName == "" {
 		return nil, errors.New("environment_collection_name, state_collection_name and dataset_collection_name must be configured")
 	}
-	//the legacy config allowed urls without a scheme, ApplyURI() rejects them
-	mongoUrl := config.MongoUrl.Value()
-	if !strings.Contains(mongoUrl, "://") {
-		mongoUrl = "mongodb://" + mongoUrl
-	}
-	//server selection may legitimately take longer than a single operation, for
-	//example while a replica set is electing a new primary
-	ctx, cancel := newLoadContext()
-	defer cancel()
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoUrl).SetRegistry(mongoRegistry).SetMaxPoolSize(mongoMaxPoolSize))
+	opts, err := mongoclient.Options(config)
 	if err != nil {
-		util.Logger.Error("unable to connect to mongodb", attributes.ErrorKey, err)
 		return nil, err
 	}
-	err = client.Ping(ctx, nil)
+	ctx, cancel := newLoadContext()
+	defer cancel()
+	client, err := mongoclient.Connect(ctx, opts.SetRegistry(mongoRegistry).SetMaxPoolSize(mongoMaxPoolSize), result.database)
 	if err != nil {
-		util.Logger.Error("unable to reach mongodb", attributes.ErrorKey, err)
-		disconnect(client)
+		util.Logger.Error("unable to connect to mongodb", attributes.ErrorKey, err)
 		return nil, err
 	}
 	result.client = client

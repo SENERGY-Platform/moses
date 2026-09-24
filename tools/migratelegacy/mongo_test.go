@@ -101,7 +101,7 @@ func testConfig(t *testing.T) config.Config {
 	}
 	return config.Config{
 		MongoUrl:                  sb_config_types.Secret(url),
-		MongoTable:                fmt.Sprintf("moses_migration_test_%d", databaseCounter.Add(1)),
+		MongoDatabase:             fmt.Sprintf("moses_migration_test_%d", databaseCounter.Add(1)),
 		WorldCollectionName:       "worlds",
 		TemplateCollectionName:    "templates",
 		EnvironmentCollectionName: "environments",
