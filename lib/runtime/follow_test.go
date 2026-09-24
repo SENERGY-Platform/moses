@@ -1169,3 +1169,64 @@ func TestASourceThatIsAlreadyStaleAtStartIsReportedAtOnce(t *testing.T) {
 		t.Errorf("the stale line was written %d times after the first refresh, want exactly one", got)
 	}
 }
+
+// TestAFollowerWhoseInitialLoadKeepsFailingWarnsOnlyOnce: the probe for a
+// source whose initial load failed used to warn on every tick regardless of
+// error - a deleted export left one WARN line per follow_every for as long as
+// the environment ran. It is now throttled the same way the fallback probe
+// already was.
+func TestAFollowerWhoseInitialLoadKeepsFailingWarnsOnlyOnce(t *testing.T) {
+	bypassTheFollowTickFloor(t)
+	const id = "env-follow-probe-stuck"
+	const message = "unable to load a following dataset source whose initial load failed"
+	fetcher := &fakeFetcher{pointsFunc: func(index int, start time.Time, end time.Time) ([]dataset.Point, error) {
+		return nil, errors.New("the wrapper is unavailable")
+	}}
+	log := recordLog(t)
+	env := testEnvironment(id, followingChannel(id, "20ms"))
+	env.Owner = "owner-follow"
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), nil, newFakeHistoryJobs(), &fakePublisher{})
+	rt.fetcher = fetcher
+	rt.ownerToken = func(userId string) (string, error) { return "Bearer token-for-" + userId, nil }
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := rt.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(rt.Stop)
+
+	if !waitFor(3*time.Second, func() bool { return fetcher.callCount() >= 5 }) {
+		t.Fatalf("the follow loop never probed repeatedly, got %d fetch calls", fetcher.callCount())
+	}
+	if got := log.count(message); got != 1 {
+		t.Errorf("a probe that keeps failing was reported %d times, want exactly one", got)
+	}
+}
+
+// TestAProbeFailureIsReportedOnceAndOnRecovery: probeFailed/probeRecovered is
+// the mechanism loadMissingFollower and loadMissingFallback now share, so it
+// is worth pinning on its own - one WARN while a probe keeps failing, one INFO
+// when it next succeeds, and a WARN again for a later failure.
+func TestAProbeFailureIsReportedOnceAndOnRecovery(t *testing.T) {
+	log := recordLog(t)
+	const warnMsg = "probe trouble"
+	const envId = "env-probe"
+	f := &resolvedFollower{followSource: followSource{label: "ch-x"}}
+
+	for i := 0; i < 3; i++ {
+		f.probeFailed(warnMsg, errors.New("boom"), envId)
+	}
+	if got := log.count(warnMsg); got != 1 {
+		t.Errorf("three failed probes were reported %d times, want exactly one", got)
+	}
+
+	f.probeRecovered(envId)
+	if got := log.count("a following dataset source is answering again"); got != 1 {
+		t.Errorf("the recovery was reported %d times, want exactly one", got)
+	}
+
+	f.probeFailed(warnMsg, errors.New("boom again"), envId)
+	if got := log.count(warnMsg); got != 2 {
+		t.Errorf("a new failure after recovery was reported %d times in total, want two", got)
+	}
+}

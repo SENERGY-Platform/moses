@@ -147,8 +147,9 @@ type resolvedFollower struct {
 	// so a source whose upstream is gone costs one line and not one per tick.
 	emptyRefreshes int
 	staleWarned    bool
-	// probeWarned says the recovery probe has reported that the source answers
-	// fewer than two points, so a source that never fills does not log per tick
+	// probeWarned says a probe of a source with no stored points - its own
+	// initial load, or its fallback's - has already reported a failure, so a
+	// source that never fills does not log per tick.
 	probeWarned bool
 }
 
@@ -176,6 +177,29 @@ func (this *resolvedFollower) delivered(envId string) {
 	}
 	this.staleWarned = false
 	util.Logger.Info("a following dataset source is delivering again",
+		append([]any{"environment", envId}, this.attributes()...)...)
+}
+
+// probeFailed reports one failed probe of a source with no stored points,
+// throttled to one line until the probe succeeds - shared by a source's own
+// initial load and its fallback's, so neither logs per tick while its upstream
+// stays gone.
+func (this *resolvedFollower) probeFailed(msg string, err error, envId string) {
+	if this.probeWarned {
+		return
+	}
+	this.probeWarned = true
+	this.warn(msg, err, envId)
+}
+
+// probeRecovered clears that bookkeeping, and says the probe succeeds again if
+// it had been reported failing.
+func (this *resolvedFollower) probeRecovered(envId string) {
+	if !this.probeWarned {
+		return
+	}
+	this.probeWarned = false
+	util.Logger.Info("a following dataset source is answering again",
 		append([]any{"environment", envId}, this.attributes()...)...)
 }
 
@@ -491,7 +515,7 @@ func (this *Runtime) loadMissingFollower(ctx context.Context, env *environment, 
 		if followAbandoned(ctx, env, err) {
 			return false
 		}
-		f.warn("unable to load a following dataset source whose initial load failed, it is retried at the next tick", err, gen.def.Id)
+		f.probeFailed("unable to load a following dataset source whose initial load failed, it is retried at the next tick", err, gen.def.Id)
 		return false
 	}
 	//fetchRemoteSeries refuses fewer than two points, so a probe that answers
@@ -499,14 +523,11 @@ func (this *Runtime) loadMissingFollower(ctx context.Context, env *environment, 
 	//bindable. A context source needs no binding but the same reload: nothing
 	//else puts the points into a generation any more.
 	if len(fresh) < 2 {
-		if !f.probeWarned {
-			f.probeWarned = true
-			f.warn("a following dataset source whose initial load failed answers fewer than two points, it is probed again at each tick",
-				fmt.Errorf("%d points in the replay window", len(fresh)), gen.def.Id)
-		}
+		f.probeFailed("a following dataset source whose initial load failed answers fewer than two points, it is probed again at each tick",
+			fmt.Errorf("%d points in the replay window", len(fresh)), gen.def.Id)
 		return false
 	}
-	f.probeWarned = false
+	f.probeRecovered(gen.def.Id)
 	env.mux.Lock()
 	defer env.mux.Unlock()
 	return !env.underHistory && !env.removed && len(f.stored(gen)) == 0
@@ -529,15 +550,12 @@ func (this *Runtime) loadMissingFallback(ctx context.Context, env *environment, 
 		if followAbandoned(ctx, env, err) {
 			return
 		}
-		if !f.probeWarned {
-			f.probeWarned = true
-			//fetchRemoteSeries refuses fewer than two points, so a substitute
-			//whose rows are simply not there arrives here as an error too
-			f.warn("unable to load the fallback series of a following dataset source, the gaps of that source stay open until it answers again", err, gen.def.Id)
-		}
+		//fetchRemoteSeries refuses fewer than two points, so a substitute
+		//whose rows are simply not there arrives here as an error too
+		f.probeFailed("unable to load the fallback series of a following dataset source, the gaps of that source stay open until it answers again", err, gen.def.Id)
 		return
 	}
-	f.probeWarned = false
+	f.probeRecovered(gen.def.Id)
 	env.mux.Lock()
 	defer env.mux.Unlock()
 	if env.underHistory || env.removed {

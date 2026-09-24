@@ -229,9 +229,15 @@ func resample(mode domain.ResampleMode, points []dataset.Point, virtual int64, t
 		return p.Value + fraction*(n.Value-p.Value)
 	case domain.ResampleDistribute:
 		//the sample at a point is the quantity of [point, next point); a tick
-		//gets its share, so summing the ticks of a slot yields the sample
+		//gets its share, so summing the ticks of a slot yields the sample. Points
+		//sharing one whole-second instant are the same sample measured twice, so
+		//their values are summed into it rather than left to open a slot of zero
+		//width - that is what keeps the total the series carries.
 		slot := slotSeconds(points, previous)
-		return points[previous].Value * float64(tickSeconds) / float64(slot)
+		if slot == 0 {
+			return 0 //every point of the series shares one instant, nothing to distribute over
+		}
+		return sumRun(points, previous) * float64(tickSeconds) / float64(slot)
 	default: //hold
 		return points[previous].Value
 	}
@@ -276,12 +282,38 @@ func followHoldSeconds(source domain.DatasetSource) int64 {
 
 // slotSeconds is the length of the interval a sample covers: the distance to
 // the next point, or for the last point the distance to the previous one,
-// because a last slot has no end of its own.
+// because a last slot has no end of its own. Points sharing one whole-second
+// instant open no interval among themselves, so the slot is measured from the
+// start of that run rather than between two points at the same second.
 func slotSeconds(points []dataset.Point, index int) int64 {
+	runStart := runStartOf(points, index)
 	if index+1 < len(points) {
-		return points[index+1].Unix - points[index].Unix
+		return points[index+1].Unix - points[runStart].Unix
 	}
-	return points[index].Unix - points[index-1].Unix
+	if runStart == 0 {
+		return 0 //every point of the series shares one instant, there is no run before it
+	}
+	return points[runStart].Unix - points[runStart-1].Unix
+}
+
+// runStartOf is the first index of the run of points sharing points[index]'s
+// instant: a duplicate whole-second timestamp is the same measurement seen
+// twice, not a second point opening its own slot.
+func runStartOf(points []dataset.Point, index int) int {
+	for index > 0 && points[index-1].Unix == points[index].Unix {
+		index--
+	}
+	return index
+}
+
+// sumRun adds the values of the points sharing points[index]'s instant - what
+// slotSeconds treats as one point's boundary, distribute reads as one sample.
+func sumRun(points []dataset.Point, index int) float64 {
+	sum := 0.0
+	for i := runStartOf(points, index); i <= index; i++ {
+		sum += points[i].Value
+	}
+	return sum
 }
 
 // reportGap warns that a source stands in a gap it will not bridge, once per gap
