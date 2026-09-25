@@ -27,7 +27,9 @@ import (
 	deviceRepo "github.com/SENERGY-Platform/device-repository/lib/client"
 	"github.com/SENERGY-Platform/moses/lib/domain"
 	"github.com/SENERGY-Platform/moses/lib/graphs"
+	"github.com/SENERGY-Platform/moses/lib/test/helper"
 	"github.com/SENERGY-Platform/moses/lib/test/server"
+	permClient "github.com/SENERGY-Platform/permissions-v2/pkg/client"
 )
 
 // TestEnvironmentGraphRoundtrip runs the mapping against the real
@@ -50,7 +52,7 @@ func TestEnvironmentGraphRoundtrip(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	repoUrl, err := startDeviceRepo(ctx, wg)
+	repoUrl, permissionsUrl, err := startDeviceRepo(ctx, wg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,6 +126,48 @@ func TestEnvironmentGraphRoundtrip(t *testing.T) {
 		}
 	})
 
+	//a share with graph_writers adds write to an entry on the graph; the next
+	//save of the environment must leave that entry and replace the writer's edit
+	t.Run("a graph writer keeps write across a rewrite and loses the edit", func(t *testing.T) {
+		const writer = "8a1e5b0a-0000-4000-8000-000000000002"
+		permissions := permClient.New(permissionsUrl)
+		resource, err, code := permissions.GetResource(string(helper.AdminJwt), "graphs", created.Id)
+		if err != nil {
+			t.Fatalf("unable to read the rights of the graph (%d): %v", code, err)
+		}
+		rights := resource.ResourcePermissions
+		rights.UserPermissions[writer] = permClient.PermissionsMap{Read: true, Write: true, Execute: true}
+		if _, err, code = permissions.SetPermission(string(helper.AdminJwt), "graphs", created.Id, rights); err != nil {
+			t.Fatalf("unable to give the writer write (%d): %v", code, err)
+		}
+
+		edited := env
+		edited.Name = "edited by the graph writer"
+		if _, err, code := client.SetGraph(userToken(writer), graphs.Build(edited)); err != nil {
+			t.Fatalf("write on the graph has to be enough to edit it (%d): %v", code, err)
+		}
+		if got := rootName(t, client, token, created.Id); got != edited.Name {
+			t.Fatalf("expected the writer's edit to be stored, got %q", got)
+		}
+		if _, err, code := client.SetGraph(token, graphs.Build(env)); err != nil {
+			t.Fatalf("the owner's rewrite was refused (%d): %v", code, err)
+		}
+
+		after, err, code := permissions.GetResource(string(helper.AdminJwt), "graphs", created.Id)
+		if err != nil {
+			t.Fatalf("unable to read the rights after the rewrite (%d): %v", code, err)
+		}
+		if got := after.UserPermissions[writer]; !got.Read || !got.Write || !got.Execute {
+			t.Errorf("the rewrite must leave the writer's entry as it was, got %+v", got)
+		}
+		if got := after.UserPermissions[user]; !got.Administrate {
+			t.Errorf("the owner has to keep administrate, got %+v", got)
+		}
+		if got := rootName(t, client, token, created.Id); got != env.Name {
+			t.Errorf("the rewrite has to replace the writer's edit, got %q", got)
+		}
+	})
+
 	//and the delete, which is what an environment's delete does
 	if err, code := client.DeleteGraph(token, created.Id); err != nil {
 		t.Fatalf("unable to delete the graph (%d): %v", code, err)
@@ -140,25 +184,45 @@ func TestEnvironmentGraphRoundtrip(t *testing.T) {
 
 // startDeviceRepo brings up only what the graph api needs. The full server.New
 // starts moses as well, which this test has no use for.
-func startDeviceRepo(ctx context.Context, wg *sync.WaitGroup) (url string, err error) {
+func startDeviceRepo(ctx context.Context, wg *sync.WaitGroup) (url string, permissionsUrl string, err error) {
 	_, containerKafkaUrl, err := server.Kafka(ctx, wg)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	_, mongoIp, err := server.MongoDB(ctx, wg)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	containerMongoUrl := "mongodb://" + mongoIp + ":27017"
-	_, permV2Ip, err := server.PermissionsV2(ctx, wg, containerMongoUrl, containerKafkaUrl)
+	permV2HostPort, permV2Ip, err := server.PermissionsV2(ctx, wg, containerMongoUrl, containerKafkaUrl)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	repoHostPort, _, err := server.DeviceRepo(ctx, wg, containerKafkaUrl, containerMongoUrl, "http://"+permV2Ip+":8080")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return "http://localhost:" + repoHostPort, nil
+	return "http://localhost:" + repoHostPort, "http://localhost:" + permV2HostPort, nil
+}
+
+// rootName is the display name of a graph, the name attribute of its root node.
+func rootName(t *testing.T, client deviceRepo.Interface, token string, id string) string {
+	t.Helper()
+	read, err, code := client.ReadGraph(token, id)
+	if err != nil {
+		t.Fatalf("unable to read the graph (%d): %v", code, err)
+	}
+	for _, node := range read.Nodes {
+		if node.Id != graphs.RootNodeId {
+			continue
+		}
+		for _, attribute := range node.Attributes {
+			if attribute.Key == graphs.NameAttribute {
+				return attribute.Value
+			}
+		}
+	}
+	return ""
 }
 
 // userToken is a token for a plain user. The shared AdminJwt carries the admin

@@ -30,6 +30,10 @@ type ShareSet struct {
 	Users         []string `json:"users" bson:"users"`
 	Groups        []string `json:"groups" bson:"groups"`
 
+	// GraphWriters is the part of Users and Groups that also holds write on the
+	// graph. A set stored before the field existed decodes it as empty.
+	GraphWriters Principals `json:"graph_writers" bson:"graph_writers"`
+
 	// Version is the compare-and-swap counter of this set: Load hands out the
 	// stored one and Save writes only while it still matches, so two shares of
 	// one environment cannot both think they replaced the other's set. Zero
@@ -38,6 +42,12 @@ type ShareSet struct {
 
 	// Set by the store, not by callers.
 	UpdatedAtUnix int64 `json:"updated_at_unix" bson:"updated_at_unix"`
+}
+
+// Principals are user ids and group paths.
+type Principals struct {
+	Users  []string `json:"users" bson:"users"`
+	Groups []string `json:"groups" bson:"groups"`
 }
 
 // Empty reports whether the set grants nothing.

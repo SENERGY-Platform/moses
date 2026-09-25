@@ -1009,7 +1009,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "The stored set, plus the number of managed devices it acts on and whether the graph of this environment is shared along with them. Only devices moses created for the assets of this environment count; a device attached by the caller is never shared, because moses does not own it.\n\nAfter a failed share the set stands at the union of what was stored and what was asked for, which is what the next call needs to withdraw the devices that did go through.",
+                "description": "The stored set including ` + "`" + `graph_writers` + "`" + `, plus the number of managed devices it acts on and whether the graph of this environment is shared along with them. A set stored before ` + "`" + `graph_writers` + "`" + ` existed serves it as empty lists. Only devices moses created for the assets of this environment count; a device attached by the caller is never shared, because moses does not own it.\n\nAfter a failed share the set stands at the union of what was stored and what was asked for, which is what the next call needs to withdraw the devices that did go through.",
                 "produces": [
                     "application/json"
                 ],
@@ -1059,7 +1059,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "Replaces the set: everyone named gets ` + "`" + `read` + "`" + ` and ` + "`" + `execute` + "`" + ` on every device moses created for this environment and on the graph it is mirrored as, everyone who was in the stored set and is not named any more loses their entry. The rights are fixed and the environment document itself is not shared — it stays with its owner and the platform administrators.\n\nA device attached to an asset by the caller is never touched, since moses does not own it. An environment whose graph was never mirrored has none to share and is not treated as an error. An entry carrying ` + "`" + `administrate` + "`" + ` is never changed or removed, which is what keeps the owner and the administrators out of the set. ` + "`" + `write` + "`" + ` an entry already had stays as it is while it is shared, and goes with the entry when the share is withdrawn.\n\nApplied resource by resource with the caller's own token, so the platform's own rule decides who may be named: a caller without the ` + "`" + `admin` + "`" + ` role may share with groups they are a member of and with users who share a group with them. Such a refusal comes back per resource, and when every failure of a call is one of them the answer is a ` + "`" + `400` + "`" + ` with that list; a ` + "`" + `502` + "`" + ` means at least one failure was not the caller's fault.\n\nBefore anything is written, the union of the stored and the requested set is recorded; the requested set replaces it once every resource went through. If a resource fails, the union stands — so the next call, with any set, withdraws what the failed one managed to grant. The whole application is bounded at eight seconds: a very large environment can run out of it, reports the resources it did not reach as failures and needs a second call.\n\nAssets added to the environment later inherit the stored set when their device is created, so a share does not have to be renewed after an edit.",
+                "description": "Replaces the set: everyone named gets ` + "`" + `read` + "`" + ` and ` + "`" + `execute` + "`" + ` on every device moses created for this environment and on the graph it is mirrored as, everyone who was in the stored set and is not named any more loses their entry. The environment document itself is not shared — it stays with its owner and the platform administrators.\n\n` + "`" + `graph_writers` + "`" + ` names the part of ` + "`" + `users` + "`" + ` and ` + "`" + `groups` + "`" + ` that also gets ` + "`" + `write` + "`" + ` on the graph, never on a device. Sent as an object, ` + "`" + `{}` + "`" + ` included, it replaces the stored graph writers, and an entry not named in ` + "`" + `users` + "`" + ` or ` + "`" + `groups` + "`" + ` is refused with ` + "`" + `400` + "`" + `. Absent or ` + "`" + `null` + "`" + ` it keeps the stored graph writers that are still shared, and is never refused. Every call sets ` + "`" + `write` + "`" + ` on the graph for every account in the stored or the requested set - on for the graph writers, off for the others - so a ` + "`" + `write` + "`" + ` nothing records does not outlive the next call; accounts outside the set and entries carrying ` + "`" + `administrate` + "`" + ` are not touched. Graph writers do not count again towards the limit of 100, since they are shared accounts already. The graph is rebuilt from the environment on every save, so an edit by a graph writer lasts until the next save.\n\nA device attached to an asset by the caller is never touched, since moses does not own it. An environment whose graph was never mirrored has none to share and is not treated as an error. An entry carrying ` + "`" + `administrate` + "`" + ` is never changed or removed, which is what keeps the owner and the administrators out of the set. On a device, ` + "`" + `write` + "`" + ` an entry already had stays as it is while it is shared, and goes with the entry when the share is withdrawn.\n\nApplied resource by resource with the caller's own token, so the platform's own rule decides who may be named: a caller without the ` + "`" + `admin` + "`" + ` role may share with groups they are a member of and with users who share a group with them. Such a refusal comes back per resource, and when every failure of a call is one of them the answer is a ` + "`" + `400` + "`" + ` with that list; a ` + "`" + `502` + "`" + ` means at least one failure was not the caller's fault.\n\nBefore anything is written, the union of the stored and the requested set is recorded; the requested set replaces it once every resource went through. If a resource fails, the union stands — so the next call, with any set, withdraws what the failed one managed to grant. The whole application is bounded at eight seconds: a very large environment can run out of it, reports the resources it did not reach as failures and needs a second call.\n\nAssets added to the environment later inherit the stored set when their device is created, so a share does not have to be renewed after an edit.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1079,12 +1079,12 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "description": "the accounts to share with; users are keycloak user ids, groups are group paths with a leading slash",
+                        "description": "the accounts to share with; users are keycloak user ids, groups are group paths with a leading slash, graph_writers a subset of both, or absent to keep the stored ones",
                         "name": "shares",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/api.ShareTargets"
+                            "$ref": "#/definitions/api.ShareRequest"
                         }
                     }
                 ],
@@ -1096,7 +1096,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "either the request itself is refused - unreadable or too large body, an empty user id, a group that is not a path, an entry beyond 256 characters, or a set that would carry more than 100 accounts - and then the answer is a plain message, or every resource refused the caller and then it is the list",
+                        "description": "either the request itself is refused - unreadable or too large body, an empty user id, a group that is not a path, an entry beyond 256 characters, a graph writer sent that is not shared with, or a set that would carry more than 100 accounts - and then the answer is a plain message, or every resource refused the caller and then it is the list",
                         "schema": {
                             "$ref": "#/definitions/api.ShareFailures"
                         }
@@ -1370,6 +1370,31 @@ const docTemplate = `{
                 }
             }
         },
+        "api.ShareRequest": {
+            "type": "object",
+            "properties": {
+                "graph_writers": {
+                    "description": "GraphWriters also get write on the graph, and nothing more on the devices.\nAn object replaces them and has to be a subset of users and groups; absent\nor null keeps the stored ones that are still shared, so a client that does\nnot know the field cannot take write away.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/api.ShareTargets"
+                        }
+                    ]
+                },
+                "groups": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "users": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "api.ShareTargets": {
             "type": "object",
             "properties": {
@@ -1398,6 +1423,14 @@ const docTemplate = `{
                     "description": "Graph says whether the graph this environment is mirrored as is shared\nalong with the devices. False for an environment that has none, which is\none whose mirror never succeeded.",
                     "type": "boolean",
                     "example": true
+                },
+                "graph_writers": {
+                    "description": "GraphWriters is the part of users and groups that also holds write on the graph.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/api.ShareTargets"
+                        }
+                    ]
                 },
                 "groups": {
                     "type": "array",

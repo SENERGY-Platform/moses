@@ -19,6 +19,8 @@ package repo
 import (
 	"errors"
 	"testing"
+
+	"go.mongodb.org/mongo-driver/bson"
 )
 
 func TestSharesRoundTripAndReplace(t *testing.T) {
@@ -65,6 +67,79 @@ func TestSharesRoundTripAndReplace(t *testing.T) {
 	}
 	if len(stored.Users) != 1 || stored.Users[0] != "other-user" {
 		t.Errorf("the write has to replace the set, got %+v", stored)
+	}
+}
+
+func TestGraphWritersRoundTripWithTheSet(t *testing.T) {
+	store := testStore(t)
+	ctx := testContext(t)
+	shares := store.Shares()
+
+	set := ShareSet{EnvironmentId: "env-1", Users: []string{"demo-user", "other-user"}, Groups: []string{"/demo"},
+		GraphWriters: Principals{Users: []string{"demo-user"}, Groups: []string{"/demo"}}}
+	version, err := shares.Save(ctx, set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := shares.Load(ctx, "env-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stored.GraphWriters; len(got.Users) != 1 || got.Users[0] != "demo-user" || len(got.Groups) != 1 || got.Groups[0] != "/demo" {
+		t.Errorf("the graph writers did not survive: %+v", got)
+	}
+
+	//a replace without writers takes them away, it does not merge
+	set.GraphWriters = Principals{}
+	set.Version = version
+	if _, err = shares.Save(ctx, set); err != nil {
+		t.Fatal(err)
+	}
+	if stored, err = shares.Load(ctx, "env-1"); err != nil {
+		t.Fatal(err)
+	}
+	if stored.GraphWriters.Users == nil || stored.GraphWriters.Groups == nil ||
+		len(stored.GraphWriters.Users) != 0 || len(stored.GraphWriters.Groups) != 0 {
+		t.Errorf("expected empty, non-nil writer lists after the replace, got %+v", stored.GraphWriters)
+	}
+}
+
+// A set stored before graph_writers existed has no such field, and must read as
+// a set without writers that the compare-and-swap still accepts.
+func TestASetStoredWithoutGraphWritersReadsAsNone(t *testing.T) {
+	store := testStore(t)
+	ctx := testContext(t)
+	shares := store.Shares()
+
+	legacy := bson.M{"environment_id": "env-legacy", "users": []string{"demo-user"}, "groups": []string{}, "version": int64(3), "updated_at_unix": int64(1)}
+	if _, err := store.shareCollection().InsertOne(ctx, legacy); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := shares.Load(ctx, "env-legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Version != 3 || len(stored.Users) != 1 {
+		t.Fatalf("the legacy set has to read as it was stored, got %+v", stored)
+	}
+	if stored.GraphWriters.Users == nil || stored.GraphWriters.Groups == nil ||
+		len(stored.GraphWriters.Users) != 0 || len(stored.GraphWriters.Groups) != 0 {
+		t.Errorf("a set without the field has to read as no writers, as empty lists, got %+v", stored.GraphWriters)
+	}
+
+	stored.GraphWriters = Principals{Users: []string{"demo-user"}, Groups: []string{}}
+	version, err := shares.Save(ctx, stored)
+	if err != nil {
+		t.Fatalf("the legacy set has to be writable at the version it was read at: %v", err)
+	}
+	if version != 4 {
+		t.Errorf("expected version 4, got %d", version)
+	}
+	if stored, err = shares.Load(ctx, "env-legacy"); err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.GraphWriters.Users) != 1 || stored.GraphWriters.Users[0] != "demo-user" {
+		t.Errorf("expected the writer to be stored, got %+v", stored.GraphWriters)
 	}
 }
 

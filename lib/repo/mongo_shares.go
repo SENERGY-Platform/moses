@@ -62,11 +62,18 @@ func (this *MongoShares) Load(ctx context.Context, environmentId string) (result
 	if result.Groups == nil {
 		result.Groups = []string{}
 	}
+	if result.GraphWriters.Users == nil {
+		result.GraphWriters.Users = []string{}
+	}
+	if result.GraphWriters.Groups == nil {
+		result.GraphWriters.Groups = []string{}
+	}
 	return result, nil
 }
 
 func emptyShareSet(environmentId string) ShareSet {
-	return ShareSet{EnvironmentId: environmentId, Users: []string{}, Groups: []string{}}
+	return ShareSet{EnvironmentId: environmentId, Users: []string{}, Groups: []string{},
+		GraphWriters: Principals{Users: []string{}, Groups: []string{}}}
 }
 
 // Save is a compare-and-swap, and the comparison is the filter of the write

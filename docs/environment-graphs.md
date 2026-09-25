@@ -72,7 +72,8 @@ everything it has to that one parent; the weight stays 100 either way.
 The graph is rebuilt from the environment on every save and written in full. A
 node moved, renamed or removed by hand in a graph editor does not survive the
 next save - two editable representations of one site would otherwise drift,
-with no rule to decide which one is right.
+with no rule to decide which one is right. That includes the edits of a graph writer
+(`docs/sharing.md`); the rights on the graph survive the rewrite.
 
 ## Who owns which graph
 

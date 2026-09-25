@@ -169,6 +169,18 @@ func (this *fakeShares) set(environmentId string, users []string, groups []strin
 	this.stored[environmentId] = repo.ShareSet{EnvironmentId: environmentId, Users: users, Groups: groups, Version: 1}
 }
 
+func (this *fakeShares) setWithWriters(environmentId string, users []string, groups []string, writers repo.Principals) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	this.stored[environmentId] = repo.ShareSet{EnvironmentId: environmentId, Users: users, Groups: groups, GraphWriters: writers, Version: 1}
+}
+
+func (this *fakeShares) writers(environmentId string) repo.Principals {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	return this.stored[environmentId].GraphWriters
+}
+
 func (this *fakeShares) users(environmentId string) []string {
 	this.mux.Lock()
 	defer this.mux.Unlock()
@@ -1718,5 +1730,508 @@ func TestTheLeftoverSetIsDroppedBeforeAnyDeviceIsCreated(t *testing.T) {
 	}
 	if creationsAtDelete != 0 {
 		t.Errorf("a create has to drop it before provisioning too, %d were there", creationsAtDelete)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Graph writers
+// ---------------------------------------------------------------------------
+
+const testGraph = "urn:infai:ses:graph:1"
+
+// graphRights seeds an entry on the graph, the way an earlier share left it.
+func (this *fakePermissions) graphRights(user string, rights permModel.PermissionsMap) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	stored := this.rights[permKey(graphsTopic, testGraph)]
+	stored.UserPermissions[user] = rights
+	this.rights[permKey(graphsTopic, testGraph)] = stored
+}
+
+func (this *fakePermissions) graphGroup(group string, rights permModel.PermissionsMap) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	stored := this.rights[permKey(graphsTopic, testGraph)]
+	if stored.GroupPermissions == nil {
+		stored.GroupPermissions = map[string]permModel.PermissionsMap{}
+	}
+	stored.GroupPermissions[group] = rights
+	this.rights[permKey(graphsTopic, testGraph)] = stored
+}
+
+func (this *fakePermissions) graphKnowsGroup(group string) bool {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	_, known := this.rights[permKey(graphsTopic, testGraph)].GroupPermissions[group]
+	return known
+}
+
+func graphWriterPermissions() *fakePermissions {
+	permissions := newFakePermissions("dev-1", "dev-2")
+	permissions.ownGraph(testGraph, "user-a")
+	return permissions
+}
+
+func TestAGraphWriterGetsWriteOnTheGraphAndNothingMoreOnTheDevices(t *testing.T) {
+	store := storeWithGraphEnvironment()
+	shares := newFakeShares()
+	permissions := graphWriterPermissions()
+	router := testRouterWithShares(store, shares, nil, permissions)
+
+	resp := do(t, router, "PUT", "/environments/env-1/shares", "user-a", ShareRequest{
+		ShareTargets: ShareTargets{Users: []string{"demo-user", "other-user"}, Groups: []string{"/demo", "/other"}},
+		GraphWriters: &ShareTargets{Users: []string{"demo-user"}, Groups: []string{"/demo"}},
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if rights := permissions.graphUserRights(testGraph, "demo-user"); !rights.Read || !rights.Execute || !rights.Write || rights.Administrate {
+		t.Errorf("a graph writer holds read, execute and write on the graph, got %+v", rights)
+	}
+	if rights := permissions.graphGroupRights(testGraph, "/demo"); !rights.Read || !rights.Execute || !rights.Write {
+		t.Errorf("a graph writing group holds write on the graph, got %+v", rights)
+	}
+	if rights := permissions.graphUserRights(testGraph, "other-user"); rights.Write || !rights.Read {
+		t.Errorf("a shared account that is no graph writer reads the graph only, got %+v", rights)
+	}
+	if rights := permissions.graphGroupRights(testGraph, "/other"); rights.Write || !rights.Read {
+		t.Errorf("a shared group that is no graph writer reads the graph only, got %+v", rights)
+	}
+	for _, device := range []string{"dev-1", "dev-2"} {
+		if rights := permissions.userRights(device, "demo-user"); rights.Write || !rights.Read || !rights.Execute {
+			t.Errorf("%s: a graph writer gets read and execute on a device and nothing more, got %+v", device, rights)
+		}
+		if rights := permissions.groupRights(device, "/demo"); rights.Write || !rights.Read {
+			t.Errorf("%s: a graph writing group gets no write on a device, got %+v", device, rights)
+		}
+	}
+	if rights := permissions.graphUserRights(testGraph, "user-a"); !rights.Administrate || !rights.Write {
+		t.Errorf("the owner of the graph must not be narrowed, got %+v", rights)
+	}
+
+	if got := shares.writers("env-1"); len(got.Users) != 1 || got.Users[0] != "demo-user" || len(got.Groups) != 1 || got.Groups[0] != "/demo" {
+		t.Errorf("the graph writers have to be stored with the set, got %+v", got)
+	}
+	answer := sharesResponseOf(t, resp.Body.Bytes())
+	if len(answer.GraphWriters.Users) != 1 || answer.GraphWriters.Users[0] != "demo-user" {
+		t.Errorf("the answer has to carry the graph writers, got %+v", answer)
+	}
+	read := sharesResponseOf(t, do(t, router, "GET", "/environments/env-1/shares", "user-a", nil).Body.Bytes())
+	if len(read.GraphWriters.Users) != 1 || len(read.GraphWriters.Groups) != 1 {
+		t.Errorf("the read has to serve the stored graph writers, got %+v", read)
+	}
+}
+
+// A set stored before graph_writers existed must read as one without writers,
+// as lists and not null.
+func TestALegacySetServesNoGraphWriters(t *testing.T) {
+	store := storeWithGraphEnvironment()
+	shares := newFakeShares()
+	shares.set("env-1", []string{"demo-user"}, nil)
+	router := testRouterWithShares(store, shares, nil, graphWriterPermissions())
+
+	resp := do(t, router, "GET", "/environments/env-1/shares", "user-a", nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if body := resp.Body.String(); !strings.Contains(body, `"graph_writers":{"users":[],"groups":[]}`) {
+		t.Errorf("expected empty writer lists, got %s", body)
+	}
+}
+
+func TestAGraphWriterHasToBeSharedWith(t *testing.T) {
+	for name, request := range map[string]ShareRequest{
+		"a user that is not shared with": {
+			ShareTargets: ShareTargets{Users: []string{"demo-user"}},
+			GraphWriters: &ShareTargets{Users: []string{"stranger"}},
+		},
+		"a group that is not shared with": {
+			ShareTargets: ShareTargets{Groups: []string{"/demo"}},
+			GraphWriters: &ShareTargets{Groups: []string{"/strangers"}},
+		},
+		"a user named only as a group": {
+			ShareTargets: ShareTargets{Groups: []string{"/demo"}},
+			GraphWriters: &ShareTargets{Users: []string{"/demo"}},
+		},
+		"a writer without any share": {
+			GraphWriters: &ShareTargets{Users: []string{"demo-user"}},
+		},
+		"an empty writer id": {
+			ShareTargets: ShareTargets{Users: []string{"demo-user"}},
+			GraphWriters: &ShareTargets{Users: []string{" "}},
+		},
+		"a writer group without a path": {
+			ShareTargets: ShareTargets{Groups: []string{"/demo"}},
+			GraphWriters: &ShareTargets{Groups: []string{"demo"}},
+		},
+	} {
+		store := storeWithGraphEnvironment()
+		shares := newFakeShares()
+		permissions := graphWriterPermissions()
+		resp := do(t, testRouterWithShares(store, shares, nil, permissions), "PUT", "/environments/env-1/shares", "user-a", request)
+		if resp.Code != http.StatusBadRequest {
+			t.Errorf("%s: expected 400, got %d: %s", name, resp.Code, resp.Body.String())
+			continue
+		}
+		if !strings.Contains(resp.Body.String(), "graph_writers") {
+			t.Errorf("%s: the answer has to say it is about graph_writers, got %s", name, resp.Body.String())
+		}
+		gets, sets, _ := permissions.calls()
+		if len(gets) != 0 || len(sets) != 0 || shares.has("env-1") {
+			t.Errorf("%s: a refused set must change nothing", name)
+		}
+	}
+}
+
+// The subset check runs on the normalized lists, so a writer spelled with blanks
+// or twice names the same account as the share.
+func TestAGraphWriterIsNormalizedLikeTheShare(t *testing.T) {
+	store := storeWithGraphEnvironment()
+	shares := newFakeShares()
+	router := testRouterWithShares(store, shares, nil, graphWriterPermissions())
+
+	resp := do(t, router, "PUT", "/environments/env-1/shares", "user-a", ShareRequest{
+		ShareTargets: ShareTargets{Users: []string{"demo-user"}},
+		GraphWriters: &ShareTargets{Users: []string{" demo-user", "demo-user "}},
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if got := shares.writers("env-1").Users; len(got) != 1 || got[0] != "demo-user" {
+		t.Errorf("expected one trimmed writer, got %v", got)
+	}
+}
+
+// Graph writers are shared accounts already, so they cannot push a set past the
+// limit a second time.
+func TestGraphWritersDoNotCountAgainTowardsTheLimit(t *testing.T) {
+	store := storeWithGraphEnvironment()
+	everybody := manyPrincipals(maxShares)
+	router := testRouterWithShares(store, newFakeShares(), nil, graphWriterPermissions())
+	resp := do(t, router, "PUT", "/environments/env-1/shares", "user-a", ShareRequest{
+		ShareTargets: ShareTargets{Users: everybody},
+		GraphWriters: &ShareTargets{Users: everybody},
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200 at the limit with every account a writer, got %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestRemovingAGraphWriterTakesWriteBackAndKeepsTheShare(t *testing.T) {
+	store := storeWithGraphEnvironment()
+	shares := newFakeShares()
+	shares.setWithWriters("env-1", []string{"demo-user"}, []string{"/demo"},
+		repo.Principals{Users: []string{"demo-user"}, Groups: []string{"/demo"}})
+	permissions := graphWriterPermissions()
+	permissions.graphRights("demo-user", permModel.PermissionsMap{Read: true, Write: true, Execute: true})
+	permissions.graphGroup("/demo", permModel.PermissionsMap{Read: true, Write: true, Execute: true})
+	router := testRouterWithShares(store, shares, nil, permissions)
+
+	resp := do(t, router, "PUT", "/environments/env-1/shares", "user-a", ShareRequest{
+		ShareTargets: ShareTargets{Users: []string{"demo-user"}, Groups: []string{"/demo"}},
+		GraphWriters: &ShareTargets{},
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if rights := permissions.graphUserRights(testGraph, "demo-user"); rights.Write || !rights.Read || !rights.Execute {
+		t.Errorf("a former graph writer keeps read and execute and loses write, got %+v", rights)
+	}
+	if rights := permissions.graphGroupRights(testGraph, "/demo"); rights.Write || !rights.Read || !rights.Execute {
+		t.Errorf("a former graph writing group keeps read and execute and loses write, got %+v", rights)
+	}
+	if rights := permissions.userRights("dev-1", "demo-user"); !rights.Read || !rights.Execute {
+		t.Errorf("the devices stay shared, got %+v", rights)
+	}
+	if got := shares.writers("env-1"); len(got.Users) != 0 || len(got.Groups) != 0 {
+		t.Errorf("the writers have to be gone from the stored set, got %+v", got)
+	}
+}
+
+func TestWithdrawingAGraphWriterEntirelyDropsTheEntry(t *testing.T) {
+	store := storeWithGraphEnvironment()
+	shares := newFakeShares()
+	shares.setWithWriters("env-1", []string{"demo-user"}, []string{"/demo"},
+		repo.Principals{Users: []string{"demo-user"}, Groups: []string{"/demo"}})
+	permissions := graphWriterPermissions()
+	permissions.graphRights("demo-user", permModel.PermissionsMap{Read: true, Write: true, Execute: true})
+	permissions.graphGroup("/demo", permModel.PermissionsMap{Read: true, Write: true, Execute: true})
+	router := testRouterWithShares(store, shares, nil, permissions)
+
+	if code := do(t, router, "PUT", "/environments/env-1/shares", "user-a", ShareTargets{}).Code; code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if permissions.graphKnowsUser(testGraph, "demo-user") || permissions.graphKnowsGroup("/demo") {
+		t.Error("a withdrawn graph writer has to lose the whole entry on the graph")
+	}
+	if rights := permissions.graphUserRights(testGraph, "user-a"); !rights.Administrate {
+		t.Errorf("the owner must not be touched, got %+v", rights)
+	}
+}
+
+// The write of an administrating entry is the owner's or an administrator's own,
+// and taking it would leave the graph without a writing administrator.
+func TestTakingWriteBackNeverTouchesAnAdministrator(t *testing.T) {
+	store := storeWithGraphEnvironment()
+	shares := newFakeShares()
+	shares.setWithWriters("env-1", []string{"admin-user"}, []string{"/admins"},
+		repo.Principals{Users: []string{"admin-user"}, Groups: []string{"/admins"}})
+	permissions := graphWriterPermissions()
+	permissions.graphRights("admin-user", permModel.PermissionsMap{Read: true, Write: true, Execute: true, Administrate: true})
+	permissions.graphGroup("/admins", permModel.PermissionsMap{Read: true, Write: true, Execute: true, Administrate: true})
+	router := testRouterWithShares(store, shares, nil, permissions)
+
+	if code := do(t, router, "PUT", "/environments/env-1/shares", "user-a", ShareRequest{
+		ShareTargets: ShareTargets{Users: []string{"admin-user"}, Groups: []string{"/admins"}},
+		GraphWriters: &ShareTargets{},
+	}).Code; code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if rights := permissions.graphUserRights(testGraph, "admin-user"); !rights.Write || !rights.Administrate {
+		t.Errorf("an administrating entry keeps its write, got %+v", rights)
+	}
+	if rights := permissions.graphGroupRights(testGraph, "/admins"); !rights.Write || !rights.Administrate {
+		t.Errorf("an administrating group keeps its write, got %+v", rights)
+	}
+}
+
+// A write granted by a call that failed elsewhere has to be recorded, or the next
+// call would not know to take it back.
+func TestAFailedShareRecordsTheGraphWritersSoWriteCanBeTakenBack(t *testing.T) {
+	store := storeWithGraphEnvironment()
+	shares := newFakeShares()
+	shares.setWithWriters("env-1", []string{"other-user"}, nil, repo.Principals{Users: []string{"other-user"}})
+	permissions := graphWriterPermissions()
+	permissions.graphRights("other-user", permModel.PermissionsMap{Read: true, Write: true, Execute: true})
+	permissions.getErr["dev-2"] = errors.New("permissions-v2 unreachable")
+	router := testRouterWithShares(store, shares, nil, permissions)
+
+	resp := do(t, router, "PUT", "/environments/env-1/shares", "user-a", ShareRequest{
+		ShareTargets: ShareTargets{Users: []string{"demo-user"}},
+		GraphWriters: &ShareTargets{Users: []string{"demo-user"}},
+	})
+	if resp.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if !permissions.graphUserRights(testGraph, "demo-user").Write {
+		t.Fatal("expected the graph to have gone through")
+	}
+	if got := sortedCopy(shares.writers("env-1").Users); len(got) != 2 || got[0] != "demo-user" || got[1] != "other-user" {
+		t.Fatalf("the union of the stored and the requested writers has to stand, got %v", got)
+	}
+
+	permissions.getErr = map[string]error{}
+	if code := do(t, router, "PUT", "/environments/env-1/shares", "user-a", ShareRequest{
+		ShareTargets: ShareTargets{Users: []string{"demo-user", "other-user"}},
+		GraphWriters: &ShareTargets{},
+	}).Code; code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	for _, user := range []string{"demo-user", "other-user"} {
+		if rights := permissions.graphUserRights(testGraph, user); rights.Write || !rights.Read {
+			t.Errorf("%s: the write of the failed call has to be taken back, got %+v", user, rights)
+		}
+	}
+}
+
+func TestAGraphCreatedByASaveInheritsTheGraphWriters(t *testing.T) {
+	store := storeWithSharedEnvironment() //no graph ref yet
+	shares := newFakeShares()
+	shares.setWithWriters("env-1", []string{"demo-user", "other-user"}, []string{"/demo"},
+		repo.Principals{Users: []string{"demo-user"}, Groups: []string{"/demo"}})
+	permissions := newFakePermissions("dev-1", "dev-2", "urn:device:new")
+	permissions.ownGraph(testGraph, "user-a")
+	//a write the new graph somehow carries for a shared non-writer is cleared too
+	permissions.graphRights("other-user", permModel.PermissionsMap{Read: true, Write: true, Execute: true})
+	catalog := &fakeCatalog{}
+	router := testRouterWithAll(store, shares, catalog, newFakeGraphMirror(), nil, permissions)
+
+	sent := sharedEnvironment()
+	sent.Zones[0].Assets = append(sent.Zones[0].Assets, newMachine("asset-4", "Neue Maschine"))
+	if resp := do(t, router, "PUT", "/environments/env-1", "user-a", sent); resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if store.stored["env-1"].ExternalGraphRef != testGraph {
+		t.Fatalf("expected the save to create the graph, got %q", store.stored["env-1"].ExternalGraphRef)
+	}
+	if rights := permissions.graphUserRights(testGraph, "demo-user"); !rights.Write || !rights.Read {
+		t.Errorf("the new graph has to give the graph writer write, got %+v", rights)
+	}
+	if rights := permissions.graphGroupRights(testGraph, "/demo"); !rights.Write {
+		t.Errorf("the new graph has to give the writing group write, got %+v", rights)
+	}
+	if rights := permissions.graphUserRights(testGraph, "other-user"); rights.Write || !rights.Read {
+		t.Errorf("a shared account that is no writer reads the new graph only, got %+v", rights)
+	}
+	if rights := permissions.userRights("urn:device:new", "demo-user"); rights.Write || !rights.Read {
+		t.Errorf("a new device gets no write for a graph writer, got %+v", rights)
+	}
+}
+
+// Moses does not touch the rights of a graph it only rewrites, so the write of a
+// graph writer stands after a save; lib/test pins the repository's half of it.
+func TestASaveThatRewritesTheGraphKeepsTheWriteOfAGraphWriter(t *testing.T) {
+	store := storeWithGraphEnvironment()
+	shares := newFakeShares()
+	shares.setWithWriters("env-1", []string{"demo-user"}, nil, repo.Principals{Users: []string{"demo-user"}})
+	permissions := graphWriterPermissions()
+	permissions.graphRights("demo-user", permModel.PermissionsMap{Read: true, Write: true, Execute: true})
+	mirror := newFakeGraphMirror()
+	mirror.stored[testGraph] = models.Graph{Id: testGraph}
+	router := testRouterWithAll(store, shares, nil, mirror, nil, permissions)
+
+	sent := sharedEnvironmentWithGraph()
+	sent.Name = "renamed"
+	if code := do(t, router, "PUT", "/environments/env-1", "user-a", sent).Code; code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if len(mirror.sent) != 1 || mirror.sent[0].Id != testGraph {
+		t.Fatalf("expected the save to rewrite the graph, got %+v", mirror.sent)
+	}
+	if rights := permissions.graphUserRights(testGraph, "demo-user"); !rights.Write || !rights.Read || !rights.Execute {
+		t.Errorf("a rewrite must leave the graph writer's rights, got %+v", rights)
+	}
+	if permissions.setsOf(testGraph) != 0 {
+		t.Error("a graph that is only rewritten needs no rights written")
+	}
+}
+
+// revokeWrite must not invent an entry for a principal the resource does not
+// know, since an empty entry would be written back as one.
+func TestRevokeWriteLeavesAMissingEntryMissing(t *testing.T) {
+	entries := map[string]permModel.PermissionsMap{"user-a": {Read: true, Write: true, Administrate: true}}
+	entries = revokeWrite(entries, []string{"demo-user"})
+	if _, known := entries["demo-user"]; known || len(entries) != 1 {
+		t.Errorf("expected the entries unchanged, got %+v", entries)
+	}
+	if revokeWrite(nil, []string{"demo-user"}) != nil {
+		t.Error("expected nil to stay nil")
+	}
+}
+
+// putRaw sends a body exactly as written, which is how absent, null and {} are
+// told apart.
+func putRaw(t *testing.T, router *gin.Engine, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest("PUT", "/environments/env-1/shares", strings.NewReader(body))
+	request.Header.Set("Authorization", tokenFor("user-a"))
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	return recorder
+}
+
+// storeWithAGraphWriter is demo-user writing, other-user reading the graph.
+func storeWithAGraphWriter() (*fakeEnvironments, *fakeShares, *fakePermissions) {
+	shares := newFakeShares()
+	shares.setWithWriters("env-1", []string{"demo-user", "other-user"}, nil, repo.Principals{Users: []string{"demo-user"}})
+	permissions := graphWriterPermissions()
+	permissions.graphRights("demo-user", permModel.PermissionsMap{Read: true, Write: true, Execute: true})
+	permissions.graphRights("other-user", permModel.PermissionsMap{Read: true, Execute: true})
+	return storeWithGraphEnvironment(), shares, permissions
+}
+
+// A client that does not know graph_writers must not take write away by saving.
+func TestAnAbsentOrNullGraphWritersKeepsTheStoredOnes(t *testing.T) {
+	for name, body := range map[string]string{
+		"absent": `{"users":["demo-user","other-user","third-user"]}`,
+		"null":   `{"users":["demo-user","other-user","third-user"],"graph_writers":null}`,
+	} {
+		store, shares, permissions := storeWithAGraphWriter()
+		resp := putRaw(t, testRouterWithShares(store, shares, nil, permissions), body)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d: %s", name, resp.Code, resp.Body.String())
+		}
+		if got := shares.writers("env-1").Users; len(got) != 1 || got[0] != "demo-user" {
+			t.Errorf("%s: the stored writers have to be kept, got %v", name, got)
+		}
+		if answer := sharesResponseOf(t, resp.Body.Bytes()); len(answer.GraphWriters.Users) != 1 || answer.GraphWriters.Users[0] != "demo-user" {
+			t.Errorf("%s: the answer has to carry the kept writers, got %+v", name, answer.GraphWriters)
+		}
+		if rights := permissions.graphUserRights(testGraph, "demo-user"); !rights.Write {
+			t.Errorf("%s: the kept writer has to keep write, got %+v", name, rights)
+		}
+		if rights := permissions.graphUserRights(testGraph, "third-user"); rights.Write || !rights.Read {
+			t.Errorf("%s: a newly shared account is no writer, got %+v", name, rights)
+		}
+	}
+}
+
+// A kept writer that is no longer shared goes with its share instead of turning
+// the request into a 400 the client could not have avoided.
+func TestAnAbsentGraphWritersDropsAWriterThatIsNoLongerShared(t *testing.T) {
+	store, shares, permissions := storeWithAGraphWriter()
+	resp := putRaw(t, testRouterWithShares(store, shares, nil, permissions), `{"users":["other-user"]}`)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if got := shares.writers("env-1"); len(got.Users) != 0 || len(got.Groups) != 0 {
+		t.Errorf("the writer that left the share must not be kept, got %+v", got)
+	}
+	if permissions.graphKnowsUser(testGraph, "demo-user") {
+		t.Error("the account that left the share loses its entry on the graph")
+	}
+}
+
+func TestAnExplicitEmptyGraphWritersReplacesThem(t *testing.T) {
+	for name, body := range map[string]string{
+		"empty object": `{"users":["demo-user","other-user"],"graph_writers":{}}`,
+		"empty lists":  `{"users":["demo-user","other-user"],"graph_writers":{"users":[],"groups":[]}}`,
+	} {
+		store, shares, permissions := storeWithAGraphWriter()
+		resp := putRaw(t, testRouterWithShares(store, shares, nil, permissions), body)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d: %s", name, resp.Code, resp.Body.String())
+		}
+		if got := shares.writers("env-1").Users; len(got) != 0 {
+			t.Errorf("%s: an explicit empty set replaces the writers, got %v", name, got)
+		}
+		if rights := permissions.graphUserRights(testGraph, "demo-user"); rights.Write || !rights.Read {
+			t.Errorf("%s: the former writer loses write and keeps read, got %+v", name, rights)
+		}
+	}
+}
+
+// Every PUT sets write on the graph for the whole share, not only for what it
+// changes: a write left by a concurrent PUT or an older moses is recorded
+// nowhere, and a delta would never reach it.
+func TestAPutClearsAStaleWriteOfAnAccountItDoesNotChange(t *testing.T) {
+	for name, body := range map[string]string{
+		"absent":   `{"users":["demo-user","new-user"],"groups":["/demo"]}`,
+		"explicit": `{"users":["demo-user","new-user"],"groups":["/demo"],"graph_writers":{}}`,
+	} {
+		store := storeWithGraphEnvironment()
+		shares := newFakeShares()
+		shares.set("env-1", []string{"demo-user", "admin-user"}, []string{"/demo"})
+		permissions := graphWriterPermissions()
+		permissions.graphRights("demo-user", permModel.PermissionsMap{Read: true, Write: true, Execute: true})
+		permissions.graphGroup("/demo", permModel.PermissionsMap{Read: true, Write: true, Execute: true})
+		permissions.graphRights("new-user", permModel.PermissionsMap{Read: true, Write: true})
+		permissions.graphRights("admin-user", permModel.PermissionsMap{Read: true, Write: true, Administrate: true})
+		permissions.graphRights("outsider", permModel.PermissionsMap{Read: true, Write: true})
+		router := testRouterWithShares(store, shares, nil, permissions)
+
+		if resp := putRaw(t, router, body); resp.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d: %s", name, resp.Code, resp.Body.String())
+		}
+		if rights := permissions.graphUserRights(testGraph, "demo-user"); rights.Write || !rights.Read || !rights.Execute {
+			t.Errorf("%s: the stale write of an unchanged account has to be cleared, got %+v", name, rights)
+		}
+		if rights := permissions.graphGroupRights(testGraph, "/demo"); rights.Write || !rights.Read {
+			t.Errorf("%s: the stale write of an unchanged group has to be cleared, got %+v", name, rights)
+		}
+		if rights := permissions.graphUserRights(testGraph, "new-user"); rights.Write || !rights.Read {
+			t.Errorf("%s: a newly shared account with a stale write loses it, got %+v", name, rights)
+		}
+		//the withdrawn administrator keeps its entry, an account outside the share is not ours
+		if rights := permissions.graphUserRights(testGraph, "admin-user"); !rights.Write || !rights.Administrate {
+			t.Errorf("%s: an administrating entry keeps its write, got %+v", name, rights)
+		}
+		if rights := permissions.graphUserRights(testGraph, "outsider"); !rights.Write {
+			t.Errorf("%s: an account outside the share must not be touched, got %+v", name, rights)
+		}
+		//devices carry no graph write rule, so their writes stay as they are
+		if rights := permissions.userRights("dev-1", "demo-user"); rights.Write {
+			t.Errorf("%s: a device gets no write, got %+v", name, rights)
+		}
 	}
 }
