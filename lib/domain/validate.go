@@ -19,6 +19,7 @@ package domain
 import (
 	"fmt"
 	"github.com/SENERGY-Platform/moses/lib/formula"
+	"github.com/SENERGY-Platform/moses/lib/jsguard"
 	"math"
 	"sort"
 	"strings"
@@ -909,6 +910,10 @@ func (this *validator) checkSource(path string, source Source) {
 			this.fail(path+".script", "must be set when kind is %q", SourceScript)
 		} else if strings.TrimSpace(source.Script.Code) == "" {
 			this.fail(path+".script.code", "must not be empty")
+		} else if err := jsguard.ScriptTooComplex(source.Script.Code); err != nil {
+			// a script deep enough to overflow the parser would crash the
+			// process at generation build, so it is refused on the way in
+			this.fail(path+".script.code", "%s", err.Error())
 		}
 	case SourceProfile:
 		this.checkProfile(path, source)
@@ -1477,6 +1482,11 @@ func (this *validator) checkStates(path string, states map[string]interface{}) {
 			} else if math.IsInf(f, 0) {
 				this.fail(path+"."+key, "must be finite, got infinity")
 			}
+		}
+		//the same bounds a script's state.set meets, so no stored value can grow
+		//past what the runtime copies
+		if err := jsguard.CheckPlainData(value); err != nil {
+			this.fail(path+"."+key, "%s", err.Error())
 		}
 	}
 }

@@ -69,6 +69,7 @@ type BackfillRequest struct {
 // @Failure 404 {string} string "no such environment, no access to it, or it is not running here"
 // @Failure 409 {string} string "a backfill or a history run of this environment is already running"
 // @Failure 500 {string} string "error message"
+// @Failure 413 {string} string "the request body is larger than the allowed limit"
 // @Router /environments/{id}/backfill [post]
 func postBackfillH(environments repo.Environments, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
 	return http.MethodPost, "/environments/:id/backfill", func(gc *gin.Context) {
@@ -82,8 +83,7 @@ func postBackfillH(environments repo.Environments, notifier RuntimeNotifier) (st
 		}
 
 		request := BackfillRequest{}
-		if err := gc.ShouldBindJSON(&request); err != nil {
-			gc.String(http.StatusBadRequest, "unable to read the request body as a backfill window: %s", err.Error())
+		if !bindLimitedJSON(gc, &request, maxRequestBytes, "unable to read the request body as a backfill window: ") {
 			return
 		}
 		if notifier == nil {

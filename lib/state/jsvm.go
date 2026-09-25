@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
+	"github.com/SENERGY-Platform/moses/lib/jsguard"
 	"github.com/SENERGY-Platform/moses/lib/util"
 	"github.com/robertkrimen/otto"
 )
@@ -63,7 +64,13 @@ func trimCode(code string, size int) string {
 
 var halt = errors.New("stop")
 
+// run executes a legacy script. The complexity check runs before otto parses
+// it, since otto's parser overflows the Go stack on deep nesting, a fatal crash;
+// this covers stored routines at load, on every tick, and service commands.
 func run(code string, moses interface{}, timeout time.Duration, mux sync.Locker) (err error) {
+	if err := jsguard.ScriptTooComplex(code); err != nil {
+		return err
+	}
 	defer func() {
 		if caught := recover(); caught != nil {
 			if caught == halt {
@@ -75,6 +82,9 @@ func run(code string, moses interface{}, timeout time.Duration, mux sync.Locker)
 	}()
 
 	vm := otto.New()
+	if err = hardenVM(vm); err != nil {
+		return err
+	}
 	vm.Interrupt = make(chan func(), 1) // The buffer prevents blocking
 
 	go func() {

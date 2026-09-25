@@ -39,9 +39,7 @@ func ChangeroutineEndpoints(config config.Config, states *state.StateRepo, route
 			return
 		}
 		msg := state.UpdateChangeRoutineRequest{}
-		err := gc.ShouldBindJSON(&msg)
-		if err != nil {
-			gc.String(http.StatusBadRequest, "%s", err.Error())
+		if !bindLimitedJSON(gc, &msg, maxRequestBytes, "") {
 			return
 		}
 		result, access, exists, err := states.UpdateChangeRoutine(token, msg)
@@ -68,9 +66,7 @@ func ChangeroutineEndpoints(config config.Config, states *state.StateRepo, route
 			return
 		}
 		msg := state.CreateChangeRoutineRequest{}
-		err := gc.ShouldBindJSON(&msg)
-		if err != nil {
-			gc.String(http.StatusBadRequest, "%s", err.Error())
+		if !bindLimitedJSON(gc, &msg, maxRequestBytes, "") {
 			return
 		}
 		result, access, exists, err := states.CreateChangeRoutine(token, msg)

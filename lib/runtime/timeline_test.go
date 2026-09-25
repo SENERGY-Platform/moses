@@ -359,7 +359,7 @@ func TestAScriptReadsAGovernedContextKeyAndCannotWriteIt(t *testing.T) {
 
 	api := jsContextStateApi(env, gen, timelineKnick.Add(time.Hour))
 	get := api["get"].(func(field interface{}) interface{})
-	set := api["set"].(func(field interface{}, value interface{}))
+	set := api["set"].(func(field interface{}, value interface{}) error)
 
 	if got := get("price"); got != 0.42 {
 		t.Errorf("a governed key has to read as the declared value of this instant, got %v", got)

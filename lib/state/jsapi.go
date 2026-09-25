@@ -18,6 +18,7 @@ package state
 
 import (
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
+	"github.com/SENERGY-Platform/moses/lib/jsguard"
 	"github.com/SENERGY-Platform/moses/lib/util"
 )
 
@@ -31,6 +32,10 @@ func (this *StateRepo) getJsWorldSubApi(world *World) map[string]interface{} {
 	return map[string]interface{}{
 		"state": map[string]interface{}{
 			"set": func(field string, value interface{}) {
+				value, ok := plainStateValue(field, value)
+				if !ok {
+					return
+				}
 				if world.States == nil {
 					world.States = map[string]interface{}{}
 				}
@@ -51,7 +56,7 @@ func (this *StateRepo) getJsWorldSubApi(world *World) map[string]interface{} {
 					world.States[field] = 0
 					val = 0
 				}
-				return val
+				return readStateValue(field, val)
 			},
 		},
 		"getRoom": func(roomid string) map[string]interface{} {
@@ -76,6 +81,10 @@ func (this *StateRepo) getJsRoomSubApi(world *World, room *Room) map[string]inte
 	return map[string]interface{}{
 		"state": map[string]interface{}{
 			"set": func(field string, value interface{}) {
+				value, ok := plainStateValue(field, value)
+				if !ok {
+					return
+				}
 				if room.States == nil {
 					room.States = map[string]interface{}{}
 				}
@@ -96,7 +105,7 @@ func (this *StateRepo) getJsRoomSubApi(world *World, room *Room) map[string]inte
 					room.States[field] = 0
 					val = 0
 				}
-				return val
+				return readStateValue(field, val)
 			},
 		},
 		"getDevice": func(deviceid string) map[string]interface{} {
@@ -122,6 +131,10 @@ func (this *StateRepo) getJsDeviceSubApi(world *World, device *Device) map[strin
 	return map[string]interface{}{
 		"state": map[string]interface{}{
 			"set": func(field string, value interface{}) {
+				value, ok := plainStateValue(field, value)
+				if !ok {
+					return
+				}
 				if device.States == nil {
 					device.States = map[string]interface{}{}
 				}
@@ -142,7 +155,7 @@ func (this *StateRepo) getJsDeviceSubApi(world *World, device *Device) map[strin
 					device.States[field] = 0
 					val = 0
 				}
-				return val
+				return readStateValue(field, val)
 			},
 		},
 	}
@@ -180,4 +193,28 @@ func (this *StateRepo) getJsCommandSubApi(cmdMsg interface{}, responder func(res
 		"input": cmdMsg,
 		"send":  responder,
 	}
+}
+
+// plainStateValue returns a fresh plain-data copy of value, or false for a value
+// that is not plain data: a Go function bound into one routine's vm would
+// otherwise be callable from every other routine, and storing the script's own
+// structure would let it change after the check.
+func plainStateValue(field string, value interface{}) (interface{}, bool) {
+	copied, err := jsguard.CopyPlainData(value)
+	if err != nil {
+		util.Logger.Warn("the script tried to store a value that is not plain data, it is dropped", attributes.ErrorKey, err, "field", field)
+		return nil, false
+	}
+	return copied, true
+}
+
+// readStateValue is the getter's copy; a value past the node budget, which only a
+// corrupted state can hold, is logged and read as null.
+func readStateValue(field string, value interface{}) interface{} {
+	copied, err := jsguard.PlainCopy(value)
+	if err != nil {
+		util.Logger.Warn("a stored state value is too large to read, it reads as null", attributes.ErrorKey, err, "field", field)
+		return nil
+	}
+	return copied
 }

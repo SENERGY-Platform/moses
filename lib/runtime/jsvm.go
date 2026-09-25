@@ -17,8 +17,9 @@
 package runtime
 
 // Channel scripts run on goja, against a program compiled once per generation
-// and a fresh vm per run, so every run sees fresh globals exactly as it did on
-// otto. The timeout is armed only after the environment mutex has been taken:
+// and a vm kept per channel whose globals are restored after every run
+// (jsvms.go), so every run sees fresh globals as it did on otto. The timeout is
+// armed only after the environment mutex has been taken:
 // with one mutex per environment and many channels queueing on it, counting the
 // wait for the lock against the script's time limit would turn a busy
 // environment into a stream of spurious timeouts. lib/state keeps its own otto
@@ -31,11 +32,15 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
+	"github.com/SENERGY-Platform/moses/lib/jsguard"
 	"github.com/SENERGY-Platform/moses/lib/util"
 	"github.com/dop251/goja"
+	"github.com/dop251/goja/ast"
+	"github.com/dop251/goja/parser"
 )
 
 var ErrScriptTimeout = errors.New("script exceeded the js timeout")
@@ -60,31 +65,163 @@ func trimCode(code string, size int) string {
 	return fmt.Sprintf("%v[...]%v", code[:size/2], code[len(code)-size/2:])
 }
 
-// compileScript compiles a channel script once, at generation build. The id
-// only names the script in a syntax error.
+// compileScript compiles a channel script once, at generation build. The pre-scan
+// makes a script able to overflow goja's parser fail this channel instead of
+// killing the process; WithDisableSourceMaps stops a sourceMappingURL file read.
 func compileScript(id string, code string) (*goja.Program, error) {
-	return goja.Compile(id, code, false)
+	if err := jsguard.ScriptTooComplex(code); err != nil {
+		return nil, err
+	}
+	//the body has to be a program on its own: then it cannot close the wrapper
+	//and leave code or a lexical declaration at the top level of the kept vm
+	raw, err := goja.Parse(id, code, parser.WithDisableSourceMaps)
+	if err != nil {
+		return nil, err
+	}
+	shadowed := topLevelLexicalNames(raw)
+	for _, wrapped := range wrapScript(code, shadowed) {
+		var prg *ast.Program
+		if prg, err = goja.Parse(id, wrapped, parser.WithDisableSourceMaps); err != nil {
+			continue
+		}
+		var program *goja.Program
+		if program, err = goja.CompileAST(prg, false); err == nil {
+			return program, nil
+		}
+	}
+	return nil, err
 }
 
-// runScript executes program with moses bound to the javascript global "moses".
+// topLevelLexicalNames returns the api names the body binds with let, const or
+// class at the top level. Those shadow the global as they did on master, so the
+// wrapper must not pass them as parameters, which a lexical redeclaration of a
+// parameter would reject; var and function keep reading the parameter, as they
+// read the global before.
+func topLevelLexicalNames(program *ast.Program) map[string]bool {
+	names := map[string]bool{}
+	for _, statement := range program.Body {
+		switch declaration := statement.(type) {
+		case *ast.LexicalDeclaration:
+			for _, binding := range declaration.List {
+				boundNames(binding.Target, names)
+			}
+		case *ast.ClassDeclaration:
+			if declaration.Class != nil && declaration.Class.Name != nil {
+				names[declaration.Class.Name.Name.String()] = true
+			}
+		}
+	}
+	return names
+}
+
+// boundNames adds every name a binding target binds, through nested object and
+// array patterns, defaults and rest elements.
+func boundNames(target ast.Node, names map[string]bool) {
+	switch node := target.(type) {
+	case *ast.Identifier:
+		names[node.Name.String()] = true
+	case *ast.AssignExpression:
+		boundNames(node.Left, names)
+	case *ast.ArrayPattern:
+		for _, element := range node.Elements {
+			if element != nil {
+				boundNames(element, names)
+			}
+		}
+		if node.Rest != nil {
+			boundNames(node.Rest, names)
+		}
+	case *ast.ObjectPattern:
+		for _, property := range node.Properties {
+			switch p := property.(type) {
+			case *ast.PropertyShort:
+				names[p.Name.Name.String()] = true
+			case *ast.PropertyKeyed:
+				boundNames(p.Value, names)
+			}
+		}
+		if node.Rest != nil {
+			boundNames(node.Rest, names)
+		}
+	}
+}
+
+// wrapScript makes the body a function called with the global this, so a kept vm
+// gives every run fresh declarations. The api names the body does not lexically
+// declare come in as parameters, so "var moses = moses" still finds them; an
+// undefined arguments parameter keeps the wrapper's own from showing, and a
+// strict body that refuses that name falls to the second form. The body starts
+// on the first line, keeping line numbers; a hashbang becomes a comment.
+func wrapScript(code string, shadowed map[string]bool) []string {
+	if strings.HasPrefix(code, "#!") {
+		code = "//" + code[2:]
+	}
+	var params []string
+	for _, name := range []string{"moses", "httpGet", "console"} {
+		if !shadowed[name] {
+			params = append(params, name)
+		}
+	}
+	call := "\n}).call(this"
+	if len(params) > 0 {
+		call += ", " + strings.Join(params, ", ")
+	}
+	call += ");"
+	withArguments := strings.Join(append(append([]string{}, params...), "arguments"), ", ")
+	return []string{
+		"(function (" + withArguments + ") {" + code + call,
+		"(function (" + strings.Join(params, ", ") + ") {" + code + call,
+	}
+}
+
+// runScript executes program once on a vm of its own, which is what a test
+// wants; the runtime keeps a channel's vm through runScriptIn.
+func runScript(program *goja.Program, moses interface{}, timeout time.Duration, mux sync.Locker) error {
+	return runScriptIn(nil, nil, program, moses, timeout, mux)
+}
+
+// runScriptIn executes program with moses bound to the javascript global "moses",
+// on the vm vms keeps for it, or on a fresh one when vms is nil.
 //
 // mux serialises the runs of one environment. It is held for the duration of
 // the script, which is what makes the state maps the script reads and writes
 // safe to touch without any locking of their own - and what gives a script the
 // same "nothing else changes while I run" guarantee the legacy world mutex gave.
+// vms is only touched under it, so no two goroutines ever share a vm.
 //
-// The timeout is armed after the mutex has been acquired, so the wait for the
-// lock does not count against the script's time limit. The timer is stopped on
-// every path out, including a panic, because an armed timer keeps the vm and the
-// whole api closure graph reachable until the timeout elapses; a timer that
-// fires anyway interrupts a vm nobody uses again, since every run gets its own.
+// The timeout is armed after the vm is ready, so neither the lock wait nor
+// preparing a vm counts against it. A vm is kept only after a run that ended
+// normally and whose cleanup succeeded; any other run discards it.
 //
 // Two semantic differences to otto are accepted here: goja does not hoist a
 // function declared inside a block, so Annex B block-level function
 // declarations are only visible inside that block. And an integral number
 // arrives in Go as a float64, so a value above 2^53 is no longer exact.
-func runScript(program *goja.Program, moses interface{}, timeout time.Duration, mux sync.Locker) error {
-	vm := goja.New()
+func runScriptIn(vms *scriptVMs, gen *generation, program *goja.Program, moses interface{}, timeout time.Duration, mux sync.Locker) error {
+	if mux != nil {
+		mux.Lock()
+		defer mux.Unlock()
+	}
+	var prepared *scriptVM
+	var err error
+	if vms != nil {
+		prepared, err = vms.take(gen, program)
+	} else {
+		prepared, err = newScriptVM()
+	}
+	if err != nil {
+		util.Logger.Warn("unable to prepare the javascript vm", attributes.ErrorKey, err)
+		return err
+	}
+	reusable := false
+	defer func() {
+		if vms != nil && !reusable {
+			vms.discard(program)
+		}
+	}()
+
+	vm := prepared.vm
+	vm.ClearInterrupt()
 	if err := vm.Set("moses", moses); err != nil {
 		return err
 	}
@@ -97,23 +234,38 @@ func runScript(program *goja.Program, moses interface{}, timeout time.Duration, 
 		return err
 	}
 
-	if mux != nil {
-		mux.Lock()
-		defer mux.Unlock()
+	fired := make(chan struct{})
+	timer := time.AfterFunc(timeout, func() {
+		if delay := timeoutCallbackDelay.Load(); delay > 0 {
+			time.Sleep(time.Duration(delay))
+		}
+		vm.Interrupt(ErrScriptTimeout)
+		close(fired)
+	})
+	defer timer.Stop()              // covers a panic out of a native binding
+	_, err = vm.RunProgram(program) // Here be dragons (risky code)
+	late := !timer.Stop()
+	if late {
+		//the callback has started: wait until its interrupt has landed, so it can
+		//never overlap a later run's ClearInterrupt, and do not keep this vm
+		<-fired
 	}
 
-	timer := time.AfterFunc(timeout, func() { vm.Interrupt(ErrScriptTimeout) })
-	defer timer.Stop()
-	_, err := vm.RunProgram(program) // Here be dragons (risky code)
-
-	//goja reports the halt as an error rather than a panic; the interrupt value
-	//travels inside it, but callers match on ErrScriptTimeout alone
 	var interrupted *goja.InterruptedError
-	if errors.As(err, &interrupted) {
+	var overflow *goja.StackOverflowError
+	switch {
+	case errors.As(err, &interrupted):
 		return ErrScriptTimeout
+	case late || errors.As(err, &overflow):
+	default:
+		reusable = prepared.restore()
 	}
 	return err
 }
+
+// timeoutCallbackDelay holds back the timeout callback before it interrupts;
+// only a test sets it, to force the callback past the end of a run.
+var timeoutCallbackDelay atomic.Int64
 
 // scriptConsole is the console object otto shipped and goja does not. A legacy
 // script was migrated verbatim and may call console.log, which without this

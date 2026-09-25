@@ -329,6 +329,12 @@ const docTemplate = `{
                             "type": "string"
                         }
                     },
+                    "413": {
+                        "description": "the request body is larger than the allowed limit",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
                     "500": {
                         "description": "error message",
                         "schema": {
@@ -512,6 +518,12 @@ const docTemplate = `{
                             "type": "string"
                         }
                     },
+                    "413": {
+                        "description": "the request body is larger than the allowed limit",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
                     "500": {
                         "description": "error message",
                         "schema": {
@@ -634,6 +646,12 @@ const docTemplate = `{
                     },
                     "409": {
                         "description": "the document was changed since it was read; the message names both versions",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "413": {
+                        "description": "the request body is larger than the allowed limit",
                         "schema": {
                             "type": "string"
                         }
@@ -807,6 +825,12 @@ const docTemplate = `{
                     },
                     "409": {
                         "description": "a backfill or a history run of this environment is already running",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "413": {
+                        "description": "the request body is larger than the allowed limit",
                         "schema": {
                             "type": "string"
                         }
@@ -985,6 +1009,12 @@ const docTemplate = `{
                     },
                     "409": {
                         "description": "a history run or a backfill of this environment is already running, or the first day of the window already holds readings and force is not set",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "413": {
+                        "description": "the request body is larger than the allowed limit",
                         "schema": {
                             "type": "string"
                         }
@@ -1280,7 +1310,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "the body is unreadable, empty, names a zone or asset the definition does not have, or moves a context key the timeline governs; a change wrong in both ways names both",
+                        "description": "the body is unreadable, empty, holds a value that is not plain data or nests deeper than 32 levels or holds more than 10000 elements, names a zone or asset the definition does not have, or moves a context key the timeline governs; a change wrong in both ways names both",
                         "schema": {
                             "type": "string"
                         }
@@ -1299,6 +1329,12 @@ const docTemplate = `{
                     },
                     "409": {
                         "description": "a history run of this environment is in progress, so it stands at a past instant",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "413": {
+                        "description": "the request body is larger than the allowed limit",
                         "schema": {
                             "type": "string"
                         }

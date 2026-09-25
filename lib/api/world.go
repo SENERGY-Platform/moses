@@ -62,9 +62,7 @@ func WorldEndpoints(config config.Config, states *state.StateRepo, router gin.IR
 			return
 		}
 		msg := state.UpdateWorldRequest{}
-		err := gc.ShouldBindJSON(&msg)
-		if err != nil {
-			gc.String(http.StatusBadRequest, "%s", err.Error())
+		if !bindLimitedJSON(gc, &msg, maxDocumentBytes, "") {
 			return
 		}
 		result, access, exists, err := states.UpdateWorld(token, msg)
@@ -91,9 +89,7 @@ func WorldEndpoints(config config.Config, states *state.StateRepo, router gin.IR
 			return
 		}
 		msg := state.CreateWorldRequest{}
-		err := gc.ShouldBindJSON(&msg)
-		if err != nil {
-			gc.String(http.StatusBadRequest, "%s", err.Error())
+		if !bindLimitedJSON(gc, &msg, maxDocumentBytes, "") {
 			return
 		}
 		result, err := states.CreateWorld(token, msg)

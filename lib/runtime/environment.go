@@ -19,6 +19,7 @@ package runtime
 import (
 	"context"
 	"math"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/domain"
 	"github.com/SENERGY-Platform/moses/lib/formula"
+	"github.com/SENERGY-Platform/moses/lib/jsguard"
 	"github.com/SENERGY-Platform/moses/lib/repo"
 	"github.com/SENERGY-Platform/moses/lib/util"
 	"github.com/dop251/goja"
@@ -67,6 +69,10 @@ type environment struct {
 	// the service log of a site whose scripts were written before the timeline.
 	timelineWarned map[string]bool
 	noFieldWarned  bool
+
+	// scripts keeps the prepared vm of each script channel, guarded by mux: a run
+	// holds mux while it uses one, so a vm is never touched by two goroutines.
+	scripts scriptVMs
 
 	// saves counts the Save calls that have left the mutex but not yet returned.
 	// Remove waits for it before deleting the stored state, so that a flush in
@@ -681,6 +687,14 @@ func (this *environment) forgetTimelineWarnings() {
 	this.timelineWarned = nil
 }
 
+// forgetScripts drops the vms of the generation that is going away, so they do
+// not outlive it; a run of the new one would discard them anyway.
+func (this *environment) forgetScripts() {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	this.scripts.clear()
+}
+
 // markUnderHistory closes the environment to everything that would mix the
 // present into a run. It happens before the runners and the commands in flight
 // are waited for, so that nothing new can enter behind the wait.
@@ -688,6 +702,7 @@ func (this *environment) markUnderHistory() {
 	this.mux.Lock()
 	defer this.mux.Unlock()
 	this.underHistory = true
+	this.scripts.clear()
 }
 
 // enterCommand reserves a slot for one command dispatch, or refuses it and says
@@ -730,6 +745,7 @@ func (this *environment) resetForHistory() {
 	this.mux.Lock()
 	defer this.mux.Unlock()
 	this.underHistory = true
+	this.scripts.clear()
 	this.state = repo.RuntimeState{
 		EnvironmentId: this.id,
 		Context:       map[string]interface{}{},
@@ -766,6 +782,7 @@ func (this *environment) endHistory() {
 	this.mux.Lock()
 	defer this.mux.Unlock()
 	this.underHistory = false
+	this.scripts.clear()
 }
 
 // seedInto copies the keys of initial that target does not have. An existing
@@ -776,7 +793,11 @@ func seedInto(target map[string]interface{}, initial map[string]interface{}) (ch
 		if _, exists := target[key]; exists {
 			continue
 		}
-		target[key] = copyValue(value)
+		copied, ok := copyStateValue(key, value)
+		if !ok {
+			continue
+		}
+		target[key] = copied
 		changed = true
 	}
 	return changed
@@ -1014,9 +1035,30 @@ func snapshotState(id string, state repo.RuntimeState) repo.RuntimeState {
 func copyStates(in map[string]interface{}) map[string]interface{} {
 	out := make(map[string]interface{}, len(in))
 	for key, value := range in {
-		out[key] = copyValue(value)
+		if copied, ok := copyStateValue(key, value); ok {
+			out[key] = copied
+		}
 	}
 	return out
+}
+
+// maxStateCopyDepth bounds how deep copyValue walks, so a corrupted stored state
+// that a script cannot create - a cycle or a very deep value injected straight
+// into the map - cannot overflow the stack when the state is snapshotted.
+const maxStateCopyDepth = 64
+
+// copyStateValue copies one state value under the node budget, which counts
+// every visit so shared subtrees cannot make the copy exponential. A value past
+// it, which the entry points refuse and only a corrupted state can hold, is
+// logged and reported as not copied.
+func copyStateValue(key string, value interface{}) (interface{}, bool) {
+	budget := jsguard.MaxStateNodes
+	copied := copyValue(value, 0, nil, &budget)
+	if budget < 0 {
+		util.Logger.Warn("a state value holds too many elements, it is dropped", "key", key, "limit", jsguard.MaxStateNodes)
+		return nil, false
+	}
+	return copied, true
 }
 
 // copyValue copies a state value deeply and replaces a non finite float by 0
@@ -1024,15 +1066,39 @@ func copyStates(in map[string]interface{}) map[string]interface{} {
 // script, cannot be marshalled to json, and one would make every reader of
 // the state fail rather than the one channel that produced it. The in memory
 // value is left as it is, so the script that produced it still sees what it
-// wrote.
-func copyValue(in interface{}) interface{} {
+// wrote. It stops as soon as the budget is spent; the caller checks it.
+func copyValue(in interface{}, depth int, seen []interface{}, budget *int) interface{} {
+	*budget--
+	if *budget < 0 {
+		return nil
+	}
 	switch value := in.(type) {
 	case map[string]interface{}:
-		return copyStates(value)
+		if depth >= maxStateCopyDepth || stateCycle(seen, in) {
+			util.Logger.Warn("a stored state value is too deep or cyclic, it is dropped", "depth", depth)
+			return nil
+		}
+		seen = append(seen, in)
+		out := make(map[string]interface{}, len(value))
+		for key, element := range value {
+			out[key] = copyValue(element, depth+1, seen, budget)
+			if *budget < 0 {
+				return nil
+			}
+		}
+		return out
 	case []interface{}:
+		if depth >= maxStateCopyDepth || stateCycle(seen, in) {
+			util.Logger.Warn("a stored state value is too deep or cyclic, it is dropped", "depth", depth)
+			return nil
+		}
+		seen = append(seen, in)
 		out := make([]interface{}, len(value))
 		for i := range value {
-			out[i] = copyValue(value[i])
+			out[i] = copyValue(value[i], depth+1, seen, budget)
+			if *budget < 0 {
+				return nil
+			}
 		}
 		return out
 	case float64:
@@ -1049,4 +1115,16 @@ func copyValue(in interface{}) interface{} {
 		//everything else a state can hold is immutable (number, string, bool, nil)
 		return in
 	}
+}
+
+// stateCycle reports whether container is already on the copy path, which is a
+// cycle in a corrupted stored state.
+func stateCycle(seen []interface{}, container interface{}) bool {
+	p := reflect.ValueOf(container).Pointer()
+	for _, ancestor := range seen {
+		if reflect.ValueOf(ancestor).Pointer() == p {
+			return true
+		}
+	}
+	return false
 }

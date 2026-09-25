@@ -18,8 +18,11 @@ package runtime
 
 import (
 	"fmt"
-	"github.com/SENERGY-Platform/moses/lib/util"
 	"time"
+
+	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
+	"github.com/SENERGY-Platform/moses/lib/jsguard"
+	"github.com/SENERGY-Platform/moses/lib/util"
 )
 
 // The javascript surface is the legacy one: a migrated channel carries its
@@ -134,23 +137,34 @@ func jsStateApi(env *environment, states func() map[string]interface{}) map[stri
 				env.dirty = true
 				return 0
 			}
-			return value
+			//a copy, never the live map: goja would wrap a returned map as a
+			//live object, and a script could then write a function straight into
+			//the shared state, past the set check
+			return readState(env, name, value)
 		},
-		"set": func(field interface{}, value interface{}) {
+		"set": func(field interface{}, value interface{}) error {
 			name, ok := jsField(field)
 			if !ok {
 				env.warnNoField()
-				return
+				return nil
 			}
 			//a missing argument, an explicit null and an explicit undefined all
 			//arrive as nil, where otto aborted the run; the key keeps whatever
 			//it holds rather than taking a nil no reader can use
 			if value == nil {
 				util.Logger.Warn("the script handed no value", "environment", env.id, "field", field)
-				return
+				return nil
 			}
-			states()[name] = jsNumber(value)
+			//checked and copied in one pass, and only the copy is stored: a
+			//structure the script still holds could otherwise gain a function, a
+			//cycle or depth after the check
+			copied, err := jsguard.CopyPlainData(value)
+			if err != nil {
+				return fmt.Errorf("state %q: %w", name, err)
+			}
+			states()[name] = jsNumber(copied)
 			env.dirty = true
+			return nil
 		},
 	}
 }
@@ -196,7 +210,7 @@ func jsContextStateApi(env *environment, gen *generation, now time.Time) map[str
 		return plain
 	}
 	get := plain["get"].(func(field interface{}) interface{})
-	set := plain["set"].(func(field interface{}, value interface{}))
+	set := plain["set"].(func(field interface{}, value interface{}) error)
 	return map[string]interface{}{
 		"get": func(field interface{}) interface{} {
 			name, ok := jsField(field)
@@ -205,24 +219,36 @@ func jsContextStateApi(env *environment, gen *generation, now time.Time) map[str
 				return get(field)
 			}
 			if value, governed := gen.timeline.effectiveContext(name, now); governed {
-				return value
+				return readState(env, name, value)
 			}
 			//before the first change the inline value stands, and seeding put it
 			//into the state at start; a key that is missing anyway reads as 0
 			//without being written
 			if value, exists := env.contextStates()[name]; exists {
-				return value
+				return readState(env, name, value)
 			}
 			return 0
 		},
-		"set": func(field interface{}, value interface{}) {
+		"set": func(field interface{}, value interface{}) error {
 			name, ok := jsField(field)
 			if ok && gen.timeline.governsContext(name) {
 				env.warnTimelineGoverned(name)
-				return
+				return nil
 			}
 			//an invalid field falls through to the plain set, which refuses it
-			set(field, value)
+			return set(field, value)
 		},
 	}
+}
+
+// readState hands a stored value to a script as a plain-data copy. A value past
+// the node budget, which set refuses and only a corrupted state can hold, is
+// logged and read as null.
+func readState(env *environment, field string, value interface{}) interface{} {
+	copied, err := jsguard.PlainCopy(value)
+	if err != nil {
+		util.Logger.Warn("a stored state value is too large to read, it reads as null", attributes.ErrorKey, err, "environment", env.id, "field", field)
+		return nil
+	}
+	return copied
 }

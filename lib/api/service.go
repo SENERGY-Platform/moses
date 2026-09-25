@@ -39,9 +39,7 @@ func ServiceEndpoints(config config.Config, states *state.StateRepo, router gin.
 			return
 		}
 		msg := state.UpdateServiceRequest{}
-		err := gc.ShouldBindJSON(&msg)
-		if err != nil {
-			gc.String(http.StatusBadRequest, "%s", err.Error())
+		if !bindLimitedJSON(gc, &msg, maxRequestBytes, "") {
 			return
 		}
 		result, access, exists, err := states.UpdateService(token, msg)
@@ -68,9 +66,7 @@ func ServiceEndpoints(config config.Config, states *state.StateRepo, router gin.
 			return
 		}
 		msg := state.CreateServiceRequest{}
-		err := gc.ShouldBindJSON(&msg)
-		if err != nil {
-			gc.String(http.StatusBadRequest, "%s", err.Error())
+		if !bindLimitedJSON(gc, &msg, maxRequestBytes, "") {
 			return
 		}
 		result, access, worldAndRoomExists, err := states.CreateService(token, msg)

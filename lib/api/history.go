@@ -84,6 +84,7 @@ type HistoryRequest struct {
 // @Failure 409 {string} string "a history run or a backfill of this environment is already running, or the first day of the window already holds readings and force is not set"
 // @Failure 500 {string} string "error message"
 // @Failure 503 {string} string "the timescale did not answer in time, so the window could not be checked; retry or send force: true"
+// @Failure 413 {string} string "the request body is larger than the allowed limit"
 // @Router /environments/{id}/history [post]
 func postHistoryH(environments repo.Environments, notifier RuntimeNotifier) (string, string, gin.HandlerFunc) {
 	return http.MethodPost, "/environments/:id/history", func(gc *gin.Context) {
@@ -97,8 +98,7 @@ func postHistoryH(environments repo.Environments, notifier RuntimeNotifier) (str
 		}
 
 		request := HistoryRequest{}
-		if err := gc.ShouldBindJSON(&request); err != nil {
-			gc.String(http.StatusBadRequest, "unable to read the request body as a history window: %s", err.Error())
+		if !bindLimitedJSON(gc, &request, maxRequestBytes, "unable to read the request body as a history window: ") {
 			return
 		}
 

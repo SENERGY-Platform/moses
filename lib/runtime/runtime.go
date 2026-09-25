@@ -524,6 +524,7 @@ func (this *Runtime) prepareEnvironment(ctx context.Context, def domain.Environm
 	//what the timeline governs is a property of the definition, so what has
 	//already been reported about it belongs to the generation that is going away
 	env.forgetTimelineWarnings()
+	env.forgetScripts()
 
 	this.mux.Lock()
 	env.gen = gen
@@ -613,6 +614,7 @@ func (this *Runtime) removeEnvironment(id string) {
 
 	env.mux.Lock()
 	env.removed = true
+	env.scripts.clear()
 	env.mux.Unlock()
 
 	if env.cancel != nil {
@@ -622,6 +624,8 @@ func (this *Runtime) removeEnvironment(id string) {
 	//a command runs off the runner context, so it is waited for separately; the
 	//removed flag above is what keeps a new one from being counted after this
 	env.commands.Wait()
+	//again after the waits: a runner finishing its last tick may have prepared a vm
+	env.forgetScripts()
 	env.saves.Wait()
 
 	this.deleteStateIfDefinitionIsGone(id)
@@ -778,7 +782,9 @@ func (this *Runtime) SetState(id string, change repo.StateChange) error {
 			tau := constants[key]
 			target, numeric := asFloat(value)
 			if tau <= 0 || !numeric {
-				env.state.Zones[zoneId][key] = copyValue(value)
+				if copied, ok := copyStateValue(key, value); ok {
+					env.state.Zones[zoneId][key] = copied
+				}
 				continue
 			}
 			env.startApproach(zoneId, key, target, tau, now)
@@ -796,7 +802,9 @@ func (this *Runtime) SetState(id string, change repo.StateChange) error {
 
 func mergeInto(target map[string]interface{}, values map[string]interface{}) {
 	for key, value := range values {
-		target[key] = copyValue(value)
+		if copied, ok := copyStateValue(key, value); ok {
+			target[key] = copied
+		}
 	}
 }
 
@@ -1393,7 +1401,7 @@ func (this *Runtime) execute(env *environment, gen *generation, binding channelB
 		this.reportScriptFailure(env, binding, err)
 		return
 	}
-	err := runScript(binding.script, this.jsApi(env, gen, binding, input, send, now), this.jsTimeout, &env.mux)
+	err := runScriptIn(&env.scripts, gen, binding.script, this.jsApi(env, gen, binding, input, send, now), this.jsTimeout, &env.mux)
 	if err != nil {
 		this.reportScriptFailure(env, binding, err)
 	}

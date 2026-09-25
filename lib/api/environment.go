@@ -19,6 +19,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"strconv"
@@ -26,6 +27,7 @@ import (
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/config"
 	"github.com/SENERGY-Platform/moses/lib/domain"
+	"github.com/SENERGY-Platform/moses/lib/jsguard"
 	"github.com/SENERGY-Platform/moses/lib/repo"
 	moses_runtime "github.com/SENERGY-Platform/moses/lib/runtime"
 	"github.com/SENERGY-Platform/moses/lib/util"
@@ -145,6 +147,7 @@ func getEnvironmentH(environments repo.Environments, shares repo.Shares, catalog
 // @Failure 401 {string} string "the token carries no subject"
 // @Failure 404 {string} string "the environment belongs to somebody else"
 // @Failure 409 {string} string "the document was changed since it was read; the message names both versions"
+// @Failure 413 {string} string "the request body is larger than the allowed limit"
 // @Failure 500 {string} string "error message"
 // @Router /environments/{id} [put]
 func putEnvironmentH(environments repo.Environments, shares repo.Shares, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier, permissions Permissions) (string, string, gin.HandlerFunc) {
@@ -154,9 +157,7 @@ func putEnvironmentH(environments repo.Environments, shares repo.Shares, catalog
 			return
 		}
 		env := domain.Environment{}
-		err := gc.ShouldBindJSON(&env)
-		if err != nil {
-			gc.String(http.StatusBadRequest, "unable to read the request body as an environment: %s", err.Error())
+		if !bindLimitedJSON(gc, &env, maxDocumentBytes, "unable to read the request body as an environment: ") {
 			return
 		}
 		// path wins over body, so a document can be copied to a new id
@@ -316,6 +317,7 @@ func writeVersionConflict(gc *gin.Context, id string, carried int64, stored int6
 // @Success 201 {object} domain.Environment
 // @Failure 400 {object} domain.ValidationError "every problem, with the path of the offending field"
 // @Failure 401 {string} string "the token carries no subject"
+// @Failure 413 {string} string "the request body is larger than the allowed limit"
 // @Failure 500 {string} string "error message"
 // @Router /environments [post]
 func postEnvironmentH(environments repo.Environments, shares repo.Shares, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier, permissions Permissions) (string, string, gin.HandlerFunc) {
@@ -325,9 +327,7 @@ func postEnvironmentH(environments repo.Environments, shares repo.Shares, catalo
 			return
 		}
 		env := domain.Environment{}
-		err := gc.ShouldBindJSON(&env)
-		if err != nil {
-			gc.String(http.StatusBadRequest, "unable to read the request body as an environment: %s", err.Error())
+		if !bindLimitedJSON(gc, &env, maxDocumentBytes, "unable to read the request body as an environment: ") {
 			return
 		}
 		env.Id = ""
@@ -338,7 +338,7 @@ func postEnvironmentH(environments repo.Environments, shares repo.Shares, catalo
 		env.Version = 0
 		domain.AssignIds(&env)
 
-		err = domain.Validate(env)
+		err := domain.Validate(env)
 		if err != nil {
 			writeValidationError(gc, err)
 			return
@@ -445,11 +445,12 @@ func deleteEnvironmentH(environments repo.Environments, shares repo.Shares, cata
 // @Param id path string true "environment id"
 // @Param state body repo.StateChange true "the values to set"
 // @Success 204 {string} string "applied"
-// @Failure 400 {string} string "the body is unreadable, empty, names a zone or asset the definition does not have, or moves a context key the timeline governs; a change wrong in both ways names both"
+// @Failure 400 {string} string "the body is unreadable, empty, holds a value that is not plain data or nests deeper than 32 levels or holds more than 10000 elements, names a zone or asset the definition does not have, or moves a context key the timeline governs; a change wrong in both ways names both"
 // @Failure 401 {string} string "the token carries no subject"
 // @Failure 404 {string} string "no such environment, no access to it, or it is not running here"
 // @Failure 409 {string} string "a history run of this environment is in progress, so it stands at a past instant"
 // @Failure 500 {string} string "error message"
+// @Failure 413 {string} string "the request body is larger than the allowed limit"
 // @Router /environments/{id}/state [patch]
 func patchEnvironmentStateH(environments repo.Environments, shares repo.Shares, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier, permissions Permissions) (string, string, gin.HandlerFunc) {
 	return http.MethodPatch, "/environments/:id/state", func(gc *gin.Context) {
@@ -475,8 +476,7 @@ func patchEnvironmentStateH(environments repo.Environments, shares repo.Shares, 
 		}
 
 		change := repo.StateChange{}
-		if err = gc.ShouldBindJSON(&change); err != nil {
-			gc.String(http.StatusBadRequest, "unable to read the request body as a state change: %s", err.Error())
+		if !bindLimitedJSON(gc, &change, maxDocumentBytes, "unable to read the request body as a state change: ") {
 			return
 		}
 		if change.Empty() {
@@ -484,6 +484,10 @@ func patchEnvironmentStateH(environments repo.Environments, shares repo.Shares, 
 			return
 		}
 
+		if err := checkChangeValues(change); err != nil {
+			gc.String(http.StatusBadRequest, "%s", err.Error())
+			return
+		}
 		err = setState(notifier, id, change)
 		unknownIds := &repo.UnknownIdsError{}
 		governed := &repo.TimelineGovernedError{}
@@ -635,4 +639,31 @@ func writeValidationError(gc *gin.Context, err error) {
 		return
 	}
 	gc.JSON(http.StatusBadRequest, invalid)
+}
+
+// checkChangeValues holds a state change to the bounds a script's state.set
+// meets, so no stored value can grow past what the runtime copies.
+func checkChangeValues(change repo.StateChange) error {
+	check := func(scope string, values map[string]interface{}) error {
+		for key, value := range values {
+			if err := jsguard.CheckPlainData(value); err != nil {
+				return fmt.Errorf("%s %q: %w", scope, key, err)
+			}
+		}
+		return nil
+	}
+	if err := check("context", change.Context); err != nil {
+		return err
+	}
+	for id, values := range change.Zones {
+		if err := check("zone "+id, values); err != nil {
+			return err
+		}
+	}
+	for id, values := range change.Assets {
+		if err := check("asset "+id, values); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -38,9 +38,7 @@ func DeviceEndpoints(config config.Config, states *state.StateRepo, router gin.I
 			return
 		}
 		msg := state.CreateDeviceByTypeRequest{}
-		err := gc.ShouldBindJSON(&msg)
-		if err != nil {
-			gc.String(http.StatusBadRequest, "%s", err.Error())
+		if !bindLimitedJSON(gc, &msg, maxRequestBytes, "") {
 			return
 		}
 		result, access, worldAndRoomExists, err := states.CreateDeviceByType(token, msg)
@@ -67,9 +65,7 @@ func DeviceEndpoints(config config.Config, states *state.StateRepo, router gin.I
 			return
 		}
 		msg := state.UpdateDeviceRequest{}
-		err := gc.ShouldBindJSON(&msg)
-		if err != nil {
-			gc.String(http.StatusBadRequest, "%s", err.Error())
+		if !bindLimitedJSON(gc, &msg, maxDocumentBytes, "") {
 			return
 		}
 		result, access, exists, err := states.UpdateDevice(token, msg)
@@ -96,9 +92,7 @@ func DeviceEndpoints(config config.Config, states *state.StateRepo, router gin.I
 			return
 		}
 		msg := state.CreateDeviceRequest{}
-		err := gc.ShouldBindJSON(&msg)
-		if err != nil {
-			gc.String(http.StatusBadRequest, "%s", err.Error())
+		if !bindLimitedJSON(gc, &msg, maxDocumentBytes, "") {
 			return
 		}
 		result, access, worldAndRoomExists, err := states.CreateDevice(token, msg)

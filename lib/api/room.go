@@ -38,9 +38,7 @@ func RoomEndpoints(config config.Config, states *state.StateRepo, router gin.IRo
 			return
 		}
 		msg := state.UpdateRoomRequest{}
-		err := gc.ShouldBindJSON(&msg)
-		if err != nil {
-			gc.String(http.StatusBadRequest, "%s", err.Error())
+		if !bindLimitedJSON(gc, &msg, maxDocumentBytes, "") {
 			return
 		}
 		result, access, exists, err := states.UpdateRoom(token, msg)
@@ -67,9 +65,7 @@ func RoomEndpoints(config config.Config, states *state.StateRepo, router gin.IRo
 			return
 		}
 		msg := state.CreateRoomRequest{}
-		err := gc.ShouldBindJSON(&msg)
-		if err != nil {
-			gc.String(http.StatusBadRequest, "%s", err.Error())
+		if !bindLimitedJSON(gc, &msg, maxDocumentBytes, "") {
 			return
 		}
 		result, access, worldExists, err := states.CreateRoom(token, msg)

@@ -43,9 +43,7 @@ func TemplateEndpoints(config config.Config, states *state.StateRepo, router gin
 			return
 		}
 		msg := state.UpdateTemplateRequest{}
-		err := gc.ShouldBindJSON(&msg)
-		if err != nil {
-			gc.String(http.StatusBadRequest, "%s", err.Error())
+		if !bindLimitedJSON(gc, &msg, maxRequestBytes, "") {
 			return
 		}
 		result, exists, err := states.UpdateTemplate(token, msg)
@@ -73,9 +71,7 @@ func TemplateEndpoints(config config.Config, states *state.StateRepo, router gin
 			return
 		}
 		msg := state.CreateTemplateRequest{}
-		err := gc.ShouldBindJSON(&msg)
-		if err != nil {
-			gc.String(http.StatusBadRequest, "%s", err.Error())
+		if !bindLimitedJSON(gc, &msg, maxRequestBytes, "") {
 			return
 		}
 		result, err := states.CreateTemplate(token, msg)
@@ -150,9 +146,7 @@ func TemplateEndpoints(config config.Config, states *state.StateRepo, router gin
 			return
 		}
 		msg := state.CreateChangeRoutineByTemplateRequest{}
-		err := gc.ShouldBindJSON(&msg)
-		if err != nil {
-			gc.String(http.StatusBadRequest, "%s", err.Error())
+		if !bindLimitedJSON(gc, &msg, maxRequestBytes, "") {
 			return
 		}
 		result, access, exists, err := states.CreateChangeRoutineByTemplate(token, msg)
@@ -179,9 +173,7 @@ func TemplateEndpoints(config config.Config, states *state.StateRepo, router gin
 			return
 		}
 		msg := state.UpdateChangeRoutineByTemplateRequest{}
-		err := gc.ShouldBindJSON(&msg)
-		if err != nil {
-			gc.String(http.StatusBadRequest, "%s", err.Error())
+		if !bindLimitedJSON(gc, &msg, maxRequestBytes, "") {
 			return
 		}
 		result, access, exists, err := states.UpdateChangeRoutineByTemplate(token, msg)

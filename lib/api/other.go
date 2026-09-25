@@ -52,9 +52,7 @@ func OtherEndpoints(config config.Config, states *state.StateRepo, router gin.IR
 			return
 		}
 		var msg interface{}
-		err = gc.ShouldBindJSON(&msg)
-		if err != nil {
-			gc.String(http.StatusBadRequest, "%s", err.Error())
+		if !bindLimitedJSON(gc, &msg, maxRequestBytes, "") {
 			return
 		}
 		result, err := states.RunService(id, msg)

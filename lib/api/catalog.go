@@ -86,6 +86,7 @@ type CreateDeviceRequest struct {
 // @Failure 400 {string} string "the body is unreadable or incomplete"
 // @Failure 401 {string} string "the token carries no subject"
 // @Failure 500 {string} string "error message"
+// @Failure 413 {string} string "the request body is larger than the allowed limit"
 // @Router /devices [post]
 func postDeviceH(catalog DeviceCatalog) (string, string, gin.HandlerFunc) {
 	return http.MethodPost, "/devices", func(gc *gin.Context) {
@@ -94,8 +95,7 @@ func postDeviceH(catalog DeviceCatalog) (string, string, gin.HandlerFunc) {
 			return
 		}
 		request := CreateDeviceRequest{}
-		if err := gc.ShouldBindJSON(&request); err != nil {
-			gc.String(http.StatusBadRequest, "unable to read the request body: %s", err.Error())
+		if !bindLimitedJSON(gc, &request, maxRequestBytes, "unable to read the request body: ") {
 			return
 		}
 		if strings.TrimSpace(request.DeviceTypeId) == "" || strings.TrimSpace(request.Name) == "" {
