@@ -835,6 +835,183 @@ definitions:
     - ZoneUnit
     - ZoneHall
     - ZoneRoom
+  effects.Edge:
+    properties:
+      channel:
+        description: |-
+          Channel is the channel whose source makes the edge: the reading or writing
+          script or formula, the gated or scaled schedule, the aggregate, the channel
+          a dated change targets. Empty for submetered_by and context targets.
+        example: ch-a-bat-soc
+        type: string
+      count:
+        example: 1
+        type: integer
+      from:
+        example: asset:a-pv-a
+        type: string
+      key:
+        description: |-
+          Key is the state or context key that is read or written, the channel id a
+          formula reads, or the target of a dated change.
+        example: pv_w
+        type: string
+      kind:
+        allOf:
+        - $ref: '#/definitions/effects.EdgeKind'
+        enum:
+        - reads
+        - writes
+        - gates
+        - scales
+        - submeters
+        - aggregates
+        - dated_change
+        example: reads
+      to:
+        example: asset:a-speicher-a
+        type: string
+      via:
+        allOf:
+        - $ref: '#/definitions/effects.Via'
+        enum:
+        - script
+        - formula
+        - schedule
+        - aggregate
+        - submetered_by
+        - timeline
+        example: script
+    type: object
+  effects.EdgeKind:
+    enum:
+    - reads
+    - writes
+    - gates
+    - scales
+    - submeters
+    - aggregates
+    - dated_change
+    type: string
+    x-enum-varnames:
+    - EdgeReads
+    - EdgeWrites
+    - EdgeGates
+    - EdgeScales
+    - EdgeSubmeters
+    - EdgeAggregates
+    - EdgeDatedChange
+  effects.Graph:
+    properties:
+      edges:
+        items:
+          $ref: '#/definitions/effects.Edge'
+        type: array
+      nodes:
+        items:
+          $ref: '#/definitions/effects.Node'
+        type: array
+      unresolved:
+        items:
+          $ref: '#/definitions/effects.Unresolved'
+        type: array
+    type: object
+  effects.Node:
+    properties:
+      asset_kind:
+        description: AssetKind is set on an asset.
+        example: inverter
+        type: string
+      external_ref:
+        description: 'ExternalRef is set on a context key: the ref of a dataset source,
+          else empty.'
+        example: ""
+        type: string
+      id:
+        example: asset:a-pv-a
+        type: string
+      kind:
+        allOf:
+        - $ref: '#/definitions/effects.NodeKind'
+        enum:
+        - context_key
+        - asset
+        - zone
+        - timeline
+        example: asset
+      label:
+        example: PV-Wechselrichter
+        type: string
+      site:
+        description: 'Site is set on an asset and on a zone: the top level zone above
+          it.'
+        example: z-standort-a
+        type: string
+      source_kind:
+        description: |-
+          SourceKind is set on a context key: the kind of the context source driving
+          it, empty when none does.
+        enum:
+        - profile
+        - dataset
+        - ""
+        example: dataset
+        type: string
+      static:
+        description: |-
+          Static is set on a context key: true when the key is declared in context
+          and no context source drives it.
+        example: false
+        type: boolean
+      zone:
+        description: Zone is set on an asset (the zone it sits in) and on a zone (its
+          own id).
+        example: z-standort-a
+        type: string
+    type: object
+  effects.NodeKind:
+    enum:
+    - context_key
+    - asset
+    - zone
+    - timeline
+    type: string
+    x-enum-varnames:
+    - NodeContextKey
+    - NodeAsset
+    - NodeZone
+    - NodeTimeline
+  effects.Unresolved:
+    properties:
+      asset:
+        example: a-rlm-a
+        type: string
+      channel:
+        example: ch-a-rlm-a-180
+        type: string
+      expression:
+        example: E.get(k + '_v')
+        type: string
+      reason:
+        example: the key is computed at run time
+        type: string
+    type: object
+  effects.Via:
+    enum:
+    - script
+    - formula
+    - schedule
+    - aggregate
+    - submetered_by
+    - timeline
+    type: string
+    x-enum-varnames:
+    - ViaScript
+    - ViaFormula
+    - ViaSchedule
+    - ViaAggregate
+    - ViaSubmeteredBy
+    - ViaTimeline
   repo.DatasetColumn:
     properties:
       from_unix:
@@ -1621,6 +1798,44 @@ paths:
       security:
       - Bearer: []
       summary: Reconstruct one environment over a past window
+      tags:
+      - Environment
+  /environments/{id}/effects:
+    get:
+      description: |-
+        Which context keys, assets and zones drive which others, derived from the stored definition alone: script reads and writes of foreign state, formula inputs, schedule gates and scales, the meter tree and its aggregates, and the dated changes of the timeline. Edges point from the producer to the consumer.
+
+        A script is analysed, not run. A reference whose zone, asset or key is not a string literal, an alias of one or a row of a literal table is listed under `unresolved` with the reason instead of being guessed; the rest of the graph is derived all the same.
+
+        Access is that of GET /environments/{id}: a missing environment and one the caller may not see are both 404. See docs/effects.md.
+      parameters:
+      - description: environment id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/effects.Graph'
+        "401":
+          description: the token carries no subject
+          schema:
+            type: string
+        "404":
+          description: no such environment, or no access to it
+          schema:
+            type: string
+        "500":
+          description: error message
+          schema:
+            type: string
+      security:
+      - Bearer: []
+      summary: Effect graph of one environment
       tags:
       - Environment
   /environments/{id}/history:

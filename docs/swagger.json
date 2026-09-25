@@ -813,6 +813,58 @@
                 }
             }
         },
+        "/environments/{id}/effects": {
+            "get": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Which context keys, assets and zones drive which others, derived from the stored definition alone: script reads and writes of foreign state, formula inputs, schedule gates and scales, the meter tree and its aggregates, and the dated changes of the timeline. Edges point from the producer to the consumer.\n\nA script is analysed, not run. A reference whose zone, asset or key is not a string literal, an alias of one or a row of a literal table is listed under `unresolved` with the reason instead of being guessed; the rest of the graph is derived all the same.\n\nAccess is that of GET /environments/{id}: a missing environment and one the caller may not see are both 404. See docs/effects.md.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Environment"
+                ],
+                "summary": "Effect graph of one environment",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "environment id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/effects.Graph"
+                        }
+                    },
+                    "401": {
+                        "description": "the token carries no subject",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "no such environment, or no access to it",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "error message",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/environments/{id}/history": {
             "get": {
                 "security": [
@@ -2149,6 +2201,227 @@
                 "ZoneUnit",
                 "ZoneHall",
                 "ZoneRoom"
+            ]
+        },
+        "effects.Edge": {
+            "type": "object",
+            "properties": {
+                "channel": {
+                    "description": "Channel is the channel whose source makes the edge: the reading or writing\nscript or formula, the gated or scaled schedule, the aggregate, the channel\na dated change targets. Empty for submetered_by and context targets.",
+                    "type": "string",
+                    "example": "ch-a-bat-soc"
+                },
+                "count": {
+                    "type": "integer",
+                    "example": 1
+                },
+                "from": {
+                    "type": "string",
+                    "example": "asset:a-pv-a"
+                },
+                "key": {
+                    "description": "Key is the state or context key that is read or written, the channel id a\nformula reads, or the target of a dated change.",
+                    "type": "string",
+                    "example": "pv_w"
+                },
+                "kind": {
+                    "enum": [
+                        "reads",
+                        "writes",
+                        "gates",
+                        "scales",
+                        "submeters",
+                        "aggregates",
+                        "dated_change"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/effects.EdgeKind"
+                        }
+                    ],
+                    "example": "reads"
+                },
+                "to": {
+                    "type": "string",
+                    "example": "asset:a-speicher-a"
+                },
+                "via": {
+                    "enum": [
+                        "script",
+                        "formula",
+                        "schedule",
+                        "aggregate",
+                        "submetered_by",
+                        "timeline"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/effects.Via"
+                        }
+                    ],
+                    "example": "script"
+                }
+            }
+        },
+        "effects.EdgeKind": {
+            "type": "string",
+            "enum": [
+                "reads",
+                "writes",
+                "gates",
+                "scales",
+                "submeters",
+                "aggregates",
+                "dated_change"
+            ],
+            "x-enum-varnames": [
+                "EdgeReads",
+                "EdgeWrites",
+                "EdgeGates",
+                "EdgeScales",
+                "EdgeSubmeters",
+                "EdgeAggregates",
+                "EdgeDatedChange"
+            ]
+        },
+        "effects.Graph": {
+            "type": "object",
+            "properties": {
+                "edges": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/effects.Edge"
+                    }
+                },
+                "nodes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/effects.Node"
+                    }
+                },
+                "unresolved": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/effects.Unresolved"
+                    }
+                }
+            }
+        },
+        "effects.Node": {
+            "type": "object",
+            "properties": {
+                "asset_kind": {
+                    "description": "AssetKind is set on an asset.",
+                    "type": "string",
+                    "example": "inverter"
+                },
+                "external_ref": {
+                    "description": "ExternalRef is set on a context key: the ref of a dataset source, else empty.",
+                    "type": "string",
+                    "example": ""
+                },
+                "id": {
+                    "type": "string",
+                    "example": "asset:a-pv-a"
+                },
+                "kind": {
+                    "enum": [
+                        "context_key",
+                        "asset",
+                        "zone",
+                        "timeline"
+                    ],
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/effects.NodeKind"
+                        }
+                    ],
+                    "example": "asset"
+                },
+                "label": {
+                    "type": "string",
+                    "example": "PV-Wechselrichter"
+                },
+                "site": {
+                    "description": "Site is set on an asset and on a zone: the top level zone above it.",
+                    "type": "string",
+                    "example": "z-standort-a"
+                },
+                "source_kind": {
+                    "description": "SourceKind is set on a context key: the kind of the context source driving\nit, empty when none does.",
+                    "type": "string",
+                    "enum": [
+                        "profile",
+                        "dataset",
+                        ""
+                    ],
+                    "example": "dataset"
+                },
+                "static": {
+                    "description": "Static is set on a context key: true when the key is declared in context\nand no context source drives it.",
+                    "type": "boolean",
+                    "example": false
+                },
+                "zone": {
+                    "description": "Zone is set on an asset (the zone it sits in) and on a zone (its own id).",
+                    "type": "string",
+                    "example": "z-standort-a"
+                }
+            }
+        },
+        "effects.NodeKind": {
+            "type": "string",
+            "enum": [
+                "context_key",
+                "asset",
+                "zone",
+                "timeline"
+            ],
+            "x-enum-varnames": [
+                "NodeContextKey",
+                "NodeAsset",
+                "NodeZone",
+                "NodeTimeline"
+            ]
+        },
+        "effects.Unresolved": {
+            "type": "object",
+            "properties": {
+                "asset": {
+                    "type": "string",
+                    "example": "a-rlm-a"
+                },
+                "channel": {
+                    "type": "string",
+                    "example": "ch-a-rlm-a-180"
+                },
+                "expression": {
+                    "type": "string",
+                    "example": "E.get(k + '_v')"
+                },
+                "reason": {
+                    "type": "string",
+                    "example": "the key is computed at run time"
+                }
+            }
+        },
+        "effects.Via": {
+            "type": "string",
+            "enum": [
+                "script",
+                "formula",
+                "schedule",
+                "aggregate",
+                "submetered_by",
+                "timeline"
+            ],
+            "x-enum-varnames": [
+                "ViaScript",
+                "ViaFormula",
+                "ViaSchedule",
+                "ViaAggregate",
+                "ViaSubmeteredBy",
+                "ViaTimeline"
             ]
         },
         "repo.DatasetColumn": {
