@@ -169,10 +169,13 @@ func cancelHistory(notifier RuntimeNotifier, id string) (moses_runtime.HistorySt
 
 func Start(ctx context.Context, config config.Config, staterepo *state.StateRepo, environments repo.Environments, shares repo.Shares, datasets repo.Datasets, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier, permissions Permissions) {
 	server := &http.Server{
-		Addr:              ":" + config.ServerPort,
-		Handler:           NewRouter(config, staterepo, environments, shares, datasets, catalog, mirror, notifier, permissions),
-		WriteTimeout:      10 * time.Second,
-		ReadTimeout:       2 * time.Second,
+		Addr:    ":" + config.ServerPort,
+		Handler: NewRouter(config, staterepo, environments, shares, datasets, catalog, mirror, notifier, permissions),
+		// saving an environment provisions every platform device and the graph
+		// before it answers, which takes seconds per ten devices on a busy platform
+		WriteTimeout: 2 * time.Minute,
+		// a document body may be up to 16 MiB
+		ReadTimeout:       30 * time.Second,
 		ReadHeaderTimeout: 2 * time.Second,
 	}
 	go func() {
