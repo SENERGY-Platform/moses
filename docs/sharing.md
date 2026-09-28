@@ -82,8 +82,9 @@ take back.
 
 It goes with the environment when that is deleted, and an id that is used again
 starts unshared — a `POST`, or a `PUT` to an id nothing is stored under, drops
-what an earlier environment left behind, and does so before it creates the first
-device of the new one.
+what an earlier environment left behind, and does so after validation and before
+it creates the first device of the new one. A refused document leaves the set
+alone.
 
 The set carries a version. Every write is a compare-and-swap against the version
 it was read at, so two shares of one environment arriving together cannot each

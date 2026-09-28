@@ -54,6 +54,13 @@ type fakeCatalog struct {
 
 	// renameErr fails only the rename, for the same reason deleteErr exists.
 	renameErr error
+
+	// checked records what the platform check was asked; checkProblems and
+	// checkErr are its answer. Left empty the check passes, which is what every
+	// test that is not about it wants.
+	checked       [][]devices.AssetReference
+	checkProblems []domain.Problem
+	checkErr      error
 }
 
 type renamedDevice struct {
@@ -94,6 +101,15 @@ func (this *fakeCatalog) RenameDevice(ctx context.Context, token string, id stri
 		return this.renameErr
 	}
 	return this.err
+}
+
+// CheckReferences fails on a cancelled context, as the real reads do.
+func (this *fakeCatalog) CheckReferences(ctx context.Context, token string, assets []devices.AssetReference) ([]domain.Problem, error) {
+	this.checked = append(this.checked, assets)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return this.checkProblems, this.checkErr
 }
 
 func catalogRouter(catalog DeviceCatalog) *gin.Engine {

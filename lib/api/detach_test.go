@@ -70,12 +70,22 @@ func (this *contextProbe) assertBounded(t *testing.T, what string) {
 	}
 }
 
-// cancellingCatalog cancels the request after its first successful device call.
+// cancellingCatalog cancels the request after its first successful device call,
+// or with cancelAfterCheck set, right after the platform check.
 type cancellingCatalog struct {
 	*fakeCatalog
-	probe  contextProbe
-	cancel context.CancelFunc
-	fired  bool
+	probe            contextProbe
+	cancel           context.CancelFunc
+	fired            bool
+	cancelAfterCheck context.CancelFunc
+}
+
+func (this *cancellingCatalog) CheckReferences(ctx context.Context, token string, assets []devices.AssetReference) ([]domain.Problem, error) {
+	problems, err := this.fakeCatalog.CheckReferences(ctx, token, assets)
+	if this.cancelAfterCheck != nil {
+		this.cancelAfterCheck()
+	}
+	return problems, err
 }
 
 func (this *cancellingCatalog) after() {
@@ -346,16 +356,16 @@ func TestAnUpdateWhoseCallerGoesAwayStillCompletesEveryStep(t *testing.T) {
 	permissions.probe.assertBounded(t, "permissions")
 }
 
-// A put to an id that is new here clears a leftover share set before it even
-// validates. A caller gone between that read and the first write must not leave
-// the set standing under a document that is then stored.
-func TestAPutUnderANewIdWhoseCallerGoesAwayAfterTheReadStillStartsUnshared(t *testing.T) {
+// A put to an id that is new here clears a leftover share set as its first write,
+// right after validation. A caller gone between validation and that write must
+// not leave the set standing under a document that is then stored.
+func TestAPutUnderANewIdWhoseCallerGoesAwayAfterValidationStillStartsUnshared(t *testing.T) {
 	requestCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	store := &contextEnvironments{fakeEnvironments: newFakeEnvironments(), afterGet: cancel}
+	store := &contextEnvironments{fakeEnvironments: newFakeEnvironments()}
 	shares := &contextShares{fakeShares: newFakeShares()}
 	shares.set("env-9", []string{"former-user"}, nil)
-	catalog := &cancellingCatalog{fakeCatalog: &fakeCatalog{idsByName: namedDeviceIds()}}
+	catalog := &cancellingCatalog{fakeCatalog: &fakeCatalog{idsByName: namedDeviceIds()}, cancelAfterCheck: cancel}
 	router := testRouterWithAll(store, shares, catalog, nil, nil, nil)
 
 	resp := doWithin(t, requestCtx, router, "PUT", "/environments/env-9", "user-a", environmentWithTwoAssets())
@@ -373,6 +383,35 @@ func TestAPutUnderANewIdWhoseCallerGoesAwayAfterTheReadStillStartsUnshared(t *te
 		t.Error("the document has to be stored")
 	}
 	shares.probe.assertBounded(t, "shares")
+}
+
+// Gone after the read and before validation finished, the put has written
+// nothing yet, so it writes nothing at all and the leftover set stays with no
+// document stored under it.
+func TestAPutUnderANewIdWhoseCallerGoesAwayAfterTheReadWritesNothing(t *testing.T) {
+	requestCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := &contextEnvironments{fakeEnvironments: newFakeEnvironments(), afterGet: cancel}
+	shares := &contextShares{fakeShares: newFakeShares()}
+	shares.set("env-9", []string{"former-user"}, nil)
+	catalog := &cancellingCatalog{fakeCatalog: &fakeCatalog{idsByName: namedDeviceIds()}}
+	router := testRouterWithAll(store, shares, catalog, nil, nil, nil)
+
+	resp := doWithin(t, requestCtx, router, "PUT", "/environments/env-9", "user-a", environmentWithTwoAssets())
+	assertCancelled(t, requestCtx)
+	if resp.Code != http.StatusBadGateway {
+		t.Fatalf("expected the check to fail with 502, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if len(catalog.checked) != 1 {
+		t.Fatalf("the check has to have run, so this proves the order, got %d checks", len(catalog.checked))
+	}
+	if got := shares.users("env-9"); len(got) != 1 || got[0] != "former-user" {
+		t.Errorf("nothing was stored, so the set has to stay, got %v", got)
+	}
+	if len(catalog.created) != 0 || len(store.stored) != 0 || shares.probe.writes != 0 {
+		t.Errorf("nothing may be written, got devices %+v, documents %d, share writes %d",
+			catalog.created, len(store.stored), shares.probe.writes)
+	}
 }
 
 // ---------------------------------------------------------------------------

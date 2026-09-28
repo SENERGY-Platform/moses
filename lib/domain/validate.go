@@ -35,6 +35,11 @@ const MaxZoneDepth = 8
 // imported document is untrusted input and must not be able to exhaust memory.
 const MaxNodes = 10000
 
+// MaxExternalIdLength bounds a platform id the document names, in bytes. Real
+// URNs stay below a hundred, and validation reads every one from the platform
+// in a query url a gateway refuses beyond a few KiB.
+const MaxExternalIdLength = 256
+
 // MaxScheduleStates bounds the steps of one schedule. The states are not nodes
 // in the MaxNodes sense and would otherwise be an unbounded list on an
 // untrusted document; the runtime walks all of them on every evaluation of the
@@ -296,6 +301,8 @@ func (this *validator) checkAsset(path string, asset Asset, site int) {
 	if strings.TrimSpace(asset.ExternalTypeId) == "" {
 		this.fail(path+".external_type_id", "must reference a device type")
 	}
+	this.checkExternalId(path+".external_type_id", asset.ExternalTypeId)
+	this.checkExternalId(path+".external_ref", asset.ExternalRef)
 	this.checkStates(path+".initial_states", asset.InitialStates)
 
 	if asset.SubmeteredBy != "" {
@@ -599,6 +606,12 @@ func (this *validator) checkTimelineValue(path string, field TimelineField, valu
 	}
 }
 
+func (this *validator) checkExternalId(path string, id string) {
+	if len(id) > MaxExternalIdLength {
+		this.fail(path, "is %d bytes long, the limit for a platform id is %d", len(id), MaxExternalIdLength)
+	}
+}
+
 func (this *validator) checkChannel(path string, channel Channel) {
 	this.nodes++
 	if strings.TrimSpace(channel.Name) == "" {
@@ -608,6 +621,7 @@ func (this *validator) checkChannel(path string, channel Channel) {
 		this.fail(path+".direction", "must be %q or %q, got %q", Sensor, Actuator, channel.Direction)
 	}
 	this.claimId(path+".id", channel.Id)
+	this.checkExternalId(path+".external_ref", channel.ExternalRef)
 	//the first channel of a duplicated id keeps the entry, the way assetSites
 	//does: claimId already reports the duplicate, and letting the second one win
 	//would report a source kind nobody referenced on top of it

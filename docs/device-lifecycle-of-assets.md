@@ -113,10 +113,57 @@ and PUT call as well). It answers `200 {"valid": true}`, or the 400, 413 or 401
 POST would give, and it provisions no device, writes no graph, share set or
 document and reloads nothing. A caller that replaces a document by deleting and
 recreating it checks the new one here first, so a refused document does not
-leave it with neither.
+leave it with neither. That 200 does not cover an `external_ref` of a device
+the DELETE then removes: the POST that follows finds the device gone and is
+refused.
 
-A 200 is not a promise that the create succeeds: provisioning runs after
-validation, and a device type the device-manager refuses fails the create with
-500 only then. The body id is cleared before validation, as on create; the
-PUT-only refusals (404 for a foreign id, 409 for an outdated version) are not
-checked.
+The body id is cleared before validation, as on create; the PUT-only refusals
+(404 for a foreign id, 409 for an outdated version) are not checked.
+
+## What validation reads from the platform
+
+The same validation reads, and only reads, what the document names on the
+platform (`checkPlatform` in `lib/api/platformcheck.go`, `CheckReferences` in
+`lib/devices/check.go`). Each reference the platform cannot serve is a problem
+at the path of its field, in the same 400 as the problems of `domain.Validate`
+and sorted with them:
+
+- `external_type_id`: the device type does not exist or the caller cannot read
+  it, or it has no service of the configured protocol (`moses`).
+- a channel's `external_ref`: the device type has no such service, the service
+  belongs to another protocol, or, on a sensor, it declares a time path the
+  publisher refuses (`devices.ResolveTimeShape`), so no reading would ever
+  arrive.
+- an asset's `external_ref`: the attached device does not exist or the caller
+  may not write it, or it is of another device type than `external_type_id`
+  names; the runtime publishes through the services of the device's own type.
+
+A platform id longer than 256 bytes (`domain.MaxExternalIdLength`) is refused
+by `domain.Validate` at its field and not read, since the query url carrying it
+would be refused as too long.
+
+Every distinct device type and device is read once per request, in list
+queries by id of at most 50 ids each. On a PUT, a device the stored document
+already carried with the same device type is not read again: the
+device-repository trails the device-manager, so a device the previous save
+created may not be readable yet. A copy under a new id has no stored document
+and reads all of them.
+
+A platform that cannot be read — an error status, no answer within 30 seconds,
+an unreadable answer — makes POST, PUT and validate answer **502**, with nothing
+written, even when the document has problems of its own: a 400 always carries
+every problem. A document over the node limit is refused by `domain.Validate`
+without reading the platform.
+
+**Attaching a device takes the right to write it.** Moses publishes into an
+attached device with its own service account, whatever rights the author of the
+document has, so the device is read with the caller's token and `p=w`: a caller
+who may only read a device, such as one it was shared with, cannot make moses
+publish readings into it. The device-repository leaves such a device out of the
+answer, so the problem cannot tell "does not exist" from "may not write". This
+holds for a new attachment only: a PUT does not check again a device the stored
+document already carried with the same device type.
+
+A 200 is still not a promise that a create succeeds: the device-manager can
+refuse to create a device, or a device type can change between validate and
+create.

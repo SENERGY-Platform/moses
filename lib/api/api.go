@@ -28,6 +28,7 @@ import (
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/config"
 	"github.com/SENERGY-Platform/moses/lib/devices"
+	"github.com/SENERGY-Platform/moses/lib/domain"
 	"github.com/SENERGY-Platform/moses/lib/repo"
 	moses_runtime "github.com/SENERGY-Platform/moses/lib/runtime"
 	"github.com/SENERGY-Platform/moses/lib/state"
@@ -55,6 +56,9 @@ type DeviceCatalog interface {
 	CreateDevice(ctx context.Context, token string, deviceTypeId string, name string) (devices.Device, error)
 	DeleteDevice(ctx context.Context, token string, id string) error
 	RenameDevice(ctx context.Context, token string, id string, name string) error
+	// CheckReferences only reads: the problems of what the assets name on the
+	// platform, or an error when the platform could not be read.
+	CheckReferences(ctx context.Context, token string, assets []devices.AssetReference) ([]domain.Problem, error)
 }
 
 // RuntimeNotifier is how a change to a stored environment reaches the running

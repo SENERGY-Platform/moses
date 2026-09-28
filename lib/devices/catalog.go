@@ -32,6 +32,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sync"
 
 	deviceRepo "github.com/SENERGY-Platform/device-repository/lib/client"
 	deviceRepoModel "github.com/SENERGY-Platform/device-repository/lib/model"
@@ -79,17 +80,23 @@ type registry interface {
 }
 
 type Catalog struct {
-	repo       registry
+	repo registry
+	// repoUrl is read directly, with a context, where a request has to be able
+	// to give up on the device-repository: the registry client takes none.
+	repoUrl    string
 	managerUrl string
 	protocol   string
 	// protocolId is resolved once and cached: it never changes while the
-	// service runs, and every device type query needs it.
-	protocolId string
+	// service runs, and every device type query needs it. Guarded, because
+	// concurrent requests resolve it.
+	protocolMux sync.Mutex
+	protocolId  string
 }
 
 func NewCatalog(deviceRepoUrl string, deviceManagerUrl string, protocol string) *Catalog {
 	return &Catalog{
 		repo:       deviceRepo.NewClient(deviceRepoUrl, nil),
+		repoUrl:    deviceRepoUrl,
 		managerUrl: deviceManagerUrl,
 		protocol:   protocol,
 	}
@@ -128,16 +135,29 @@ func (this *Catalog) DeviceTypes(token string) ([]DeviceType, error) {
 
 // ProtocolId resolves the id of this service's protocol by its handler name.
 func (this *Catalog) ProtocolId(token string) (string, error) {
-	if this.protocolId != "" {
-		return this.protocolId, nil
+	if cached := this.cachedProtocolId(); cached != "" {
+		return cached, nil
 	}
 	protocols, err, _ := this.repo.ListProtocols(token, 1000, 0, "name.asc")
 	if err != nil {
 		return "", err
 	}
+	return this.rememberProtocol(protocols)
+}
+
+func (this *Catalog) cachedProtocolId() string {
+	this.protocolMux.Lock()
+	defer this.protocolMux.Unlock()
+	return this.protocolId
+}
+
+// rememberProtocol picks this service's protocol out of a listing and caches its id.
+func (this *Catalog) rememberProtocol(protocols []models.Protocol) (string, error) {
 	for _, protocol := range protocols {
 		if protocol.Handler == this.protocol {
+			this.protocolMux.Lock()
 			this.protocolId = protocol.Id
+			this.protocolMux.Unlock()
 			return protocol.Id, nil
 		}
 	}

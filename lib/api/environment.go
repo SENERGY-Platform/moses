@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"time"
 
@@ -135,7 +136,7 @@ func getEnvironmentH(environments repo.Environments, shares repo.Shares, catalog
 }
 
 // @Summary Create or replace one environment
-// @Description Idempotent. The id in the path wins over the one in the body, so a document can be copied to a new id without editing it. Ownership comes from the token on create and never transfers on update; owner is served read-only and a value in the body is ignored. An asset without an external_ref gets a platform device created for it, and a device created that way is deleted again when the asset that carried it is gone from the document; a device attached to an asset by the caller is never deleted. Renaming an asset also renames the device that was created for it, again never a device the caller attached. external_managed says which is which and is decided by the server, so sending it has no effect. Who the devices of this environment are shared with is not part of the document: it is kept beside it and changed through /environments/{id}/shares, so an export carries no shares and an import hands nothing to the accounts of the environment it came from. A put to an id nothing is stored under starts unshared, even where an earlier environment under that id was shared. The environment is also mirrored as a graph in the device-repository, rebuilt from the document on every save, so a change made to that graph by hand does not survive; external_graph_ref names the graph and is decided by the server, so sending it has no effect either. An asset's submetered_by hangs it, in that mirrored graph, under the device of the named asset instead of its zone, as long as that asset is in the same top level zone; a reference to a missing asset, one outside that zone, or one that closes a cycle is refused with 400.
+// @Description Idempotent. The id in the path wins over the one in the body, so a document can be copied to a new id without editing it. Ownership comes from the token on create and never transfers on update; owner is served read-only and a value in the body is ignored. An asset without an external_ref gets a platform device created for it, and a device created that way is deleted again when the asset that carried it is gone from the document; a device attached to an asset by the caller is never deleted. Renaming an asset also renames the device that was created for it, again never a device the caller attached. external_managed says which is which and is decided by the server, so sending it has no effect. Who the devices of this environment are shared with is not part of the document: it is kept beside it and changed through /environments/{id}/shares, so an export carries no shares and an import hands nothing to the accounts of the environment it came from. A put to an id nothing is stored under starts unshared, even where an earlier environment under that id was shared. The environment is also mirrored as a graph in the device-repository, rebuilt from the document on every save, so a change made to that graph by hand does not survive; external_graph_ref names the graph and is decided by the server, so sending it has no effect either. An asset's submetered_by hangs it, in that mirrored graph, under the device of the named asset instead of its zone, as long as that asset is in the same top level zone; a reference to a missing asset, one outside that zone, or one that closes a cycle is refused with 400. Before anything is written, every device type, service and attached device the document names is read from the platform, and one it cannot serve is a problem in the same 400: a device type that does not exist or has no service of this service's protocol, a channel's service the device type does not have or that belongs to another protocol, a sensor's service whose declared time path cannot take a reading from moses, and an attached device that does not exist, that the caller may not write, since moses publishes into it, or that is of another device type. A device the stored document already carried with the same device type is not read again.
 // @Description
 // @Description Send back the `version` of the document you read and the write is refused with 409 if anybody stored a change in between; the response of every successful write carries the new version. Sending 0, or leaving the field out, writes unchecked — which is what a client that knows nothing of the field does, and what makes losing a concurrent edit, and the devices only the other document still references, possible.
 // @Tags Environment
@@ -151,6 +152,7 @@ func getEnvironmentH(environments repo.Environments, shares repo.Shares, catalog
 // @Failure 409 {string} string "the document was changed since it was read; the message names both versions"
 // @Failure 413 {string} string "the request body is larger than the allowed limit"
 // @Failure 500 {string} string "error message"
+// @Failure 502 {string} string "the platform could not be read to check the document; nothing was changed"
 // @Router /environments/{id} [put]
 func putEnvironmentH(environments repo.Environments, shares repo.Shares, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier, permissions Permissions) (string, string, gin.HandlerFunc) {
 	return http.MethodPut, "/environments/:id", func(gc *gin.Context) {
@@ -174,10 +176,6 @@ func putEnvironmentH(environments repo.Environments, shares repo.Shares, catalog
 		var previous *domain.Environment
 
 		existing, err := environments.Get(gc.Request.Context(), env.Id)
-		// the first write, clearShares, can come in the switch below, and from
-		// there on a caller that goes away must not stop the steps half-way
-		ctx, cancel := mutationContext(gc)
-		defer cancel()
 		switch {
 		case err == nil:
 			if !mayAccess(token, existing) {
@@ -209,18 +207,24 @@ func putEnvironmentH(environments repo.Environments, shares repo.Shares, catalog
 			// conflict: putting an export under a new id is how a document is
 			// copied, and that export carries the version of the original
 			carried = 0
-			// an id that is new here starts unshared, and the leftover set of a
-			// deleted environment goes NOW rather than after the write: later,
-			// and it would delete the set of a share that arrived in between
-			clearShares(ctx, shares, env.Id)
 		default:
 			util.Logger.Error("unable to read environment", attributes.ErrorKey, err)
 			gc.String(http.StatusInternalServerError, "unable to read environment")
 			return
 		}
 
-		if !checkEnvironment(gc, &env) {
+		if !checkEnvironment(gc, catalog, token, previous, &env) {
 			return
+		}
+		// validated, and the first write follows: from here on a caller that goes
+		// away must not stop the steps half-way
+		ctx, cancel := mutationContext(gc)
+		defer cancel()
+		if previous == nil {
+			// an id that is new here starts unshared. After validation, so a refused
+			// put leaves the set alone, and before provisioning rather than after the
+			// write, which would delete the set of a share that arrived in between
+			clearShares(ctx, shares, env.Id)
 		}
 
 		//which devices moses may delete is decided from the stored document, not
@@ -322,7 +326,7 @@ func writeVersionConflict(gc *gin.Context, id string, carried int64, stored int6
 }
 
 // @Summary Create an environment with a server assigned id
-// @Description Any id in the body is ignored. Nested entities may omit their ids and get one assigned. An asset without an external_ref gets a platform device created for it, which is then deleted again when the asset or the environment is gone; a device attached to an asset by the caller is never deleted. external_managed is decided by the server and is always false on create. owner is the caller's user id, decided by the server and ignored in the body. A created environment is shared with nobody; its devices are shared through /environments/{id}/shares afterwards. The environment is also mirrored as a graph in the device-repository; external_graph_ref names that graph and is assigned by the server, so sending it has no effect. A version in the body is ignored as well: a document that is being created has nothing to be concurrent with, and the one in the response is the one to send back on the next PUT. An asset's submetered_by hangs it, in that mirrored graph, under the device of the named asset instead of its zone, as long as that asset is in the same top level zone; a reference to a missing asset, one outside that zone, or one that closes a cycle is refused with 400.
+// @Description Any id in the body is ignored. Nested entities may omit their ids and get one assigned. An asset without an external_ref gets a platform device created for it, which is then deleted again when the asset or the environment is gone; a device attached to an asset by the caller is never deleted. external_managed is decided by the server and is always false on create. owner is the caller's user id, decided by the server and ignored in the body. A created environment is shared with nobody; its devices are shared through /environments/{id}/shares afterwards. The environment is also mirrored as a graph in the device-repository; external_graph_ref names that graph and is assigned by the server, so sending it has no effect. A version in the body is ignored as well: a document that is being created has nothing to be concurrent with, and the one in the response is the one to send back on the next PUT. An asset's submetered_by hangs it, in that mirrored graph, under the device of the named asset instead of its zone, as long as that asset is in the same top level zone; a reference to a missing asset, one outside that zone, or one that closes a cycle is refused with 400. Before anything is written, every device type, service and attached device the document names is read from the platform, and one it cannot serve is a problem in the same 400: a device type that does not exist or has no service of this service's protocol, a channel's service the device type does not have or that belongs to another protocol, a sensor's service whose declared time path cannot take a reading from moses, and an attached device that does not exist, that the caller may not write, since moses publishes into it, or that is of another device type.
 // @Tags Environment
 // @Accept json
 // @Produce json
@@ -333,6 +337,7 @@ func writeVersionConflict(gc *gin.Context, id string, carried int64, stored int6
 // @Failure 401 {string} string "the token carries no subject"
 // @Failure 413 {string} string "the request body is larger than the allowed limit"
 // @Failure 500 {string} string "error message"
+// @Failure 502 {string} string "the platform could not be read to check the document; nothing was changed"
 // @Router /environments [post]
 func postEnvironmentH(environments repo.Environments, shares repo.Shares, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier, permissions Permissions) (string, string, gin.HandlerFunc) {
 	return http.MethodPost, "/environments", func(gc *gin.Context) {
@@ -340,7 +345,7 @@ func postEnvironmentH(environments repo.Environments, shares repo.Shares, catalo
 		if !ok {
 			return
 		}
-		env, ok := readNewEnvironment(gc, token)
+		env, ok := readNewEnvironment(gc, catalog, token)
 		if !ok {
 			return
 		}
@@ -387,9 +392,9 @@ type EnvironmentValidation struct {
 }
 
 // @Summary Check an environment without storing it
-// @Description Takes the body of POST /environments and runs exactly the validation POST runs, so a document is refused here with the answer POST would refuse it with: 400 with every problem and the path of its field, 413 for an oversized body. Nothing is created or changed: no document is stored, no platform device and no graph is created, no share set is touched and no running simulation is reloaded.
+// @Description Takes the body of POST /environments and runs exactly the validation POST runs, so a document is refused here with the answer POST would refuse it with: 400 with every problem and the path of its field, 413 for an oversized body. That includes reading, and only reading, every device type, service and attached device the document names from the platform, and a platform that cannot be read answers 502, never 200. Nothing is created or changed: no document is stored, no platform device and no graph is created, no share set is touched and no running simulation is reloaded.
 // @Description
-// @Description A 200 says the document passes validation, not that a create will succeed: what a create asks the platform for after validation, such as the devices of new assets, can still fail it.
+// @Description A 200 says the document passes validation, not that a create will succeed: the device-manager can still refuse to create a device, or a device type can change in between.
 // @Tags Environment
 // @Accept json
 // @Produce json
@@ -399,6 +404,7 @@ type EnvironmentValidation struct {
 // @Failure 400 {object} domain.ValidationError "every problem, with the path of the offending field"
 // @Failure 401 {string} string "the token carries no subject"
 // @Failure 413 {string} string "the request body is larger than the allowed limit"
+// @Failure 502 {string} string "the platform could not be read to check the document"
 // @Router /environments/validate [post]
 func validateEnvironmentH(environments repo.Environments, shares repo.Shares, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier, permissions Permissions) (string, string, gin.HandlerFunc) {
 	// gin prefers this static segment over :id and falls back to :id for longer
@@ -408,7 +414,7 @@ func validateEnvironmentH(environments repo.Environments, shares repo.Shares, ca
 		if !ok {
 			return
 		}
-		if _, ok := readNewEnvironment(gc, token); !ok {
+		if _, ok := readNewEnvironment(gc, catalog, token); !ok {
 			return
 		}
 		gc.JSON(http.StatusOK, EnvironmentValidation{Valid: true})
@@ -680,19 +686,44 @@ func bindEnvironment(gc *gin.Context, env *domain.Environment) bool {
 }
 
 // checkEnvironment is the one validation POST, PUT and validate run: it assigns
-// missing ids, validates and answers 400 itself. It changes nothing but env.
-func checkEnvironment(gc *gin.Context, env *domain.Environment) bool {
+// missing ids, validates, checks what the document names on the platform and
+// answers 400 with both kinds of problem, or 502 when the platform cannot be
+// read. It changes nothing but env; previous is the stored document on a PUT.
+func checkEnvironment(gc *gin.Context, catalog DeviceCatalog, token sc_jwt.Token, previous *domain.Environment, env *domain.Environment) bool {
 	domain.AssignIds(env)
+	problems := []domain.Problem{}
 	if err := domain.Validate(*env); err != nil {
-		writeValidationError(gc, err)
+		var invalid *domain.ValidationError
+		if !errors.As(err, &invalid) {
+			writeValidationError(gc, err)
+			return false
+		}
+		problems = append(problems, invalid.Problems...)
+	}
+	platform, err := checkPlatform(gc, catalog, token, previous, env)
+	if err != nil {
+		//a failed check is neither a pass nor the document's fault, so it is no 400
+		//either, even next to problems of its own: a 400 carries every problem
+		log := util.Logger.Error
+		if gc.Request.Context().Err() != nil {
+			log = util.Logger.Warn
+		}
+		log("unable to check the document against the platform", attributes.ErrorKey, err, "environment", env.Id)
+		gc.String(http.StatusBadGateway, "unable to read the device types and devices this document names from the platform, so it was neither checked nor stored; try again later")
 		return false
 	}
-	return true
+	problems = append(problems, platform...)
+	if len(problems) == 0 {
+		return true
+	}
+	sort.SliceStable(problems, func(a, b int) bool { return problems[a].Path < problems[b].Path })
+	writeValidationError(gc, &domain.ValidationError{Problems: problems})
+	return false
 }
 
 // readNewEnvironment reads and validates the body of a create, with the fields
 // the server decides already set. ok is false when the answer was written.
-func readNewEnvironment(gc *gin.Context, token sc_jwt.Token) (env domain.Environment, ok bool) {
+func readNewEnvironment(gc *gin.Context, catalog DeviceCatalog, token sc_jwt.Token) (env domain.Environment, ok bool) {
 	if !bindEnvironment(gc, &env) {
 		return env, false
 	}
@@ -704,7 +735,7 @@ func readNewEnvironment(gc *gin.Context, token sc_jwt.Token) (env domain.Environ
 	//nobody else knows it yet, so a version in the body is as meaningless as
 	//the id in it
 	env.Version = 0
-	return env, checkEnvironment(gc, &env)
+	return env, checkEnvironment(gc, catalog, token, nil, &env)
 }
 
 // writeValidationError returns every problem with its path, so a caller can
