@@ -57,6 +57,15 @@ jobs:
           go generate ./...
           git diff --exit-code -- docs/
 
+      # docs/asyncapi-gen is a separate go module (docs/asyncapi-regeneration.md),
+      # so the OpenAPI step's `go generate ./...` above never reaches it; a diff
+      # here means a message type or topic changed and the spec was not regenerated
+      - name: AsyncAPI
+        run: |
+          (cd docs/asyncapi-gen && go generate ./...)
+          npx --yes @asyncapi/cli@6.2.0 convert docs/asyncapi-gen/asyncapi.json -f asyncapi -t 3.0.0 -o docs/asyncapi.json
+          git diff --exit-code -- docs/asyncapi.json
+
       - name: Secrets
         uses: gitleaks/gitleaks-action@v2
         env:

@@ -151,6 +151,11 @@ type Config struct {
 
 	NotificationUrl string `json:"notification_url" env_var:"NOTIFICATION_URL"`
 
+	// ApiDocsProviderBaseUrl is where the generated AsyncAPI doc is published at
+	// startup. Empty or "-" disables the publish, matching the other SENERGY
+	// services that publish to this provider.
+	ApiDocsProviderBaseUrl string `json:"api_docs_provider_base_url" env_var:"API_DOCS_PROVIDER_BASE_URL"`
+
 	//KafkaTopicConfigs is read as JSON from the environment, for example
 	//KAFKA_TOPIC_CONFIGS='{"response":[{"ConfigName":"retention.ms","ConfigValue":"86400000"}]}'
 	KafkaTopicConfigs map[string][]kafka.ConfigEntry `json:"kafka_topic_configs" env_var:"KAFKA_TOPIC_CONFIGS"`

@@ -20,15 +20,19 @@ package main
 
 import (
 	"context"
-	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
-	"github.com/SENERGY-Platform/moses/lib"
-	"github.com/SENERGY-Platform/moses/lib/config"
-	"github.com/SENERGY-Platform/moses/lib/util"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/SENERGY-Platform/api-docs-provider/lib/client"
+	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
+	"github.com/SENERGY-Platform/moses/docs"
+	"github.com/SENERGY-Platform/moses/lib"
+	"github.com/SENERGY-Platform/moses/lib/config"
+	"github.com/SENERGY-Platform/moses/lib/util"
 
 	//the container image ships no tzdata, and the dataset upload interprets
 	//offsetless timestamps in a named zone - embed the zone database instead
@@ -54,6 +58,13 @@ func main() {
 		cancel()
 	}
 
+	if config.ApiDocsProviderBaseUrl != "" && config.ApiDocsProviderBaseUrl != "-" {
+		err = PublishAsyncApiDoc(config)
+		if err != nil {
+			util.Logger.Error("unable to publish async api docs", attributes.ErrorKey, err)
+		}
+	}
+
 	go func() {
 		shutdown := make(chan os.Signal, 1)
 		signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
@@ -64,4 +75,10 @@ func main() {
 
 	<-ctx.Done()                //waiting for context end; may happen by shutdown signal
 	time.Sleep(1 * time.Second) //give go routines time for cleanup
+}
+
+func PublishAsyncApiDoc(conf config.Config) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return client.New(http.DefaultClient, conf.ApiDocsProviderBaseUrl).AsyncapiPutDoc(ctx, "github_com_SENERGY-Platform_moses", docs.AsyncApiDoc)
 }

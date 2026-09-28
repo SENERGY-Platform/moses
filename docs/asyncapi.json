@@ -1,0 +1,616 @@
+{
+    "asyncapi": "3.0.0",
+    "info": {
+        "title": "Moses",
+        "version": "",
+        "description": "moses talks to the platform through platform-connector-lib; a topic in '[]' is a placeholder"
+    },
+    "servers": {
+        "kafka": {
+            "host": "kafka.kafka:9092",
+            "protocol": "kafka"
+        }
+    },
+    "channels": {
+        "[device-type-service-topic]": {
+            "address": "[device-type-service-topic]",
+            "messages": {
+                "publish.message": {
+                    "$ref": "#/components/messages/ModelEnvelope"
+                }
+            },
+            "description": "one topic per device-type service, named by platform-connector-lib's ServiceIdToTopic (the service id with '#' and ':' replaced by '_'); carries one reading for one device",
+            "servers": [
+                {
+                    "$ref": "#/servers/kafka"
+                }
+            ]
+        },
+        "device-types": {
+            "address": "device-types",
+            "messages": {
+                "subscribe.message": {
+                    "$ref": "#/components/messages/PlatformConnectorLibDeviceTypeCommand"
+                }
+            },
+            "description": "topic configured by config.DeviceTypeTopic; invalidates the local iot cache when a device type changes upstream",
+            "servers": [
+                {
+                    "$ref": "#/servers/kafka"
+                }
+            ]
+        },
+        "device_log": {
+            "address": "device_log",
+            "messages": {
+                "publish.message": {
+                    "$ref": "#/components/messages/ConnectionlogDeviceLog"
+                }
+            },
+            "description": "topic configured by config.DeviceLogTopic; signals a simulated device as connected, sent once per environment device at runtime start. Moses never logs a disconnect",
+            "servers": [
+                {
+                    "$ref": "#/servers/kafka"
+                }
+            ]
+        },
+        "moses": {
+            "address": "moses",
+            "messages": {
+                "subscribe.message": {
+                    "$ref": "#/components/messages/ModelProtocolMsg"
+                }
+            },
+            "description": "topic configured by config.Protocol; the platform's commands for this connector's protocol handler, consumer group config.KafkaGroupName",
+            "servers": [
+                {
+                    "$ref": "#/servers/kafka"
+                }
+            ]
+        },
+        "response": {
+            "address": "response",
+            "messages": {
+                "publish.message": {
+                    "$ref": "#/components/messages/ModelProtocolMsg"
+                }
+            },
+            "description": "topic configured by config.KafkaResponseTopic; moses's answer to a command consumed from the protocol topic, with Response.Output filled. Overridden per command by metadata.response_to, which may instead be an http(s) callback outside this kafka server",
+            "servers": [
+                {
+                    "$ref": "#/servers/kafka"
+                }
+            ]
+        }
+    },
+    "operations": {
+        "[device-type-service-topic].publish": {
+            "action": "receive",
+            "channel": {
+                "$ref": "#/channels/[device-type-service-topic]"
+            },
+            "messages": [
+                {
+                    "$ref": "#/channels/[device-type-service-topic]/messages/publish.message"
+                }
+            ]
+        },
+        "device-types.subscribe": {
+            "action": "send",
+            "channel": {
+                "$ref": "#/channels/device-types"
+            },
+            "messages": [
+                {
+                    "$ref": "#/channels/device-types/messages/subscribe.message"
+                }
+            ]
+        },
+        "device_log.publish": {
+            "action": "receive",
+            "channel": {
+                "$ref": "#/channels/device_log"
+            },
+            "messages": [
+                {
+                    "$ref": "#/channels/device_log/messages/publish.message"
+                }
+            ]
+        },
+        "moses.subscribe": {
+            "action": "send",
+            "channel": {
+                "$ref": "#/channels/moses"
+            },
+            "messages": [
+                {
+                    "$ref": "#/channels/moses/messages/subscribe.message"
+                }
+            ]
+        },
+        "response.publish": {
+            "action": "receive",
+            "channel": {
+                "$ref": "#/channels/response"
+            },
+            "messages": [
+                {
+                    "$ref": "#/channels/response/messages/publish.message"
+                }
+            ]
+        }
+    },
+    "components": {
+        "schemas": {
+            "ConnectionlogDeviceLog": {
+                "properties": {
+                    "connected": {
+                        "type": "boolean"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "time": {
+                        "format": "date-time",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "ModelEnvelope": {
+                "properties": {
+                    "device_id": {
+                        "type": "string"
+                    },
+                    "service_id": {
+                        "type": "string"
+                    },
+                    "value": {
+                        "additionalProperties": {},
+                        "type": [
+                            "object",
+                            "null"
+                        ]
+                    }
+                },
+                "type": "object"
+            },
+            "ModelMetadata": {
+                "properties": {
+                    "content_variable_hints": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": "array"
+                    },
+                    "device": {
+                        "$ref": "#/components/schemas/ModelsDevice"
+                    },
+                    "error_to": {
+                        "type": "string"
+                    },
+                    "input_characteristic": {
+                        "type": "string"
+                    },
+                    "output_aspect_node": {
+                        "$ref": "#/components/schemas/ModelsAspectNode"
+                    },
+                    "output_characteristic": {
+                        "type": "string"
+                    },
+                    "output_function_id": {
+                        "type": "string"
+                    },
+                    "output_path": {
+                        "type": "string"
+                    },
+                    "protocol": {
+                        "$ref": "#/components/schemas/ModelsProtocol"
+                    },
+                    "response_to": {
+                        "type": "string"
+                    },
+                    "service": {
+                        "$ref": "#/components/schemas/ModelsService"
+                    },
+                    "version": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "ModelProtocolMsg": {
+                "properties": {
+                    "metadata": {
+                        "$ref": "#/components/schemas/ModelMetadata"
+                    },
+                    "request": {
+                        "$ref": "#/components/schemas/ModelProtocolRequest"
+                    },
+                    "response": {
+                        "$ref": "#/components/schemas/ModelProtocolResponse"
+                    },
+                    "task_info": {
+                        "$ref": "#/components/schemas/ModelTaskInfo"
+                    },
+                    "trace": {
+                        "items": {
+                            "$ref": "#/components/schemas/ModelTrace"
+                        },
+                        "type": "array"
+                    }
+                },
+                "type": "object"
+            },
+            "ModelProtocolRequest": {
+                "properties": {
+                    "input": {
+                        "additionalProperties": {
+                            "type": "string"
+                        },
+                        "type": [
+                            "object",
+                            "null"
+                        ]
+                    }
+                },
+                "type": "object"
+            },
+            "ModelProtocolResponse": {
+                "properties": {
+                    "output": {
+                        "additionalProperties": {
+                            "type": "string"
+                        },
+                        "type": [
+                            "object",
+                            "null"
+                        ]
+                    }
+                },
+                "type": "object"
+            },
+            "ModelTaskInfo": {
+                "properties": {
+                    "completion_strategy": {
+                        "type": "string"
+                    },
+                    "process_definition_id": {
+                        "type": "string"
+                    },
+                    "process_instance_id": {
+                        "type": "string"
+                    },
+                    "task_id": {
+                        "type": "string"
+                    },
+                    "tenant_id": {
+                        "type": "string"
+                    },
+                    "time": {
+                        "type": "string"
+                    },
+                    "worker_id": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "ModelTrace": {
+                "properties": {
+                    "location": {
+                        "type": "string"
+                    },
+                    "time_unit": {
+                        "type": "string"
+                    },
+                    "timestamp": {
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "ModelsAspectNode": {
+                "properties": {
+                    "ancestor_ids": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": [
+                            "array",
+                            "null"
+                        ]
+                    },
+                    "child_ids": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": [
+                            "array",
+                            "null"
+                        ]
+                    },
+                    "descendent_ids": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": [
+                            "array",
+                            "null"
+                        ]
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "parent_id": {
+                        "type": "string"
+                    },
+                    "root_id": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "ModelsAttribute": {
+                "properties": {
+                    "key": {
+                        "type": "string"
+                    },
+                    "origin": {
+                        "type": "string"
+                    },
+                    "value": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "ModelsContent": {
+                "properties": {
+                    "content_variable": {
+                        "$ref": "#/components/schemas/ModelsContentVariable"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "protocol_segment_id": {
+                        "type": "string"
+                    },
+                    "serialization": {
+                        "$ref": "#/components/schemas/ModelsSerialization"
+                    }
+                },
+                "type": "object"
+            },
+            "ModelsContentVariable": {
+                "properties": {
+                    "aspect_id": {
+                        "type": "string"
+                    },
+                    "characteristic_id": {
+                        "type": "string"
+                    },
+                    "function_id": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "is_void": {
+                        "type": "boolean"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "omit_empty": {
+                        "type": "boolean"
+                    },
+                    "serialization_options": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": [
+                            "array",
+                            "null"
+                        ]
+                    },
+                    "sub_content_variables": {
+                        "items": {
+                            "$ref": "#/components/schemas/ModelsContentVariable"
+                        },
+                        "type": [
+                            "array",
+                            "null"
+                        ]
+                    },
+                    "type": {
+                        "$ref": "#/components/schemas/ModelsType"
+                    },
+                    "unit_reference": {
+                        "type": "string"
+                    },
+                    "value": {}
+                },
+                "type": "object"
+            },
+            "ModelsDevice": {
+                "properties": {
+                    "attributes": {
+                        "items": {
+                            "$ref": "#/components/schemas/ModelsAttribute"
+                        },
+                        "type": [
+                            "array",
+                            "null"
+                        ]
+                    },
+                    "device_type_id": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "local_id": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "owner_id": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "ModelsInteraction": {
+                "type": "string"
+            },
+            "ModelsProtocol": {
+                "properties": {
+                    "constraints": {
+                        "items": {
+                            "type": "string"
+                        },
+                        "type": [
+                            "array",
+                            "null"
+                        ]
+                    },
+                    "handler": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "protocol_segments": {
+                        "items": {
+                            "$ref": "#/components/schemas/ModelsProtocolSegment"
+                        },
+                        "type": [
+                            "array",
+                            "null"
+                        ]
+                    }
+                },
+                "type": "object"
+            },
+            "ModelsProtocolSegment": {
+                "properties": {
+                    "id": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "ModelsSerialization": {
+                "type": "string"
+            },
+            "ModelsService": {
+                "properties": {
+                    "attributes": {
+                        "items": {
+                            "$ref": "#/components/schemas/ModelsAttribute"
+                        },
+                        "type": [
+                            "array",
+                            "null"
+                        ]
+                    },
+                    "description": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "inputs": {
+                        "items": {
+                            "$ref": "#/components/schemas/ModelsContent"
+                        },
+                        "type": [
+                            "array",
+                            "null"
+                        ]
+                    },
+                    "interaction": {
+                        "$ref": "#/components/schemas/ModelsInteraction"
+                    },
+                    "local_id": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "outputs": {
+                        "items": {
+                            "$ref": "#/components/schemas/ModelsContent"
+                        },
+                        "type": [
+                            "array",
+                            "null"
+                        ]
+                    },
+                    "protocol_id": {
+                        "type": "string"
+                    },
+                    "service_group_key": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "ModelsType": {
+                "type": "string"
+            },
+            "PlatformConnectorLibDeviceTypeCommand": {
+                "properties": {
+                    "command": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            }
+        },
+        "messages": {
+            "ConnectionlogDeviceLog": {
+                "payload": {
+                    "$ref": "#/components/schemas/ConnectionlogDeviceLog"
+                },
+                "name": "DeviceLog",
+                "title": "DeviceLog"
+            },
+            "ModelEnvelope": {
+                "payload": {
+                    "$ref": "#/components/schemas/ModelEnvelope"
+                },
+                "name": "Envelope",
+                "title": "Envelope"
+            },
+            "ModelProtocolMsg": {
+                "payload": {
+                    "$ref": "#/components/schemas/ModelProtocolMsg"
+                },
+                "name": "ProtocolMsg",
+                "title": "ProtocolMsg"
+            },
+            "PlatformConnectorLibDeviceTypeCommand": {
+                "payload": {
+                    "$ref": "#/components/schemas/PlatformConnectorLibDeviceTypeCommand"
+                },
+                "name": "DeviceTypeCommand",
+                "title": "DeviceTypeCommand"
+            }
+        }
+    }
+}

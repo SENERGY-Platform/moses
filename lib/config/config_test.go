@@ -370,6 +370,7 @@ func TestEveryConfigFieldHasAnExplicitEnvVarTag(t *testing.T) {
 // previous, deriving loader produced.
 func TestConfigFieldsMapToTheExpectedEnvironmentVariableNames(t *testing.T) {
 	expected := map[string]string{
+		"ApiDocsProviderBaseUrl":    "API_DOCS_PROVIDER_BASE_URL",
 		"AsyncCompression":          "ASYNC_COMPRESSION",
 		"AsyncFlushFrequency":       "ASYNC_FLUSH_FREQUENCY",
 		"AsyncFlushMessages":        "ASYNC_FLUSH_MESSAGES",
