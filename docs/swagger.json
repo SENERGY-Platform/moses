@@ -526,6 +526,63 @@
                 }
             }
         },
+        "/environments/validate": {
+            "post": {
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ],
+                "description": "Takes the body of POST /environments and runs exactly the validation POST runs, so a document is refused here with the answer POST would refuse it with: 400 with every problem and the path of its field, 413 for an oversized body. Nothing is created or changed: no document is stored, no platform device and no graph is created, no share set is touched and no running simulation is reloaded.\n\nA 200 says the document passes validation, not that a create will succeed: what a create asks the platform for after validation, such as the devices of new assets, can still fail it.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Environment"
+                ],
+                "summary": "Check an environment without storing it",
+                "parameters": [
+                    {
+                        "description": "the environment",
+                        "name": "environment",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/domain.Environment"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "the document passes validation",
+                        "schema": {
+                            "$ref": "#/definitions/api.EnvironmentValidation"
+                        }
+                    },
+                    "400": {
+                        "description": "every problem, with the path of the offending field",
+                        "schema": {
+                            "$ref": "#/definitions/domain.ValidationError"
+                        }
+                    },
+                    "401": {
+                        "description": "the token carries no subject",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "413": {
+                        "description": "the request body is larger than the allowed limit",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/environments/{id}": {
             "get": {
                 "security": [
@@ -1402,6 +1459,14 @@
                         "type": "object",
                         "additionalProperties": true
                     }
+                }
+            }
+        },
+        "api.EnvironmentValidation": {
+            "type": "object",
+            "properties": {
+                "valid": {
+                    "type": "boolean"
                 }
             }
         },

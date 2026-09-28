@@ -56,6 +56,11 @@ definitions:
           type: object
         type: object
     type: object
+  api.EnvironmentValidation:
+    properties:
+      valid:
+        type: boolean
+    type: object
   api.HistoryRequest:
     properties:
       force:
@@ -2207,6 +2212,45 @@ paths:
       security:
       - Bearer: []
       summary: Set live state of one running environment
+      tags:
+      - Environment
+  /environments/validate:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Takes the body of POST /environments and runs exactly the validation POST runs, so a document is refused here with the answer POST would refuse it with: 400 with every problem and the path of its field, 413 for an oversized body. Nothing is created or changed: no document is stored, no platform device and no graph is created, no share set is touched and no running simulation is reloaded.
+
+        A 200 says the document passes validation, not that a create will succeed: what a create asks the platform for after validation, such as the devices of new assets, can still fail it.
+      parameters:
+      - description: the environment
+        in: body
+        name: environment
+        required: true
+        schema:
+          $ref: '#/definitions/domain.Environment'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: the document passes validation
+          schema:
+            $ref: '#/definitions/api.EnvironmentValidation'
+        "400":
+          description: every problem, with the path of the offending field
+          schema:
+            $ref: '#/definitions/domain.ValidationError'
+        "401":
+          description: the token carries no subject
+          schema:
+            type: string
+        "413":
+          description: the request body is larger than the allowed limit
+          schema:
+            type: string
+      security:
+      - Bearer: []
+      summary: Check an environment without storing it
       tags:
       - Environment
 securityDefinitions:

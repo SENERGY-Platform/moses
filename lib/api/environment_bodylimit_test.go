@@ -68,6 +68,7 @@ func TestEveryJSONBodyIsLimited(t *testing.T) {
 	}{
 		{http.MethodPut, "/environments/env-1", maxDocumentBytes},
 		{http.MethodPost, "/environments", maxDocumentBytes},
+		{http.MethodPost, "/environments/validate", maxDocumentBytes},
 		{http.MethodPatch, "/environments/env-1/state", maxDocumentBytes},
 		{http.MethodPost, "/environments/env-1/history", maxRequestBytes},
 		{http.MethodPost, "/environments/env-1/backfill", maxRequestBytes},

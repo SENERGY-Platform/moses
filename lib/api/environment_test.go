@@ -714,6 +714,7 @@ func TestRequestsWithoutATokenAreRejected(t *testing.T) {
 		{"GET", "/environments/env-1"},
 		{"PUT", "/environments/env-1"},
 		{"POST", "/environments"},
+		{"POST", "/environments/validate"},
 		{"DELETE", "/environments/env-1"},
 	} {
 		resp := do(t, router, call.method, call.path, "", minimalEnvironment())
@@ -791,6 +792,7 @@ func TestATokenWithoutASubjectIsRejected(t *testing.T) {
 		{"GET", "/environments/env-1"},
 		{"PUT", "/environments/env-1"},
 		{"POST", "/environments"},
+		{"POST", "/environments/validate"},
 		{"DELETE", "/environments/env-1"},
 	} {
 		body, err := json.Marshal(minimalEnvironment())

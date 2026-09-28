@@ -50,6 +50,7 @@ func EnvironmentEndpoints(config config.Config, environments repo.Environments, 
 		getEnvironmentH,
 		putEnvironmentH,
 		postEnvironmentH,
+		validateEnvironmentH,
 		deleteEnvironmentH,
 		patchEnvironmentStateH,
 		getSwaggerDocH,
@@ -157,7 +158,7 @@ func putEnvironmentH(environments repo.Environments, shares repo.Shares, catalog
 			return
 		}
 		env := domain.Environment{}
-		if !bindLimitedJSON(gc, &env, maxDocumentBytes, "unable to read the request body as an environment: ") {
+		if !bindEnvironment(gc, &env) {
 			return
 		}
 		// path wins over body, so a document can be copied to a new id
@@ -213,11 +214,7 @@ func putEnvironmentH(environments repo.Environments, shares repo.Shares, catalog
 			return
 		}
 
-		domain.AssignIds(&env)
-
-		err = domain.Validate(env)
-		if err != nil {
-			writeValidationError(gc, err)
+		if !checkEnvironment(gc, &env) {
 			return
 		}
 
@@ -326,21 +323,8 @@ func postEnvironmentH(environments repo.Environments, shares repo.Shares, catalo
 		if !ok {
 			return
 		}
-		env := domain.Environment{}
-		if !bindLimitedJSON(gc, &env, maxDocumentBytes, "unable to read the request body as an environment: ") {
-			return
-		}
-		env.Id = ""
-		env.Owner = token.GetUserId()
-		//a create has nothing to be concurrent with: the id is assigned here and
-		//nobody else knows it yet, so a version in the body is as meaningless as
-		//the id in it
-		env.Version = 0
-		domain.AssignIds(&env)
-
-		err := domain.Validate(env)
-		if err != nil {
-			writeValidationError(gc, err)
+		env, ok := readNewEnvironment(gc, token)
+		if !ok {
 			return
 		}
 
@@ -355,7 +339,7 @@ func postEnvironmentH(environments repo.Environments, shares repo.Shares, catalo
 		clearShares(gc.Request.Context(), shares, env.Id)
 
 		//after validation, before the write: a refused document creates nothing
-		if _, err = provisionDevices(gc.Request.Context(), catalog, token, &env); err != nil {
+		if _, err := provisionDevices(gc.Request.Context(), catalog, token, &env); err != nil {
 			gc.String(http.StatusInternalServerError, "%s", err.Error())
 			return
 		}
@@ -373,6 +357,40 @@ func postEnvironmentH(environments repo.Environments, shares repo.Shares, catalo
 		env.Version = stored
 		notifyReload(notifier, env.Id)
 		gc.JSON(http.StatusCreated, env)
+	}
+}
+
+// EnvironmentValidation is the answer to a document that passes validation.
+type EnvironmentValidation struct {
+	Valid bool `json:"valid"`
+}
+
+// @Summary Check an environment without storing it
+// @Description Takes the body of POST /environments and runs exactly the validation POST runs, so a document is refused here with the answer POST would refuse it with: 400 with every problem and the path of its field, 413 for an oversized body. Nothing is created or changed: no document is stored, no platform device and no graph is created, no share set is touched and no running simulation is reloaded.
+// @Description
+// @Description A 200 says the document passes validation, not that a create will succeed: what a create asks the platform for after validation, such as the devices of new assets, can still fail it.
+// @Tags Environment
+// @Accept json
+// @Produce json
+// @Security Bearer
+// @Param environment body domain.Environment true "the environment"
+// @Success 200 {object} EnvironmentValidation "the document passes validation"
+// @Failure 400 {object} domain.ValidationError "every problem, with the path of the offending field"
+// @Failure 401 {string} string "the token carries no subject"
+// @Failure 413 {string} string "the request body is larger than the allowed limit"
+// @Router /environments/validate [post]
+func validateEnvironmentH(environments repo.Environments, shares repo.Shares, catalog DeviceCatalog, mirror GraphMirror, notifier RuntimeNotifier, permissions Permissions) (string, string, gin.HandlerFunc) {
+	// gin prefers this static segment over :id and falls back to :id for longer
+	// paths, so an environment stored under the id "validate" keeps its routes
+	return http.MethodPost, "/environments/validate", func(gc *gin.Context) {
+		token, ok := requireUser(gc)
+		if !ok {
+			return
+		}
+		if _, ok := readNewEnvironment(gc, token); !ok {
+			return
+		}
+		gc.JSON(http.StatusOK, EnvironmentValidation{Valid: true})
 	}
 }
 
@@ -628,6 +646,40 @@ func accessibleEnvironment(gc *gin.Context, environments repo.Environments, toke
 		return env, false
 	}
 	return env, true
+}
+
+// bindEnvironment reads a whole environment from the body, with the limit and
+// the message every route taking one shares.
+func bindEnvironment(gc *gin.Context, env *domain.Environment) bool {
+	return bindLimitedJSON(gc, env, maxDocumentBytes, "unable to read the request body as an environment: ")
+}
+
+// checkEnvironment is the one validation POST, PUT and validate run: it assigns
+// missing ids, validates and answers 400 itself. It changes nothing but env.
+func checkEnvironment(gc *gin.Context, env *domain.Environment) bool {
+	domain.AssignIds(env)
+	if err := domain.Validate(*env); err != nil {
+		writeValidationError(gc, err)
+		return false
+	}
+	return true
+}
+
+// readNewEnvironment reads and validates the body of a create, with the fields
+// the server decides already set. ok is false when the answer was written.
+func readNewEnvironment(gc *gin.Context, token sc_jwt.Token) (env domain.Environment, ok bool) {
+	if !bindEnvironment(gc, &env) {
+		return env, false
+	}
+	//before validation: the id in the body is replaced by a fresh one and must
+	//not be checked for uniqueness against the rest of the document
+	env.Id = ""
+	env.Owner = token.GetUserId()
+	//a create has nothing to be concurrent with: the id is assigned here and
+	//nobody else knows it yet, so a version in the body is as meaningless as
+	//the id in it
+	env.Version = 0
+	return env, checkEnvironment(gc, &env)
 }
 
 // writeValidationError returns every problem with its path, so a caller can

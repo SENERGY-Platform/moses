@@ -104,3 +104,19 @@ Two further cases, both decided the way the copy rules above are:
   copied, and an export carries the version of the original.
 - **`POST` ignores a version in the body**, like it ignores an id: a document
   being created has nothing to be concurrent with.
+
+## Checking a document without storing it
+
+`POST /environments/validate` takes the body of `POST /environments` and runs
+the same validation (`checkEnvironment` in `lib/api/environment.go`, which POST
+and PUT call as well). It answers `200 {"valid": true}`, or the 400, 413 or 401
+POST would give, and it provisions no device, writes no graph, share set or
+document and reloads nothing. A caller that replaces a document by deleting and
+recreating it checks the new one here first, so a refused document does not
+leave it with neither.
+
+A 200 is not a promise that the create succeeds: provisioning runs after
+validation, and a device type the device-manager refuses fails the create with
+500 only then. The body id is cleared before validation, as on create; the
+PUT-only refusals (404 for a foreign id, 409 for an outdated version) are not
+checked.
