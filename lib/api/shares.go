@@ -61,15 +61,14 @@ const maxPrincipalRunes = 256
 // small, and a body that is not has no business being parsed.
 const maxShareBytes = 64 * 1024
 
-// shareDeadline bounds the whole application. It is under the api's write
-// timeout of ten seconds, so a share of a very large environment reports what it
-// did not reach instead of running past the answer. A variable so a test does
-// not have to wait it out.
+// shareDeadline bounds the whole application, so a share of a very large
+// environment answers with what it did not reach instead of making the caller
+// wait. A variable so a test does not have to wait it out.
 var shareDeadline = 8 * time.Second
 
-// shareWorkers is how many resources are worked on at once. The api's write
-// timeout is ten seconds and a share touches every device twice, so thirty
-// devices sequentially would be cutting it close on a slow permissions-v2.
+// shareWorkers is how many resources are worked on at once. A share touches every
+// device twice, so thirty devices sequentially would not fit shareDeadline on a
+// slow permissions-v2.
 const shareWorkers = 8
 
 // Permissions is what the api needs from permissions-v2: read the rights of one
@@ -323,13 +322,18 @@ func putSharesH(environments repo.Environments, shares repo.Shares, permissions 
 			return
 		}
 
+		//from the first write on, the union, the rights and the final set belong
+		//together, so a caller that goes away must not stop them in between
+		ctx, cancel := mutationContext(gc)
+		defer cancel()
+
 		//The union goes in FIRST, and with the compare-and-swap: it is the record
 		//of everybody who may end up with rights below, and nothing is granted
 		//before it is written. A second share arriving at the same time loses the
 		//swap here, before it touched a single resource.
 		pending := setOf(id, union, writerUnion)
 		pending.Version = stored.Version
-		version, err := shares.Save(gc.Request.Context(), pending)
+		version, err := shares.Save(ctx, pending)
 		if err != nil {
 			if writeShareConflict(gc, id, err) {
 				return
@@ -340,7 +344,7 @@ func putSharesH(environments repo.Environments, shares repo.Shares, permissions 
 		}
 
 		resources := shareResourcesOf(&env)
-		failures := applyShares(gc.Request.Context(), permissions, token, resources, sharePlan{
+		failures := applyShares(ctx, permissions, token, resources, sharePlan{
 			grant:       desired.ShareTargets,
 			revoke:      withoutTargets(union, desired.ShareTargets),
 			grantWrite:  desired.GraphWriters,
@@ -356,7 +360,7 @@ func putSharesH(environments repo.Environments, shares repo.Shares, permissions 
 
 		final := setOf(id, desired.ShareTargets, desired.GraphWriters)
 		final.Version = version
-		if _, err = shares.Save(gc.Request.Context(), final); err != nil {
+		if _, err = shares.Save(ctx, final); err != nil {
 			if writeShareConflict(gc, id, err) {
 				return
 			}
@@ -596,9 +600,8 @@ func sameEntries(first []string, second []string) bool {
 // concurrently - a share of thirty devices is sixty round trips - and each worker
 // writes its own slot, so the report keeps document order and needs no lock.
 func applyShares(ctx context.Context, permissions Permissions, token sc_jwt.Token, resources []shareResource, plan sharePlan) []ShareFailure {
-	//one deadline over all of them, under the api's write timeout: a
-	//permissions-v2 that answers slowly must end as a report and not as a
-	//request that is still running when the server gives up on it
+	//one deadline over all of them: a permissions-v2 that answers slowly must
+	//end as a report, not as a request the caller has long given up on
 	ctx, cancel := context.WithTimeout(ctx, shareDeadline)
 	defer cancel()
 

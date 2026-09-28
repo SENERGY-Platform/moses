@@ -32,9 +32,8 @@ import (
 )
 
 // permissionsTimeout bounds one call. A share touches every device of an
-// environment twice, and the api's write timeout is ten seconds, so a
-// permissions-v2 that accepts connections and never answers must not be able to
-// hold the whole request.
+// environment twice, so a permissions-v2 that accepts connections and never
+// answers must not be able to hold the whole request.
 const permissionsTimeout = 5 * time.Second
 
 // maxPermissionsErrorBytes bounds how much of an error body is quoted back. It

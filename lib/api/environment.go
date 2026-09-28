@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/config"
@@ -173,6 +174,10 @@ func putEnvironmentH(environments repo.Environments, shares repo.Shares, catalog
 		var previous *domain.Environment
 
 		existing, err := environments.Get(gc.Request.Context(), env.Id)
+		// the first write, clearShares, can come in the switch below, and from
+		// there on a caller that goes away must not stop the steps half-way
+		ctx, cancel := mutationContext(gc)
+		defer cancel()
 		switch {
 		case err == nil:
 			if !mayAccess(token, existing) {
@@ -207,7 +212,7 @@ func putEnvironmentH(environments repo.Environments, shares repo.Shares, catalog
 			// an id that is new here starts unshared, and the leftover set of a
 			// deleted environment goes NOW rather than after the write: later,
 			// and it would delete the set of a share that arrived in between
-			clearShares(gc.Request.Context(), shares, env.Id)
+			clearShares(ctx, shares, env.Id)
 		default:
 			util.Logger.Error("unable to read environment", attributes.ErrorKey, err)
 			gc.String(http.StatusInternalServerError, "unable to read environment")
@@ -226,7 +231,7 @@ func putEnvironmentH(environments repo.Environments, shares repo.Shares, catalog
 		reconcileGraphRef(previous, &env)
 
 		//after validation, before the write: a refused document creates nothing
-		created, err := provisionDevices(gc.Request.Context(), catalog, token, &env)
+		created, err := provisionDevices(ctx, catalog, token, &env)
 		if err != nil {
 			gc.String(http.StatusInternalServerError, "%s", err.Error())
 			return
@@ -238,7 +243,7 @@ func putEnvironmentH(environments repo.Environments, shares repo.Shares, catalog
 		graphBefore := env.ExternalGraphRef
 		mirrorGraph(mirror, token, &env)
 
-		stored, err := storeEnvironment(gc.Request.Context(), environments, env, carried)
+		stored, err := storeEnvironment(ctx, environments, env, carried)
 		conflict := &repo.VersionConflictError{}
 		switch {
 		case err == nil:
@@ -266,17 +271,17 @@ func putEnvironmentH(environments repo.Environments, shares repo.Shares, catalog
 		// also after the write, and for the same reason in reverse: a failed write
 		// must leave every device standing, or the stored document would point at
 		// devices that no longer exist
-		deleteDevices(gc.Request.Context(), catalog, token, env.Id, orphanedDevices(previous, &env))
+		deleteDevices(ctx, catalog, token, env.Id, orphanedDevices(previous, &env))
 		// next to the deletion and for the same reason: a refused or a failed
 		// write must not touch a device, and neither must the loser of a 409.
 		// previous is nil on a create by put, and then there is no earlier name;
 		// created is passed so a device this save just made is not read back
-		renameDevices(gc.Request.Context(), catalog, token, env.Id, renamedDevices(previous, &env, created))
+		renameDevices(ctx, catalog, token, env.Id, renamedDevices(previous, &env, created))
 		if previous != nil {
 			//after the write: a device that got the share set of a document that
 			//was never stored would be shared for nothing. Best effort, see
 			//inheritShares
-			inheritShares(gc.Request.Context(), shares, permissions, token, &env,
+			inheritShares(ctx, shares, permissions, token, &env,
 				newlySharedResources(created, graphBefore, env.ExternalGraphRef))
 		}
 		gc.JSON(http.StatusOK, env)
@@ -292,6 +297,18 @@ func storeEnvironment(ctx context.Context, environments repo.Environments, env d
 		return environments.PutIfVersion(ctx, env, carried)
 	}
 	return environments.Put(ctx, env)
+}
+
+// mutationTimeout bounds a mutation that no longer ends with its request. It is
+// well above the api's write timeout of two minutes, so a slow platform still
+// gets to finish, while a call that hangs cannot hold the handler forever.
+const mutationTimeout = 5 * time.Minute
+
+// mutationContext keeps the values of the request and drops its cancellation, so
+// a client or gateway that closes the connection cannot stop a handler between
+// two platform steps that only make sense together.
+func mutationContext(gc *gin.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(gc.Request.Context()), mutationTimeout)
 }
 
 // writeVersionConflict answers a refused write with both versions in the
@@ -333,13 +350,17 @@ func postEnvironmentH(environments repo.Environments, shares repo.Shares, catalo
 		//external_graph_ref a right over somebody's graph
 		reconcileManagedFlags(nil, &env)
 		reconcileGraphRef(nil, &env)
+		//validated, so from here on the create runs to its end even when the
+		//caller goes away: stopping it would leave devices no document names
+		ctx, cancel := mutationContext(gc)
+		defer cancel()
 		//before anything is created: an id used before this one may have left a
 		//set behind, and dropping it after the write would drop the set of a
 		//share that arrived in between
-		clearShares(gc.Request.Context(), shares, env.Id)
+		clearShares(ctx, shares, env.Id)
 
 		//after validation, before the write: a refused document creates nothing
-		if _, err := provisionDevices(gc.Request.Context(), catalog, token, &env); err != nil {
+		if _, err := provisionDevices(ctx, catalog, token, &env); err != nil {
 			gc.String(http.StatusInternalServerError, "%s", err.Error())
 			return
 		}
@@ -348,7 +369,7 @@ func postEnvironmentH(environments repo.Environments, shares repo.Shares, catalo
 
 		//unchecked on purpose: the id is fresh, so there is no stored version to
 		//compare against, and the store starts a new document at 1
-		stored, err := environments.Put(gc.Request.Context(), env)
+		stored, err := environments.Put(ctx, env)
 		if err != nil {
 			util.Logger.Error("unable to store environment", attributes.ErrorKey, err)
 			gc.String(http.StatusInternalServerError, "unable to store environment")
@@ -425,7 +446,11 @@ func deleteEnvironmentH(environments repo.Environments, shares repo.Shares, cata
 			gc.String(http.StatusNotFound, "not found")
 			return
 		}
-		err = environments.Delete(gc.Request.Context(), env.Id)
+		//once the document is gone its devices have to follow, so a caller
+		//that goes away must not stop the delete in between
+		ctx, cancel := mutationContext(gc)
+		defer cancel()
+		err = environments.Delete(ctx, env.Id)
 		if err != nil {
 			util.Logger.Error("unable to delete environment", attributes.ErrorKey, err)
 			gc.String(http.StatusInternalServerError, "unable to delete environment")
@@ -435,14 +460,14 @@ func deleteEnvironmentH(environments repo.Environments, shares repo.Shares, cata
 		//after the delete: a failed delete leaves the environment, and it has to
 		//keep the devices it publishes through. Devices the user picked stay in
 		//either case, they are inventory of the platform and not ours to remove
-		deleteDevices(gc.Request.Context(), catalog, token, env.Id, managedDevicesOf(&env))
+		deleteDevices(ctx, catalog, token, env.Id, managedDevicesOf(&env))
 		//also after the delete, and best effort for the same reason: a graph
 		//without an environment is cheaper than a delete that fails
 		deleteGraph(mirror, token, &env)
 		//and the share set with it, so an id used again is not shared with the
 		//accounts of the environment that is gone. The store drops it too; this
 		//covers a deployment whose store does not
-		clearShares(gc.Request.Context(), shares, env.Id)
+		clearShares(ctx, shares, env.Id)
 		gc.Status(http.StatusNoContent)
 	}
 }

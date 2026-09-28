@@ -171,9 +171,10 @@ set twice changes nothing.
 
 ## Timing
 
-Each call to permissions-v2 is bounded at five seconds and ends when the caller
-goes away; the resources are worked on eight at a time. The application as a
-whole is bounded at **eight seconds**, under the api's ten second write timeout:
+Each call to permissions-v2 is bounded at five seconds; the resources are worked
+on eight at a time. A caller that goes away does not stop a share once the union
+is stored: the rights and the final set are still written. The application as a
+whole is bounded at **eight seconds**:
 a share of thirty devices is sixty round trips, and one that does not fit in
 that window **stops there and reports the resources it did not reach as
 failures**. The union stands, so a second call finishes the work — a very large
