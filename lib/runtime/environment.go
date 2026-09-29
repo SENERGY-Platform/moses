@@ -46,6 +46,11 @@ type environment struct {
 	// inside a run, or by a caller that holds mux itself (the flusher).
 	mux sync.Mutex
 
+	// sink refuses a moses api or console call made from inside another one's value
+	// conversion, so a getter cannot re-enter a converting sink and multiply the
+	// Go stack. Accessed only from the running goroutine under mux.
+	sink jsguard.SinkGuard
+
 	// state, dirty, removed and underHistory are guarded by mux.
 	state   repo.RuntimeState
 	dirty   bool
@@ -103,6 +108,10 @@ type environment struct {
 	gen     *generation
 	cancel  context.CancelFunc
 	runners sync.WaitGroup
+
+	// quarantine, when set, is why the crash brake held this environment back: it
+	// is not started and reports this through the api until a reload clears it.
+	quarantine *repo.Quarantine
 }
 
 // snapshotSeries copies the series map of one generation under env.mux, which

@@ -26,16 +26,21 @@ package runtime
 // runner until the legacy package dies.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"math/big"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
+	"github.com/SENERGY-Platform/moses/lib/crashbrake"
 	"github.com/SENERGY-Platform/moses/lib/jsguard"
 	"github.com/SENERGY-Platform/moses/lib/util"
 	"github.com/dop251/goja"
@@ -198,9 +203,21 @@ func runScript(program *goja.Program, moses interface{}, timeout time.Duration, 
 // declarations are only visible inside that block. And an integral number
 // arrives in Go as a float64, so a value above 2^53 is no longer exact.
 func runScriptIn(vms *scriptVMs, gen *generation, program *goja.Program, moses interface{}, timeout time.Duration, mux sync.Locker) error {
+	return runScriptInBraked(vms, gen, program, moses, timeout, mux, nil, "", "", nil)
+}
+
+// runScriptInBraked is runScriptIn plus the crash-brake entry marked in flight for
+// the duration of the run, inside the same lock, so a fatal crash names this
+// environment and goroutine on the next boot.
+func runScriptInBraked(vms *scriptVMs, gen *generation, program *goja.Program, moses interface{}, timeout time.Duration, mux sync.Locker, brake *crashbrake.Brake, environmentId string, channelId string, guard *jsguard.SinkGuard) error {
 	if mux != nil {
 		mux.Lock()
 		defer mux.Unlock()
+	}
+	//inside the lock, so the runs of one environment never overlap: a fatal crash
+	//from here until the release names this environment and goroutine on the next boot
+	if brake != nil {
+		defer brake.Enter(environmentId, channelId)()
 	}
 	var prepared *scriptVM
 	var err error
@@ -229,7 +246,7 @@ func runScriptIn(vms *scriptVMs, gen *generation, program *goja.Program, moses i
 		util.Logger.Warn("unable to set up httpGet in javascript vm", attributes.ErrorKey, err)
 		return err
 	}
-	if err := vm.Set("console", scriptConsole()); err != nil {
+	if err := vm.Set("console", scriptConsole(guard)); err != nil {
 		util.Logger.Warn("unable to set up console in javascript vm", attributes.ErrorKey, err)
 		return err
 	}
@@ -267,15 +284,33 @@ func runScriptIn(vms *scriptVMs, gen *generation, program *goja.Program, moses i
 // only a test sets it, to force the callback past the end of a run.
 var timeoutCallbackDelay atomic.Int64
 
-// scriptConsole is the console object otto shipped and goja does not. A legacy
-// script was migrated verbatim and may call console.log, which without this
-// binding is a ReferenceError that aborts the run before its first send.
-func scriptConsole() map[string]interface{} {
-	debug := func(args ...interface{}) {
-		util.Logger.Debug("script console", "arguments", joinScriptArgs(args))
+// scriptConsole is the console object otto shipped and goja does not. Its methods
+// are native goja functions so goja does not export (and recurse over) an
+// argument; each argument is read in one bounded pass instead, so console.log of
+// a deeply nested value cannot overflow the stack.
+func scriptConsole(guard *jsguard.SinkGuard) map[string]interface{} {
+	//nothing is formatted when the level is disabled, and a call re-entered from a
+	//getter while its own arguments are being converted is skipped, so a disabled
+	//log costs nothing and one conversion never nests another.
+	emit := func(level slog.Level, logfn func(string, ...interface{}), call goja.FunctionCall) {
+		if !util.Logger.Enabled(context.Background(), level) {
+			return
+		}
+		if guard != nil {
+			if !guard.Enter() {
+				return
+			}
+			defer guard.Leave()
+		}
+		logfn("script console", "arguments", joinScriptArgs(call.Arguments))
 	}
-	warn := func(args ...interface{}) {
-		util.Logger.Warn("script console", "arguments", joinScriptArgs(args))
+	debug := func(call goja.FunctionCall) goja.Value {
+		emit(slog.LevelDebug, util.Logger.Debug, call)
+		return goja.Undefined()
+	}
+	warn := func(call goja.FunctionCall) goja.Value {
+		emit(slog.LevelWarn, util.Logger.Warn, call)
+		return goja.Undefined()
 	}
 	return map[string]interface{}{
 		"log":   debug,
@@ -286,10 +321,96 @@ func scriptConsole() map[string]interface{} {
 	}
 }
 
-// joinScriptArgs renders what a script passed to console as one attribute, so
-// a call with several arguments stays one log line.
-func joinScriptArgs(args []interface{}) string {
-	return strings.TrimSuffix(fmt.Sprintln(args...), "\n")
+// maxConsoleBytes bounds the total rendered size of one console call across all
+// its arguments, so many huge arguments cannot make the formatter allocate
+// gigabytes. Conversion stops once the budget is spent.
+const maxConsoleBytes = 16 << 20
+
+// maxConsoleBigIntBits bounds the BigInt console prints in full, about 20,000
+// decimal digits.
+const maxConsoleBigIntBits = 1 << 16
+
+// joinScriptArgs renders what a script passed to console as one log attribute,
+// each argument read in one bounded pass, and the whole call bounded to
+// maxConsoleBytes so a deep or huge value is summarised rather than exported.
+func joinScriptArgs(args []goja.Value) string {
+	var b strings.Builder
+	for i, arg := range args {
+		if b.Len() >= maxConsoleBytes {
+			b.WriteString(" [truncated]")
+			break
+		}
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		if converted, err := convertScriptValue(arg, jsguard.MaxNativeWalkDepth, jsguard.MaxNativeWalkNodes); err == nil {
+			writeBounded(&b, converted, maxConsoleBytes)
+		} else {
+			writeBounded(&b, "[unloggable value: "+err.Error()+"]", maxConsoleBytes)
+		}
+	}
+	return b.String()
+}
+
+// writeBounded writes value as fmt.Sprint would, but stops once b holds limit
+// bytes (overshooting by at most a separator), so formatting never allocates
+// much more than the limit.
+func writeBounded(b *strings.Builder, value interface{}, limit int) {
+	if b.Len() >= limit {
+		return
+	}
+	switch v := value.(type) {
+	case string:
+		if room := limit - b.Len(); len(v) > room {
+			v = v[:room]
+		}
+		b.WriteString(v)
+	case []interface{}:
+		b.WriteByte('[')
+		for i, element := range v {
+			if b.Len() >= limit {
+				return
+			}
+			if i > 0 {
+				b.WriteByte(' ')
+			}
+			writeBounded(b, element, limit)
+		}
+		if b.Len() < limit {
+			b.WriteByte(']')
+		}
+	case map[string]interface{}:
+		keys := make([]string, 0, len(v))
+		for key := range v {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		b.WriteString("map[")
+		for i, key := range keys {
+			if b.Len() >= limit {
+				return
+			}
+			if i > 0 {
+				b.WriteByte(' ')
+			}
+			writeBounded(b, key, limit)
+			b.WriteByte(':')
+			writeBounded(b, v[key], limit)
+		}
+		if b.Len() < limit {
+			b.WriteByte(']')
+		}
+	case *big.Int:
+		//a huge BigInt would be expensive to print in decimal
+		if v.BitLen() > maxConsoleBigIntBits {
+			writeBounded(b, fmt.Sprintf("[BigInt of %d bits]", v.BitLen()), limit)
+			return
+		}
+		writeBounded(b, v.String(), limit)
+	default:
+		//a scalar or a Date, small whatever the script built
+		writeBounded(b, fmt.Sprint(v), limit)
+	}
 }
 
 // httpGet is part of the script surface a migrated script may already use.

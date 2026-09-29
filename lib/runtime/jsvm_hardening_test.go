@@ -117,3 +117,25 @@ func TestUnguardedDeepScriptCrashesTheParser(t *testing.T) {
 		t.Fatal("compileScript accepted a crash-deep script")
 	}
 }
+
+// TestLargestScriptParsesWellUnderTheStackCap: the worst full-size script has to
+// parse under half of jsguard.MaxGoroutineStack, so the cap keeps at least one
+// stack doubling of headroom over the parser.
+func TestLargestScriptParsesWellUnderTheStackCap(t *testing.T) {
+	cases := map[string]string{
+		"unclosed parens":   strings.Repeat("(", jsguard.MaxScriptBytes),
+		"unclosed brackets": strings.Repeat("[", jsguard.MaxScriptBytes),
+	}
+	if name := os.Getenv("MOSES_STACK_CAP_CHILD"); name != "" {
+		debug.SetMaxStack(jsguard.MaxGoroutineStack / 2)
+		_, _ = goja.Parse(name, cases[name], parser.WithDisableSourceMaps)
+		os.Exit(0)
+	}
+	for name := range cases {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestLargestScriptParsesWellUnderTheStackCap$")
+		cmd.Env = append(os.Environ(), "MOSES_STACK_CAP_CHILD="+name, "GOMEMLIMIT=1GiB")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Errorf("%s did not parse under %d MB: %v\n%s", name, jsguard.MaxGoroutineStack/2>>20, err, lastLines(string(out), 3))
+		}
+	}
+}

@@ -335,7 +335,7 @@ func runPreviously(program *goja.Program, moses interface{}) error {
 	if err := vm.Set("httpGet", httpGet); err != nil {
 		return err
 	}
-	if err := vm.Set("console", scriptConsole()); err != nil {
+	if err := vm.Set("console", scriptConsole(nil)); err != nil {
 		return err
 	}
 	_, err := vm.RunProgram(program)

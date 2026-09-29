@@ -98,13 +98,21 @@ func listEnvironmentsH(environments repo.Environments, shares repo.Shares, catal
 	}
 }
 
+// EnvironmentView is one environment as the api returns it: the definition PUT
+// accepts plus a read-only quarantine, present only while the crash brake holds
+// the environment back.
+type EnvironmentView struct {
+	domain.Environment
+	Quarantine *repo.Quarantine `json:"quarantine,omitempty"`
+}
+
 // @Summary Export one environment
-// @Description Returns exactly what PUT accepts, so an export can be edited and put back.
+// @Description Returns the definition PUT accepts, plus a read-only `quarantine` present only while the crash brake is holding the environment back after a script crash; edit and save the environment to clear it.
 // @Tags Environment
 // @Produce json
 // @Security Bearer
 // @Param id path string true "environment id"
-// @Success 200 {object} domain.Environment
+// @Success 200 {object} api.EnvironmentView
 // @Failure 401 {string} string "the token carries no subject"
 // @Failure 404 {string} string "no such environment, or no access to it"
 // @Failure 500 {string} string "error message"
@@ -131,7 +139,7 @@ func getEnvironmentH(environments repo.Environments, shares repo.Shares, catalog
 			gc.String(http.StatusNotFound, "not found")
 			return
 		}
-		gc.JSON(http.StatusOK, env)
+		gc.JSON(http.StatusOK, EnvironmentView{Environment: env, Quarantine: quarantineOf(notifier, env.Id)})
 	}
 }
 

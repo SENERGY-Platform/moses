@@ -89,7 +89,7 @@ func TestLegacyRegExpIsGuardedAndStillWorks(t *testing.T) {
 }
 
 func TestLegacyRunRefusesAComplexScript(t *testing.T) {
-	err := run(strings.Repeat("(", 5000)+"1"+strings.Repeat(")", 5000), map[string]interface{}{}, time.Second, nil)
+	err := run(strings.Repeat("(", 5000)+"1"+strings.Repeat(")", 5000), map[string]interface{}{}, time.Second, nil, nil, "", "")
 	if err == nil || !strings.Contains(err.Error(), "deep") {
 		t.Fatalf("expected the complexity error, got %v", err)
 	}
@@ -116,7 +116,7 @@ func TestLegacyRunSurvivesDeepInputs(t *testing.T) {
 		debug.SetMaxStack(8 << 20)
 		for _, a := range attacks {
 			fmt.Printf("start %s\n", a.name)
-			err := run(a.code, map[string]interface{}{}, 20*time.Second, nil)
+			err := run(a.code, map[string]interface{}{}, 20*time.Second, nil, nil, "", "")
 			fmt.Printf("survived %s (%v)\n", a.name, err != nil)
 		}
 		os.Exit(0)

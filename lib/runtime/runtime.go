@@ -38,6 +38,7 @@ import (
 
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/config"
+	"github.com/SENERGY-Platform/moses/lib/crashbrake"
 	"github.com/SENERGY-Platform/moses/lib/dataset"
 	"github.com/SENERGY-Platform/moses/lib/domain"
 	"github.com/SENERGY-Platform/moses/lib/formula"
@@ -144,6 +145,19 @@ type Runtime struct {
 	// test clock a tick token, and the load is not a tick.
 	instant func() time.Time
 
+	// brake records, per environment, when a script run is in flight, so a fatal
+	// crash is quarantined on the next boot instead of looping. nil disables it.
+	brake *crashbrake.Brake
+
+	// quarantined holds, per environment id, why the crash brake kept it from
+	// starting. Guarded by mux, read by the api, cleared by a reload. An entry
+	// here means the environment is not in envs and does not run.
+	quarantined map[string]*repo.Quarantine
+
+	// longIdWarned remembers ids too long for a crash-brake slot already warned
+	// about, so the warning is logged once per id. Guarded by mux.
+	longIdWarned map[string]bool
+
 	ctx     context.Context
 	cancel  context.CancelFunc
 	flusher sync.WaitGroup
@@ -158,11 +172,12 @@ type runningChannel struct {
 	binding channelBinding
 }
 
-func New(config config.Config, environments repo.Environments, states repo.States, datasets repo.Datasets, historyJobs repo.HistoryJobs, connector *platform_connector_lib.Connector, stateLogger deviceStateLogger) *Runtime {
+func New(config config.Config, environments repo.Environments, states repo.States, datasets repo.Datasets, historyJobs repo.HistoryJobs, connector *platform_connector_lib.Connector, stateLogger deviceStateLogger, brake *crashbrake.Brake) *Runtime {
 	result := newRuntime(config, environments, states, datasets, historyJobs, &connectorPublisher{
 		connector:   connector,
 		segmentName: config.ProtocolSegmentName,
 	})
+	result.brake = brake
 	result.stateLogger = stateLogger
 	if config.TimescaleWrapperUrl != "" {
 		result.fetcher = timeseries.New(config.TimescaleWrapperUrl)
@@ -235,6 +250,8 @@ func newRuntime(config config.Config, environments repo.Environments, states rep
 		devices:        map[string]*environment{},
 		backfills:      map[string]*backfillJob{},
 		histories:      map[string]*historyJob{},
+		quarantined:    map[string]*repo.Quarantine{},
+		longIdWarned:   map[string]bool{},
 	}
 	result.historyEngine = result.runHistory
 	return result
@@ -384,6 +401,12 @@ func (this *Runtime) Reload(id string) {
 		util.Logger.Error("unable to read the environment, it keeps running unchanged", attributes.ErrorKey, err, "environment", id)
 		return
 	}
+	//a reload lifts a crash-brake quarantine, in the store before the start below
+	//reads it; a failed clear keeps the environment quarantined and ends the reload
+	if !this.clearQuarantine(ctx, id) {
+		util.Logger.Error("the reload could not lift the crash-brake quarantine, the environment stays quarantined", "environment", id)
+		return
+	}
 	this.stopRunners(id)
 	//deliberately not the ctx above: that budget is for the definition read and
 	//may already be spent by the time we get here. startEnvironment needs a
@@ -392,6 +415,66 @@ func (this *Runtime) Reload(id string) {
 	this.startEnvironment(context.Background(), def)
 	this.rebuildIndex()
 	util.Logger.Info("environment reloaded", "environment", id)
+}
+
+// clearQuarantine lifts a crash-brake quarantine in the store, then in memory, and
+// reports success; a failed store read or write leaves both in place.
+func (this *Runtime) clearQuarantine(ctx context.Context, id string) bool {
+	this.mux.RLock()
+	_, held := this.quarantined[id]
+	this.mux.RUnlock()
+	if !held {
+		return true
+	}
+	state, err := this.states.Load(ctx, id)
+	if err != nil {
+		util.Logger.Error("unable to read the state to lift a quarantine, the environment stays quarantined",
+			attributes.ErrorKey, err, "environment", id)
+		return false
+	}
+	if state.Quarantine != nil {
+		state.Quarantine = nil
+		if err := this.states.Save(ctx, state); err != nil {
+			util.Logger.Error("unable to clear a quarantine in the store, the environment stays quarantined",
+				attributes.ErrorKey, err, "environment", id)
+			return false
+		}
+	}
+	this.mux.Lock()
+	delete(this.quarantined, id)
+	this.mux.Unlock()
+	return true
+}
+
+// SetQuarantines records this boot's crash-brake decisions in memory before the
+// environments start, so a decision the store failed to persist still keeps its
+// environment from starting into the same crash this boot.
+func (this *Runtime) SetQuarantines(quarantines map[string]*repo.Quarantine) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	for id, q := range quarantines {
+		this.quarantined[id] = q
+	}
+}
+
+// warnLongId reports whether an over-long id has not been warned about yet,
+// recording it so the warning is logged once.
+func (this *Runtime) warnLongId(id string) bool {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	if this.longIdWarned[id] {
+		return false
+	}
+	this.longIdWarned[id] = true
+	return true
+}
+
+// QuarantineOf returns why the crash brake held an environment back, or nil; the
+// api reports it so an owner sees why the environment is not running.
+func (this *Runtime) QuarantineOf(id string) *repo.Quarantine {
+	this.mux.RLock()
+	defer this.mux.RUnlock()
+	return this.quarantined[id]
 }
 
 // Remove stops one environment. It is called after its definition was deleted.
@@ -480,6 +563,12 @@ func (this *Runtime) prepareEnvironment(ctx context.Context, def domain.Environm
 		util.Logger.Warn("environment without an id is not started", "name", def.Name)
 		return false
 	}
+	//an id stored before the length bound does not fit a crash-brake slot, so a
+	//crash in it quarantines nothing; it still runs and is warned about once
+	if len(def.Id) > crashbrake.MaxEnvironmentIdBytes && this.warnLongId(def.Id) {
+		util.Logger.Warn("environment id is longer than the crash brake can cover, a crash in it will not be quarantined",
+			"environment", def.Id, "limit", crashbrake.MaxEnvironmentIdBytes)
+	}
 	seriesCtx, cancelSeries := context.WithTimeout(ctx, seriesLoadTimeout)
 	series := this.loadSeries(seriesCtx, def)
 	//released as soon as the phase ends rather than deferred, so nothing below
@@ -507,6 +596,20 @@ func (this *Runtime) prepareEnvironment(ctx context.Context, def domain.Environm
 			return false
 		}
 		env = &environment{id: def.Id, state: state}
+	}
+	//held back by the crash brake, from this boot's in-memory decisions (kept even
+	//when the store write failed) or a stored marker, until a reload clears it
+	this.mux.Lock()
+	quarantine := this.quarantined[def.Id]
+	if quarantine == nil && env.state.Quarantine != nil {
+		quarantine = env.state.Quarantine
+		this.quarantined[def.Id] = quarantine
+	}
+	this.mux.Unlock()
+	if quarantine != nil {
+		util.Logger.Error("the crash brake quarantined this environment, it is not started",
+			"environment", def.Id, "channel", quarantine.Channel, "reason", quarantine.Reason)
+		return false
 	}
 	if underHistory {
 		//before the environment is published: from here on nothing may take it for
@@ -1401,7 +1504,7 @@ func (this *Runtime) execute(env *environment, gen *generation, binding channelB
 		this.reportScriptFailure(env, binding, err)
 		return
 	}
-	err := runScriptIn(&env.scripts, gen, binding.script, this.jsApi(env, gen, binding, input, send, now), this.jsTimeout, &env.mux)
+	err := runScriptInBraked(&env.scripts, gen, binding.script, this.jsApi(env, gen, binding, input, send, now), this.jsTimeout, &env.mux, this.brake, env.id, binding.channel.Id, &env.sink)
 	if err != nil {
 		this.reportScriptFailure(env, binding, err)
 	}

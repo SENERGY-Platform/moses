@@ -609,7 +609,7 @@ const docTemplate = `{
                         "Bearer": []
                     }
                 ],
-                "description": "Returns exactly what PUT accepts, so an export can be edited and put back.",
+                "description": "Returns the definition PUT accepts, plus a read-only ` + "`" + `quarantine` + "`" + ` present only while the crash brake is holding the environment back after a script crash; edit and save the environment to clear it.",
                 "produces": [
                     "application/json"
                 ],
@@ -630,7 +630,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/domain.Environment"
+                            "$ref": "#/definitions/api.EnvironmentView"
                         }
                     },
                     "401": {
@@ -1492,6 +1492,64 @@ const docTemplate = `{
             "properties": {
                 "valid": {
                     "type": "boolean"
+                }
+            }
+        },
+        "api.EnvironmentView": {
+            "type": "object",
+            "properties": {
+                "context": {
+                    "description": "Context is the shared surroundings every zone below can read: outdoor\ntemperature, irradiation, calendar. Initial values only - unless the\ntimeline governs the key, see Timeline.",
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "context_sources": {
+                    "description": "ContextSources drive context keys over time: outdoor temperature follows\na day cycle, irradiance follows the sun. Without a source a context key\nkeeps its initial value until somebody sets it by hand, which makes the\ncontext look inert. Keyed by the context key the source writes.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/domain.Source"
+                    }
+                },
+                "external_graph_ref": {
+                    "description": "ExternalGraphRef is the id of the graph this environment is mirrored as in\nthe device-repository, so other applications can consume a simulated site\nlike a real one.\n\nThe server decides and enforces this value; a client-sent value is\nignored, since the whole document is sent on every update and an echoed or\ninvented ref would let one environment overwrite another's graph. See\nreconcileGraphRef in lib/api.",
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "owner": {
+                    "description": "Owner is the creator's user id, decided by the server from the token and\nkept on update, so a value sent in a request body is ignored.",
+                    "type": "string"
+                },
+                "quarantine": {
+                    "$ref": "#/definitions/repo.Quarantine"
+                },
+                "seed": {
+                    "description": "Every stochastic source derives from Seed, so the same environment and\nclock produce the same values.",
+                    "type": "integer"
+                },
+                "timeline": {
+                    "description": "Timeline carries the dated changes of this environment: a source parameter\nor a context value that takes effect at an instant, so a measure with a\nstart date is one document with a step in it rather than two documents.\nEmpty is the ordinary case and the behaviour of every document stored\nbefore this field existed. See docs/dated-changes.md.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/domain.DatedChange"
+                    }
+                },
+                "type": {
+                    "$ref": "#/definitions/domain.EnvironmentType"
+                },
+                "version": {
+                    "description": "Version is counted by the server: every successful write increments it,\nand a write is refused unless the client's version still matches the\nstored one - this is what keeps two editors from overwriting each other's\ndevices. Zero means the client does not take part; a document written\nbefore this field existed reads as zero too.",
+                    "type": "integer"
+                },
+                "zones": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/domain.Zone"
+                    }
                 }
             }
         },
@@ -2593,6 +2651,20 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "timezone": {
+                    "type": "string"
+                }
+            }
+        },
+        "repo.Quarantine": {
+            "type": "object",
+            "properties": {
+                "at_unix": {
+                    "type": "integer"
+                },
+                "channel": {
+                    "type": "string"
+                },
+                "reason": {
                     "type": "string"
                 }
             }

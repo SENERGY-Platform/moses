@@ -18,11 +18,15 @@ package runtime
 
 import (
 	"fmt"
+	"math/big"
+	"reflect"
+	"strconv"
 	"time"
 
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/jsguard"
 	"github.com/SENERGY-Platform/moses/lib/util"
+	"github.com/dop251/goja"
 )
 
 // The javascript surface is the legacy one: a migrated channel carries its
@@ -45,18 +49,28 @@ func (this *Runtime) jsApi(env *environment, gen *generation, binding channelBin
 	assetApi := this.jsAssetApi(env, binding.asset.id)
 	channelApi := map[string]interface{}{
 		"input": input,
-		//through jsNumber: what a script sends has to reach the publish path, the
-		//change gate and the aggregate cache as one number type, whatever the
-		//javascript engine made of the expression
-		"send": func(value interface{}) {
+		//a goja.Value converted in one bounded pass, never exported; the error makes
+		//a call re-entered from a getter throw instead of nesting a conversion
+		"send": func(value goja.Value) error {
 			//a missing argument, an explicit null and an explicit undefined all
-			//arrive as nil, where otto aborted the run; none of them is a
-			//reading, so nothing is published rather than a null
-			if value == nil {
+			//mean no reading, where otto aborted the run; nothing is published
+			//rather than a null
+			if isNoValue(value) {
 				util.Logger.Warn("the script handed no value", "environment", env.id, "field", "send")
-				return
+				return nil
 			}
-			send(jsNumber(value))
+			if !env.sink.Enter() {
+				return jsguard.ErrSinkReentry
+			}
+			defer env.sink.Leave()
+			converted, err := convertScriptValue(value, jsguard.MaxNativeWalkDepth, jsguard.MaxNativeWalkNodes)
+			if err != nil {
+				util.Logger.Warn("the script handed a value that cannot be published, it is dropped",
+					attributes.ErrorKey, err, "environment", env.id, "field", "send")
+				return nil
+			}
+			send(jsNumber(converted))
+			return nil
 		},
 	}
 	return map[string]interface{}{
@@ -124,8 +138,10 @@ func (this *Runtime) jsAssetApi(env *environment, assetId string) map[string]int
 // engines always spelled it as.
 func jsStateApi(env *environment, states func() map[string]interface{}) map[string]interface{} {
 	return map[string]interface{}{
-		"get": func(field interface{}) interface{} {
-			name, ok := jsField(field)
+		//goja.Values, not interface{}: goja would export (and recurse over) an
+		//interface{} argument before the function runs
+		"get": func(field goja.Value) interface{} {
+			name, ok := jsFieldValue(field)
 			if !ok {
 				env.warnNoField()
 				return 0
@@ -142,23 +158,33 @@ func jsStateApi(env *environment, states func() map[string]interface{}) map[stri
 			//the shared state, past the set check
 			return readState(env, name, value)
 		},
-		"set": func(field interface{}, value interface{}) error {
-			name, ok := jsField(field)
+		"set": func(field goja.Value, value goja.Value) error {
+			name, ok := jsFieldValue(field)
 			if !ok {
 				env.warnNoField()
 				return nil
 			}
 			//a missing argument, an explicit null and an explicit undefined all
-			//arrive as nil, where otto aborted the run; the key keeps whatever
+			//mean no value, where otto aborted the run; the key keeps whatever
 			//it holds rather than taking a nil no reader can use
-			if value == nil {
-				util.Logger.Warn("the script handed no value", "environment", env.id, "field", field)
+			if isNoValue(value) {
+				util.Logger.Warn("the script handed no value", "environment", env.id, "field", name)
 				return nil
 			}
-			//checked and copied in one pass, and only the copy is stored: a
-			//structure the script still holds could otherwise gain a function, a
-			//cycle or depth after the check
-			copied, err := jsguard.CopyPlainData(value)
+			if !env.sink.Enter() {
+				return jsguard.ErrSinkReentry
+			}
+			defer env.sink.Leave()
+			//converted in one bounded pass that reads each property once and never
+			//exports a composite, at the state bounds, so only a fresh copy of plain
+			//data within depth and node limits is stored
+			converted, err := convertScriptValue(value, jsguard.MaxStateDepth+1, jsguard.MaxStateNodes)
+			if err != nil {
+				return fmt.Errorf("state %q: %w", name, err)
+			}
+			//the plain-data check the old path ran: a Date or BigInt converts to a
+			//scalar but is not storable, and is refused as before
+			copied, err := jsguard.CopyPlainData(converted)
 			if err != nil {
 				return fmt.Errorf("state %q: %w", name, err)
 			}
@@ -182,6 +208,153 @@ func jsField(field interface{}) (string, bool) {
 	}
 	return "", false
 }
+
+// jsFieldValue turns a script's field argument into a key without letting goja
+// export (and recurse over) it first: a valid field is a scalar, so a value that
+// is an object at all is refused, and a scalar is exported once and spelled out
+// by jsField. A missing, deep or non-scalar field names no key.
+func jsFieldValue(field goja.Value) (string, bool) {
+	if isNoValue(field) {
+		return "", false
+	}
+	if _, isObject := field.(*goja.Object); isObject {
+		return "", false
+	}
+	return jsField(field.Export())
+}
+
+// isNoValue reports the three script values that mean "nothing was handed in": a
+// missing argument arrives as a nil goja.Value, and null and undefined as their
+// own singletons.
+func isNoValue(value goja.Value) bool {
+	return value == nil || goja.IsUndefined(value) || goja.IsNull(value)
+}
+
+// convertScriptValue turns a script value into bounded plain Go data in one pass that
+// reads every property once and never exports a composite, so a getter cannot change the value mid-check.
+func convertScriptValue(value goja.Value, maxDepth int, maxNodes int) (interface{}, error) {
+	nodes := 0
+	bytes := 0
+	var conv func(v goja.Value, depth int, seen map[*goja.Object]bool) (interface{}, error)
+	conv = func(v goja.Value, depth int, seen map[*goja.Object]bool) (interface{}, error) {
+		nodes++
+		if nodes > maxNodes {
+			return nil, fmt.Errorf("the value holds more than %d elements", maxNodes)
+		}
+		if depth >= maxDepth {
+			return nil, fmt.Errorf("the value nests deeper than the %d level limit", maxDepth-1)
+		}
+		//a missing sparse element arrives as a nil Value; null and undefined store
+		//as nil, as they always did
+		if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
+			return nil, nil
+		}
+		obj, isObject := v.(*goja.Object)
+		if !isObject {
+			//a primitive: exporting it does not recurse
+			switch exported := v.Export().(type) {
+			case nil:
+				return nil, nil
+			case string:
+				if bytes += len(exported); bytes > maxScriptValueBytes {
+					return nil, fmt.Errorf("the value holds more than %d bytes of strings", maxScriptValueBytes)
+				}
+				return exported, nil
+			case bool, int64, int, float64:
+				return exported, nil
+			default:
+				return nil, fmt.Errorf("only numbers, strings, booleans, null and arrays or plain objects of those can be sent or stored, not %T", exported)
+			}
+		}
+		if seen[obj] {
+			return nil, fmt.Errorf("the value refers to itself")
+		}
+		seen[obj] = true
+		defer delete(seen, obj)
+		//distinguish a plain array or object from anything else without exporting:
+		//exportType reports the type without walking the value. arguments walks as
+		//the array it exported to; a Set shares the array ExportType but has no
+		//length and is refused rather than sent empty
+		exportType := obj.ExportType()
+		if obj.ClassName() == "Arguments" {
+			exportType = reflectTypeScriptArray
+		}
+		switch exportType {
+		case reflectTypeScriptArray:
+			l := obj.Get("length")
+			if l == nil {
+				return nil, fmt.Errorf("only numbers, strings, booleans, null and arrays or plain objects of those can be sent or stored")
+			}
+			//grown by append, never preallocated from the untrusted length, so a
+			//sparse array claiming a billion elements allocates nothing up front
+			length := int(l.ToInteger())
+			var out []interface{}
+			for i := 0; i < length; i++ {
+				element, err := conv(obj.Get(strconv.Itoa(i)), depth+1, seen)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, element)
+			}
+			if out == nil {
+				out = []interface{}{}
+			}
+			return out, nil
+		case reflectTypeScriptObject:
+			out := map[string]interface{}{}
+			for _, key := range obj.Keys() {
+				//keys count toward the budget too: many objects sharing one huge key
+				//would otherwise copy it once per object
+				if bytes += len(key); bytes > maxScriptValueBytes {
+					return nil, fmt.Errorf("the value holds more than %d bytes of strings", maxScriptValueBytes)
+				}
+				copied, err := conv(obj.Get(key), depth+1, seen)
+				if err != nil {
+					return nil, err
+				}
+				out[key] = copied
+			}
+			return out, nil
+		default:
+			//a boxed Number or Boolean, a Date or a BigInt object exports to one
+			//scalar without walking anything, as the old path did; a function,
+			//Proxy, Map or typed array is refused rather than exported unbounded
+			if exportsToScalar(exportType) {
+				return obj.Export(), nil
+			}
+			return nil, fmt.Errorf("only numbers, strings, booleans, null and arrays or plain objects of those can be sent or stored")
+		}
+	}
+	return conv(value, 0, map[*goja.Object]bool{})
+}
+
+// exportsToScalar reports the ExportTypes whose Export is a single scalar: a
+// boxed Number or Boolean, a Date and a BigInt.
+func exportsToScalar(t reflect.Type) bool {
+	if t == reflectTypeTime || t == reflectTypeBigInt {
+		return true
+	}
+	switch t.Kind() {
+	case reflect.Int64, reflect.Float64, reflect.Bool:
+		return true
+	}
+	return false
+}
+
+// maxScriptValueBytes bounds the total string bytes one converted value may hold,
+// so a getter returning a huge string cannot exhaust memory before the node limit
+// is reached.
+const maxScriptValueBytes = 16 << 20
+
+// reflectTypeScriptArray and reflectTypeScriptObject are what goja's ExportType
+// reports for a plain array and a plain object, used to tell them apart from a
+// function, Date, Proxy or typed array without exporting the value.
+var (
+	reflectTypeScriptArray  = reflect.TypeOf([]interface{}{})
+	reflectTypeScriptObject = reflect.TypeOf(map[string]interface{}{})
+	reflectTypeTime         = reflect.TypeOf(time.Time{})
+	reflectTypeBigInt       = reflect.TypeOf((*big.Int)(nil))
+)
 
 // jsNumber normalises a number on its way from a script into Go. A javascript
 // engine may export an integral number as int64 and a computed one as float64,
@@ -209,11 +382,11 @@ func jsContextStateApi(env *environment, gen *generation, now time.Time) map[str
 	if gen == nil || gen.timeline == nil {
 		return plain
 	}
-	get := plain["get"].(func(field interface{}) interface{})
-	set := plain["set"].(func(field interface{}, value interface{}) error)
+	get := plain["get"].(func(field goja.Value) interface{})
+	set := plain["set"].(func(field goja.Value, value goja.Value) error)
 	return map[string]interface{}{
-		"get": func(field interface{}) interface{} {
-			name, ok := jsField(field)
+		"get": func(field goja.Value) interface{} {
+			name, ok := jsFieldValue(field)
 			if !ok || !gen.timeline.governsContext(name) {
 				//an invalid field falls through to the plain get, which refuses it
 				return get(field)
@@ -229,8 +402,8 @@ func jsContextStateApi(env *environment, gen *generation, now time.Time) map[str
 			}
 			return 0
 		},
-		"set": func(field interface{}, value interface{}) error {
-			name, ok := jsField(field)
+		"set": func(field goja.Value, value goja.Value) error {
+			name, ok := jsFieldValue(field)
 			if ok && gen.timeline.governsContext(name) {
 				env.warnTimelineGoverned(name)
 				return nil

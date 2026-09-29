@@ -394,6 +394,7 @@ func TestConfigFieldsMapToTheExpectedEnvironmentVariableNames(t *testing.T) {
 		"IotCacheTimeout":           "IOT_CACHE_TIMEOUT",
 		"IotCacheUrls":              "IOT_CACHE_URLS",
 		"JsTimeout":                 "JS_TIMEOUT",
+		"ScriptCrashDir":            "SCRIPT_CRASH_DIR",
 		"JwtExpiration":             "JWT_EXPIRATION",
 		"JwtIssuer":                 "JWT_ISSUER",
 		"JwtPrivateKey":             "JWT_PRIVATE_KEY",

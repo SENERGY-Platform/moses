@@ -23,6 +23,14 @@ import "fmt"
 // most. Length is not bounded, a flat document is decoded without recursion.
 const MaxJSONDepth = 1000
 
+// MaxNativeWalkDepth bounds how deeply a value handed to send or console may nest
+// before the bounded converter refuses it; it equals the call limit.
+const MaxNativeWalkDepth = 1000
+
+// MaxNativeWalkNodes bounds how many values one such conversion visits, far above
+// any real value, so a wide value cannot make the conversion itself expensive.
+const MaxNativeWalkNodes = 1 << 20
+
 // MaxRegexpBytes and MaxRegexpDepth bound a pattern compiled at run time. The
 // regexp2 compiler overflows near 6000 group levels under an 8 MB stack, while
 // flat patterns of any measured length do not recurse.

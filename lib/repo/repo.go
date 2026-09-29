@@ -125,8 +125,19 @@ type RuntimeState struct {
 	// approach instead of jumping to its target.
 	Approaching map[string]map[string]Approach `json:"approaching,omitempty" bson:"approaching,omitempty"`
 
+	// Quarantine, when set, is why the crash brake kept this environment from
+	// starting after a script crash. Server-owned; the next reload clears it.
+	Quarantine *Quarantine `json:"quarantine,omitempty" bson:"quarantine,omitempty"`
+
 	// Set by the store, not by callers.
 	UpdatedAtUnix int64 `json:"updated_at_unix" bson:"updated_at_unix"`
+}
+
+// Quarantine is why an environment is held back and when the decision was made.
+type Quarantine struct {
+	Reason  string `json:"reason" bson:"reason"`
+	Channel string `json:"channel,omitempty" bson:"channel,omitempty"`
+	AtUnix  int64  `json:"at_unix" bson:"at_unix"`
 }
 
 // StateChange is a partial RuntimeState: what a caller wants to set, and

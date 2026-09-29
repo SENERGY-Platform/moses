@@ -25,19 +25,20 @@ import (
 	"time"
 
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
+	"github.com/SENERGY-Platform/moses/lib/crashbrake"
 	"github.com/SENERGY-Platform/moses/lib/jsguard"
 	"github.com/SENERGY-Platform/moses/lib/util"
 	"github.com/robertkrimen/otto"
 )
 
-func startChangeRoutine(routine ChangeRoutine, callbacks map[string]interface{}, timeout time.Duration, mux sync.Locker, locationInfoForErrorLogging string) (ticker *time.Ticker, stop chan bool) {
+func startChangeRoutine(routine ChangeRoutine, callbacks map[string]interface{}, timeout time.Duration, mux sync.Locker, brake *crashbrake.Brake, worldId string, locationInfoForErrorLogging string) (ticker *time.Ticker, stop chan bool) {
 	ticker = time.NewTicker(time.Duration(routine.Interval) * time.Second)
 	stop = make(chan bool)
 	go func() {
 		for {
 			select {
 			case <-ticker.C:
-				err := run(routine.Code, callbacks, timeout, mux)
+				err := run(routine.Code, callbacks, timeout, mux, brake, worldId, routine.Id)
 				if err != nil {
 					util.Logger.Warn("change routine failed", attributes.ErrorKey, err, "location", locationInfoForErrorLogging, "code", trimCodeDefault(routine.Code))
 				}
@@ -67,7 +68,7 @@ var halt = errors.New("stop")
 // run executes a legacy script. The complexity check runs before otto parses
 // it, since otto's parser overflows the Go stack on deep nesting, a fatal crash;
 // this covers stored routines at load, on every tick, and service commands.
-func run(code string, moses interface{}, timeout time.Duration, mux sync.Locker) (err error) {
+func run(code string, moses interface{}, timeout time.Duration, mux sync.Locker, brake *crashbrake.Brake, worldId string, channelId string) (err error) {
 	if err := jsguard.ScriptTooComplex(code); err != nil {
 		return err
 	}
@@ -107,6 +108,11 @@ func run(code string, moses interface{}, timeout time.Duration, mux sync.Locker)
 	if mux != nil {
 		mux.Lock()
 		defer mux.Unlock()
+	}
+	//inside the world lock, so runs of one world never overlap: a fatal crash from
+	//here until the release names this world and goroutine on the next boot
+	if brake != nil {
+		defer brake.Enter(worldId, channelId)()
 	}
 	_, err = vm.Run(code) // Here be dragons (risky code)
 	return

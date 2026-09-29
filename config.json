@@ -15,6 +15,7 @@
     "mongo_auth_source": "admin",
     "mongo_database": "moses",
     "js_timeout":2000000000,
+    "script_crash_dir": "",
     "state_flush_interval":5000000000,
     "publish_workers":16,
     "protocol_segment_name": "payload",

@@ -48,7 +48,12 @@ type Config struct {
 	MongoAuthSource        string                 `json:"mongo_auth_source" env_var:"MONGO_AUTH_SOURCE"`
 	MongoDatabase          string                 `json:"mongo_database" env_var:"MONGO_DATABASE"`
 	JsTimeout              time.Duration          `json:"js_timeout" env_var:"JS_TIMEOUT"` //json: nanoseconds, env: duration string ("2s")
-	ProtocolSegmentName    string                 `json:"protocol_segment_name" env_var:"PROTOCOL_SEGMENT_NAME"`
+
+	// ScriptCrashDir is where the crash brake keeps its register and crash report,
+	// so the next boot can quarantine an environment a script crashed. Empty
+	// disables the brake; an emptyDir suffices, since only the same pod reads it back.
+	ScriptCrashDir      string `json:"script_crash_dir" env_var:"SCRIPT_CRASH_DIR"`
+	ProtocolSegmentName string `json:"protocol_segment_name" env_var:"PROTOCOL_SEGMENT_NAME"`
 
 	// EnvironmentCollectionName holds the environment definitions of the new
 	// domain model and StateCollectionName their runtime state. They are separate

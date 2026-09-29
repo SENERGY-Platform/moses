@@ -158,6 +158,7 @@ func Validate(env Environment) error {
 		v.fail("type", "unknown environment type %q, expected one of %v", env.Type, environmentTypes())
 	}
 	v.claimId("id", env.Id)
+	v.checkEnvironmentId("id", env.Id)
 	v.checkStates("context", env.Context)
 	for key, source := range env.ContextSources {
 		v.checkContextSource("context_sources."+key, key, source)
@@ -609,6 +610,21 @@ func (this *validator) checkTimelineValue(path string, field TimelineField, valu
 func (this *validator) checkExternalId(path string, id string) {
 	if len(id) > MaxExternalIdLength {
 		this.fail(path, "is %d bytes long, the limit for a platform id is %d", len(id), MaxExternalIdLength)
+	}
+}
+
+// checkEnvironmentId bounds the id the crash brake stores in a fixed register
+// slot: at most MaxExternalIdLength bytes (crashbrake.MaxEnvironmentIdBytes) and
+// no control characters, so a stored id decodes back to exactly itself.
+func (this *validator) checkEnvironmentId(path string, id string) {
+	if len(id) > MaxExternalIdLength {
+		this.fail(path, "is %d bytes long, the limit for an environment id is %d", len(id), MaxExternalIdLength)
+	}
+	for _, r := range id {
+		if r < 0x20 || r == 0x7f {
+			this.fail(path, "must not contain control characters")
+			break
+		}
 	}
 }
 

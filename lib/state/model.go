@@ -19,6 +19,8 @@ package state
 import (
 	"math"
 	"sync"
+
+	"github.com/SENERGY-Platform/moses/lib/jsguard"
 )
 
 type ChangeRoutineIndexElement struct {
@@ -49,6 +51,9 @@ type World struct {
 	Rooms          map[string]*Room         `json:"rooms" bson:"rooms"`
 	ChangeRoutines map[string]ChangeRoutine `json:"change_routines" bson:"change_routines"`
 	mux            *sync.Mutex              `json:"-" bson:"-"`
+	//refuses a sink call re-entered from a getter during a conversion; the world
+	//mutex serialises every run that touches it
+	sink jsguard.SinkGuard
 }
 
 func (this *World) CleanStates() {

@@ -233,6 +233,10 @@ type recordingNotifier struct {
 	changes  []repo.StateChange
 	setErr   error
 
+	// quarantine is what QuarantineOf returns, so a test can pin how the get
+	// handler reports a crash-brake quarantine.
+	quarantine *repo.Quarantine
+
 	// backfills records the windows StartBackfill was asked for, and
 	// startErr/statusErr are what the two backfill calls answer with, so a test
 	// can pin every status code the handlers map.
@@ -336,6 +340,10 @@ func (this *recordingNotifier) CancelHistory(id string) (moses_runtime.HistorySt
 		return moses_runtime.HistoryStatus{}, this.historyCancelErr
 	}
 	return this.historyStatus, nil
+}
+
+func (this *recordingNotifier) QuarantineOf(id string) *repo.Quarantine {
+	return this.quarantine
 }
 
 func TestTheRuntimeIsToldAboutExactlyTheChangedEnvironment(t *testing.T) {

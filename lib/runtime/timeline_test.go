@@ -18,6 +18,7 @@ package runtime
 
 import (
 	"errors"
+	"github.com/dop251/goja"
 	"math"
 	"reflect"
 	"strings"
@@ -358,8 +359,11 @@ func TestAScriptReadsAGovernedContextKeyAndCannotWriteIt(t *testing.T) {
 	env.seed(gen, timelineKnick.Add(-time.Hour))
 
 	api := jsContextStateApi(env, gen, timelineKnick.Add(time.Hour))
-	get := api["get"].(func(field interface{}) interface{})
-	set := api["set"].(func(field interface{}, value interface{}) error)
+	getFn := api["get"].(func(field goja.Value) interface{})
+	setFn := api["set"].(func(field goja.Value, value goja.Value) error)
+	tv := goja.New()
+	get := func(field string) interface{} { return getFn(tv.ToValue(field)) }
+	set := func(field string, value float64) error { return setFn(tv.ToValue(field), tv.ToValue(value)) }
 
 	if got := get("price"); got != 0.42 {
 		t.Errorf("a governed key has to read as the declared value of this instant, got %v", got)
@@ -407,7 +411,8 @@ func TestAGovernedKeyReadsItsInlineValueBeforeTheFirstChange(t *testing.T) {
 	env.seed(gen, timelineKnick.Add(-2*time.Hour))
 
 	api := jsContextStateApi(env, gen, timelineKnick.Add(-time.Hour))
-	if got := api["get"].(func(field interface{}) interface{})("price"); got != 0.30 {
+	getFn := api["get"].(func(field goja.Value) interface{})
+	if got := getFn(goja.New().ToValue("price")); got != 0.30 {
 		t.Errorf("before the first change the inline value stands, got %v", got)
 	}
 }

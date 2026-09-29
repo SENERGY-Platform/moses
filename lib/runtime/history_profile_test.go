@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SENERGY-Platform/moses/lib/crashbrake"
 	"github.com/SENERGY-Platform/moses/lib/dataset"
 	"github.com/SENERGY-Platform/moses/lib/devices"
 	"github.com/SENERGY-Platform/moses/lib/domain"
@@ -125,6 +126,15 @@ func TestProfileTheHistoryRunOfADocument(t *testing.T) {
 	to := from.Add(time.Duration(days) * 24 * time.Hour)
 
 	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), discardingPublisher{})
+	//MOSES_PROFILE_BRAKE=1 measures the per-run crash-brake cost (goID and the slot)
+	if os.Getenv("MOSES_PROFILE_BRAKE") != "" {
+		brake, _, brakeErr := crashbrake.Open(t.TempDir())
+		if brakeErr != nil {
+			t.Fatal(brakeErr)
+		}
+		defer brake.Close()
+		rt.brake = brake
+	}
 	gen := newGeneration(def, loadedSeries(series))
 	env := &environment{id: def.Id, gen: gen, state: repo.RuntimeState{EnvironmentId: def.Id}}
 	env.resetForHistory()

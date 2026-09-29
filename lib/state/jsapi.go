@@ -20,6 +20,7 @@ import (
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/jsguard"
 	"github.com/SENERGY-Platform/moses/lib/util"
+	"github.com/robertkrimen/otto"
 )
 
 func (this *StateRepo) getJsWorldApi(world *World) map[string]interface{} {
@@ -31,15 +32,19 @@ func (this *StateRepo) getJsWorldApi(world *World) map[string]interface{} {
 func (this *StateRepo) getJsWorldSubApi(world *World) map[string]interface{} {
 	return map[string]interface{}{
 		"state": map[string]interface{}{
-			"set": func(field string, value interface{}) {
-				value, ok := plainStateValue(field, value)
-				if !ok {
+			"set": func(field string, value otto.Value) {
+				//value is an otto.Value, not interface{}: otto exports (and recurses
+				//over) an interface{} argument before this runs. convertOttoValue
+				//reads it in one bounded pass that never exports a composite.
+				stored, err := world.convertGuarded(value, jsguard.MaxStateDepth+1, jsguard.MaxStateNodes)
+				if err != nil {
+					util.Logger.Warn("the script tried to store a value that cannot be stored, it is dropped", attributes.ErrorKey, err, "field", field)
 					return
 				}
 				if world.States == nil {
 					world.States = map[string]interface{}{}
 				}
-				world.States[field] = value
+				world.States[field] = stored
 				if world != nil {
 					err := this.persistWorld(*world)
 					if err != nil {
@@ -80,15 +85,19 @@ func (this *StateRepo) getJsRoomApi(world *World, room *Room) map[string]interfa
 func (this *StateRepo) getJsRoomSubApi(world *World, room *Room) map[string]interface{} {
 	return map[string]interface{}{
 		"state": map[string]interface{}{
-			"set": func(field string, value interface{}) {
-				value, ok := plainStateValue(field, value)
-				if !ok {
+			"set": func(field string, value otto.Value) {
+				//value is an otto.Value, not interface{}: otto exports (and recurses
+				//over) an interface{} argument before this runs. convertOttoValue
+				//reads it in one bounded pass that never exports a composite.
+				stored, err := world.convertGuarded(value, jsguard.MaxStateDepth+1, jsguard.MaxStateNodes)
+				if err != nil {
+					util.Logger.Warn("the script tried to store a value that cannot be stored, it is dropped", attributes.ErrorKey, err, "field", field)
 					return
 				}
 				if room.States == nil {
 					room.States = map[string]interface{}{}
 				}
-				room.States[field] = value
+				room.States[field] = stored
 				if world != nil {
 					err := this.persistWorld(*world)
 					if err != nil {
@@ -130,15 +139,19 @@ func (this *StateRepo) getJsDeviceApi(world *World, room *Room, device *Device) 
 func (this *StateRepo) getJsDeviceSubApi(world *World, device *Device) map[string]interface{} {
 	return map[string]interface{}{
 		"state": map[string]interface{}{
-			"set": func(field string, value interface{}) {
-				value, ok := plainStateValue(field, value)
-				if !ok {
+			"set": func(field string, value otto.Value) {
+				//value is an otto.Value, not interface{}: otto exports (and recurses
+				//over) an interface{} argument before this runs. convertOttoValue
+				//reads it in one bounded pass that never exports a composite.
+				stored, err := world.convertGuarded(value, jsguard.MaxStateDepth+1, jsguard.MaxStateNodes)
+				if err != nil {
+					util.Logger.Warn("the script tried to store a value that cannot be stored, it is dropped", attributes.ErrorKey, err, "field", field)
 					return
 				}
 				if device.States == nil {
 					device.States = map[string]interface{}{}
 				}
-				device.States[field] = value
+				device.States[field] = stored
 				if world != nil {
 					err := this.persistWorld(*world)
 					if err != nil {
@@ -166,14 +179,21 @@ func (this *StateRepo) getJsSensorApi(world *World, room *Room, device *Device, 
 		"world":   this.getJsWorldSubApi(world),
 		"room":    this.getJsRoomSubApi(world, room),
 		"device":  this.getJsDeviceSubApi(world, device),
-		"service": this.getJsSensorSubApi(device, service),
+		"service": this.getJsSensorSubApi(world, device, service),
 	}
 }
 
-func (this *StateRepo) getJsSensorSubApi(device *Device, service Service) map[string]interface{} {
+func (this *StateRepo) getJsSensorSubApi(world *World, device *Device, service Service) map[string]interface{} {
 	return map[string]interface{}{
-		"send": func(value interface{}) {
-			this.sendSensorData(device, service, value)
+		"send": func(value otto.Value) {
+			//otto.Value, not interface{}: converted in one bounded pass that never
+			//exports a composite, so a deep value cannot overflow the exporter
+			exported, err := world.convertGuarded(value, jsguard.MaxNativeWalkDepth, jsguard.MaxNativeWalkNodes)
+			if err != nil {
+				util.Logger.Warn("the script tried to send a value that cannot be sent, it is dropped", attributes.ErrorKey, err)
+				return
+			}
+			this.sendSensorData(device, service, exported)
 		},
 		"input": nil,
 	}
@@ -184,15 +204,38 @@ func (this *StateRepo) getJsCommandApi(world *World, room *Room, device *Device,
 		"world":   this.getJsWorldSubApi(world),
 		"room":    this.getJsRoomSubApi(world, room),
 		"device":  this.getJsDeviceSubApi(world, device),
-		"service": this.getJsCommandSubApi(cmdMsg, responder),
+		"service": this.getJsCommandSubApi(world, cmdMsg, responder),
 	}
 }
 
-func (this *StateRepo) getJsCommandSubApi(cmdMsg interface{}, responder func(respMsg interface{})) interface{} {
+func (this *StateRepo) getJsCommandSubApi(world *World, cmdMsg interface{}, responder func(respMsg interface{})) interface{} {
 	return map[string]interface{}{
 		"input": cmdMsg,
-		"send":  responder,
+		//otto.Value, not interface{}: a deep response would otherwise overflow the
+		//exporter before the responder is reached
+		"send": func(value otto.Value) {
+			exported, err := world.convertGuarded(value, jsguard.MaxNativeWalkDepth, jsguard.MaxNativeWalkNodes)
+			if err != nil {
+				util.Logger.Warn("the script tried to respond with a value that cannot be sent, it is dropped", attributes.ErrorKey, err)
+				return
+			}
+			responder(exported)
+		},
 	}
+}
+
+// convertGuarded runs one bounded conversion and refuses a nested one, so a
+// getter that calls a sink while its holder is converted fails instead of
+// stacking a second conversion. The guard is released before the caller persists.
+func (this *World) convertGuarded(value otto.Value, maxDepth int, maxNodes int) (interface{}, error) {
+	if this == nil {
+		return convertOttoValue(value, maxDepth, maxNodes)
+	}
+	if !this.sink.Enter() {
+		return nil, jsguard.ErrSinkReentry
+	}
+	defer this.sink.Leave()
+	return convertOttoValue(value, maxDepth, maxNodes)
 }
 
 // plainStateValue returns a fresh plain-data copy of value, or false for a value

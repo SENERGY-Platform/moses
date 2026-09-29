@@ -24,6 +24,7 @@ import (
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/api"
 	"github.com/SENERGY-Platform/moses/lib/config"
+	"github.com/SENERGY-Platform/moses/lib/crashbrake"
 	"github.com/SENERGY-Platform/moses/lib/devices"
 	"github.com/SENERGY-Platform/moses/lib/repo"
 	"github.com/SENERGY-Platform/moses/lib/runtime"
@@ -171,6 +172,21 @@ func New(config config.Config, ctx context.Context) (err error) {
 		return err
 	}
 
+	//the crash brake reads what a previous run left in flight before either runtime
+	//starts, so a fatal crash is quarantined instead of looping.
+	brake, decisions, brakeErr := crashbrake.Open(config.ScriptCrashDir)
+	if brakeErr != nil && brake == nil {
+		//a hard failure (dir or mmap): disable the brake rather than fail startup
+		util.Logger.Error("unable to open the crash brake, it is disabled for this run", attributes.ErrorKey, brakeErr)
+		decisions = nil
+	} else if brakeErr != nil {
+		//crash capture is off for this run, but the decisions the previous run left
+		//still have to be applied
+		util.Logger.Error("the crash brake opened without crash capture for this run", attributes.ErrorKey, brakeErr)
+	}
+	staterepo.Brake = brake
+	quarantinedWorlds, quarantinedEnvironments := applyQuarantine(ctx, environments, environments.States(), environments.HistoryJobs(), staterepo, brake, decisions)
+
 	//per world cutover: both runtimes publish under the same device and service
 	//ids, so a world that exists as an environment must not start here too
 	staterepo.SkipWorldIds, err = migratedWorldIds(ctx, environments)
@@ -178,13 +194,20 @@ func New(config config.Config, ctx context.Context) (err error) {
 		util.Logger.Error("unable to determine the migrated worlds", attributes.ErrorKey, err)
 		return err
 	}
+	//a quarantined world is not started this run, on top of the migrated ones
+	for id := range quarantinedWorlds {
+		staterepo.SkipWorldIds[id] = true
+	}
 
 	util.Logger.Info("starting state routines", "skipped_worlds", len(staterepo.SkipWorldIds))
 	staterepo.Start()
 	cleanup.add(func() { staterepo.Stop() })
 
 	util.Logger.Info("starting the environment runtime")
-	environmentRuntime := runtime.New(config, environments, environments.States(), environments.Datasets(), environments.HistoryJobs(), connector, logger)
+	environmentRuntime := runtime.New(config, environments, environments.States(), environments.Datasets(), environments.HistoryJobs(), connector, logger, brake)
+	//before Start: even a decision the store failed to persist keeps its
+	//environment from starting into the same crash this boot
+	environmentRuntime.SetQuarantines(quarantinedEnvironments)
 	err = environmentRuntime.Start(ctx)
 	if err != nil {
 		util.Logger.Error("unable to start the environment runtime", attributes.ErrorKey, err)
@@ -234,10 +257,116 @@ func New(config config.Config, ctx context.Context) (err error) {
 		//runtime first, its final flush needs the store closed below
 		environmentRuntime.Stop()
 		staterepo.Stop()
+		//after both runtimes stopped, so nothing is in flight: mark the register
+		//clean, or the next boot would read this deliberate shutdown as a crash
+		if brake != nil {
+			brake.Shutdown()
+			brake.Close()
+		}
 		persistence.Close()
 		environments.Close()
 	}()
 	return nil
+}
+
+// applyQuarantine stores the brake's decisions and fails a quarantined environment's
+// history run before either runtime starts; the returned sets hold every live decision even when the store failed.
+func applyQuarantine(ctx context.Context, environments repo.Environments, states repo.States, historyJobs repo.HistoryJobs, staterepo *state.StateRepo, brake *crashbrake.Brake, decisions []crashbrake.Decision) (map[string]bool, map[string]*repo.Quarantine) {
+	worlds := map[string]bool{}
+	environmentsQuarantined := map[string]*repo.Quarantine{}
+	var retry []crashbrake.Decision
+	for _, decision := range decisions {
+		env, err := environments.Get(ctx, decision.Environment)
+		switch {
+		case err == nil:
+			//a retried decision carries the version it was made against; a different
+			//stored version means the environment was edited since, so the crash it
+			//describes may be fixed and it is dropped rather than re-quarantined
+			if decision.Version != 0 && env.Version != decision.Version {
+				util.Logger.Info("dropping a stale crash-brake decision, the environment was edited since the crash",
+					"environment", decision.Environment, "decided_version", decision.Version, "stored_version", env.Version)
+				continue
+			}
+			//held in memory regardless of the store write, so a failed write still
+			//keeps the environment from starting into the same crash this boot
+			environmentsQuarantined[decision.Environment] = &repo.Quarantine{Reason: decision.Reason, Channel: decision.Channel, AtUnix: time.Now().Unix()}
+			if applyEnvironmentQuarantine(ctx, states, historyJobs, decision) {
+				util.Logger.Error("the crash brake quarantined an environment after a script crash",
+					"environment", decision.Environment, "channel", decision.Channel, "reason", decision.Reason)
+			} else {
+				decision.Version = env.Version
+				retry = append(retry, decision)
+			}
+		case errors.Is(err, repo.ErrNotFound):
+			if _, isWorld := staterepo.Worlds[decision.Environment]; isWorld {
+				worlds[decision.Environment] = true
+				util.Logger.Error("the crash brake quarantined a legacy world after a script crash, it is skipped this run",
+					"world", decision.Environment, "channel", decision.Channel, "reason", decision.Reason)
+			} else {
+				util.Logger.Error("the crash brake recorded a script crash in an environment that no longer exists",
+					"environment", decision.Environment, "channel", decision.Channel, "reason", decision.Reason)
+			}
+		default:
+			//a database error, not "gone": keep the decision so the next boot retries
+			//it rather than starting the environment back into the same crash
+			util.Logger.Error("unable to read an environment to quarantine it, keeping the decision for the next boot",
+				attributes.ErrorKey, err, "environment", decision.Environment)
+			//held back this boot as well: the id may name an environment or a world
+			environmentsQuarantined[decision.Environment] = &repo.Quarantine{Reason: decision.Reason, Channel: decision.Channel, AtUnix: time.Now().Unix()}
+			if _, isWorld := staterepo.Worlds[decision.Environment]; isWorld {
+				worlds[decision.Environment] = true
+			}
+			retry = append(retry, decision)
+		}
+	}
+	if brake != nil {
+		brake.WritePending(retry)
+	}
+	return worlds, environmentsQuarantined
+}
+
+// applyEnvironmentQuarantine stores the quarantine on the environment's state and
+// fails its stored history run, reporting whether both succeeded; a false leaves
+// the decision to be retried on the next boot.
+func applyEnvironmentQuarantine(ctx context.Context, states repo.States, historyJobs repo.HistoryJobs, decision crashbrake.Decision) bool {
+	runtimeState, err := states.Load(ctx, decision.Environment)
+	if err != nil {
+		util.Logger.Error("unable to read the state to quarantine an environment", attributes.ErrorKey, err, "environment", decision.Environment)
+		return false
+	}
+	runtimeState.Quarantine = &repo.Quarantine{Reason: decision.Reason, Channel: decision.Channel, AtUnix: time.Now().Unix()}
+	if err := states.Save(ctx, runtimeState); err != nil {
+		util.Logger.Error("unable to store the quarantine of an environment", attributes.ErrorKey, err, "environment", decision.Environment)
+		return false
+	}
+	return failHistoryRun(ctx, historyJobs, decision)
+}
+
+// failHistoryRun marks a quarantined environment's stored history run failed, so
+// a resume cannot restart the crashing script and its status no longer reads
+// running. No run, or one already finished, is nothing to do.
+func failHistoryRun(ctx context.Context, historyJobs repo.HistoryJobs, decision crashbrake.Decision) bool {
+	record, err := historyJobs.Load(ctx, decision.Environment)
+	if errors.Is(err, repo.ErrNotFound) {
+		return true
+	}
+	if err != nil {
+		util.Logger.Error("unable to read the history run to fail it for a quarantine", attributes.ErrorKey, err, "environment", decision.Environment)
+		return false
+	}
+	if record.State != "running" {
+		return true
+	}
+	finished := time.Now()
+	record.State = "failed"
+	record.Error = "the environment was quarantined by the crash brake: " + decision.Reason
+	record.FinishedAt = &finished
+	record.Checkpoint = nil
+	if err := historyJobs.Save(ctx, record); err != nil {
+		util.Logger.Error("unable to fail the history run of a quarantined environment", attributes.ErrorKey, err, "environment", decision.Environment)
+		return false
+	}
+	return true
 }
 
 // startupCleanup undoes the steps of a failed startup in reverse order, so the
@@ -316,6 +445,10 @@ func (this *environmentNotifier) HistoryStatusOf(id string) (runtime.HistoryStat
 
 func (this *environmentNotifier) CancelHistory(id string) (runtime.HistoryStatus, error) {
 	return this.runtime.CancelHistory(id)
+}
+
+func (this *environmentNotifier) QuarantineOf(id string) *repo.Quarantine {
+	return this.runtime.QuarantineOf(id)
 }
 
 // warn reports the two double runs the per world cutover cannot prevent: an

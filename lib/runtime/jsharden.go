@@ -38,6 +38,7 @@ const hardeningSource = `(function (global, guardJSON, guardRegExp) {
 	var defineProperty = Object.defineProperty, describe = Object.getOwnPropertyDescriptor;
 	var prototypeOf = Object.getPrototypeOf, apply = Reflect.apply, construct = Reflect.construct;
 	var TypeErrorType = TypeError, RangeErrorType = RangeError, matchSymbol = Symbol.match;
+	var isArrayFn = Array.isArray, keysOf = Object.keys;
 
 	function replace(target, key, value) {
 		var d = describe(target, key);
@@ -135,6 +136,187 @@ const hardeningSource = `(function (global, guardJSON, guardRegExp) {
 			return apply(original, this, [r]);
 		}));
 	});
+
+	// The native join family and JSON.stringify recurse over a nested value on the
+	// Go stack; these recurse through JavaScript calls, so the call limit ends a
+	// too-deep value safely. A parity test pins them to the natives.
+	var arrayProto = Array.prototype, objectToString = Object.prototype.toString, nativeJoin = arrayProto.join;
+	//valueOf throws unless the receiver has the matching internal slot, so unlike
+	//Object.prototype.toString a spoofed Symbol.toStringTag cannot fool it
+	var numberValueOf = Number.prototype.valueOf, stringValueOf = String.prototype.valueOf,
+		booleanValueOf = Boolean.prototype.valueOf, bigintValueOf = typeof BigInt !== 'undefined' ? BigInt.prototype.valueOf : null;
+	function toLength(value) {
+		var n = Number(value);
+		if (isNaN(n) || n <= 0) return 0;
+		if (n > 9007199254740991) return 9007199254740991;
+		return Math.floor(n);
+	}
+	//ToString: a nested array reaches join again through a JavaScript call, and a
+	//Symbol throws
+	function toStr(x) {
+		if (typeof x === 'symbol') throw new TypeErrorType('Cannot convert a Symbol value to a string');
+		return String(x);
+	}
+	function requireCoercible(receiver, method) {
+		if (receiver === undefined || receiver === null) throw new TypeErrorType('Array.prototype.' + method + ' called on null or undefined');
+	}
+
+	replace(arrayProto, 'join', named('join', 1, function (separator) {
+		requireCoercible(this, 'join');
+		var o = Object(this), len = toLength(o.length);
+		var sep = separator === undefined ? ',' : toStr(separator);
+		//pieces are collected and joined once with the native join; a flat array of
+		//strings cannot recurse, so the whole join is linear rather than quadratic.
+		var pieces = [];
+		for (var k = 0; k < len; k++) {
+			var element = o[k];
+			pieces.push(element === undefined || element === null ? '' : toStr(element));
+		}
+		return apply(nativeJoin, pieces, [sep]);
+	}));
+	var nativeArrayToString = arrayProto.toString;
+	replace(arrayProto, 'toString', named('toString', 0, function () {
+		requireCoercible(this, 'toString');
+		var o = Object(this), join = o.join;
+		if (typeof join !== 'function') join = objectToString;
+		return apply(join, o, []);
+	}));
+	//%TypedArray%.prototype.toString is the same native object; a test walks every
+	//reachable property for any other alias of a replaced native
+	var typedArrayProto = prototypeOf(Int8Array.prototype);
+	if (describe(typedArrayProto, 'toString').value === nativeArrayToString) replace(typedArrayProto, 'toString', arrayProto.toString);
+	replace(arrayProto, 'toLocaleString', named('toLocaleString', 0, function () {
+		requireCoercible(this, 'toLocaleString');
+		var o = Object(this), len = toLength(o.length), pieces = [];
+		for (var k = 0; k < len; k++) {
+			var element = o[k];
+			pieces.push(element === undefined || element === null ? '' : toStr(element.toLocaleString()));
+		}
+		return apply(nativeJoin, pieces, [',']);
+	}));
+
+	function flattenInto(target, source, depth) {
+		var len = toLength(source.length);
+		for (var k = 0; k < len; k++) {
+			if (k in source) {
+				var element = source[k];
+				if (depth > 0 && isArrayFn(element)) flattenInto(target, element, depth - 1);
+				else target.push(element);
+			}
+		}
+		return target;
+	}
+	replace(arrayProto, 'flat', named('flat', 0, function (depth) {
+		requireCoercible(this, 'flat');
+		var d = depth === undefined ? 1 : Number(depth);
+		d = isNaN(d) ? 0 : Math.floor(d);
+		return flattenInto([], Object(this), d);
+	}));
+	replace(arrayProto, 'flatMap', named('flatMap', 1, function (callback, thisArg) {
+		requireCoercible(this, 'flatMap');
+		var o = Object(this), len = toLength(o.length);
+		if (typeof callback !== 'function') throw new TypeErrorType('flatMap callback is not a function');
+		var target = [];
+		for (var k = 0; k < len; k++) {
+			if (k in o) {
+				var mapped = apply(callback, thisArg, [o[k], k, o]);
+				if (isArrayFn(mapped)) {
+					var mlen = toLength(mapped.length);
+					for (var j = 0; j < mlen; j++) if (j in mapped) target.push(mapped[j]);
+				} else target.push(mapped);
+			}
+		}
+		return target;
+	}));
+
+	var nativeStringify = JSON.stringify;
+	//the unwrapped primitive, or null without the slot; boxedBigInt reports a
+	//BigInt object
+	function boxedNumber(v) { try { return { n: numberValueOf.call(v) }; } catch (e) { return null; } }
+	function boxedString(v) { try { return { s: stringValueOf.call(v) }; } catch (e) { return null; } }
+	function boxedBoolean(v) { try { return { b: booleanValueOf.call(v) }; } catch (e) { return null; } }
+	function boxedBigInt(v) { if (bigintValueOf === null) return false; try { bigintValueOf.call(v); return true; } catch (e) { return false; } }
+	replace(JSON, 'stringify', named('stringify', 3, function (value, replacer, space) {
+		var replacerFn = (typeof replacer === 'function') ? replacer : undefined;
+		var propertyList;
+		if (replacerFn === undefined && isArrayFn(replacer)) {
+			propertyList = [];
+			var chosen = Object.create(null), rlen = toLength(replacer.length);
+			for (var i = 0; i < rlen; i++) {
+				var rv = replacer[i], item;
+				if (typeof rv === 'string') item = rv;
+				else if (typeof rv === 'number') item = String(rv);
+				else if (rv !== null && typeof rv === 'object') {
+					var bn = boxedNumber(rv), bs = boxedString(rv);
+					if (bs) item = bs.s; else if (bn) item = String(bn.n);
+				}
+				if (item !== undefined && !chosen[item]) { chosen[item] = true; propertyList.push(item); }
+			}
+		}
+		var gap = '', sp = space;
+		if (sp !== null && typeof sp === 'object') {
+			var bn = boxedNumber(sp), bs = boxedString(sp);
+			if (bn) sp = bn.n; else if (bs) sp = bs.s;
+		}
+		if (typeof sp === 'number') { var n = Math.min(10, Math.floor(sp)); if (n > 0) gap = ' '.repeat(n); }
+		else if (typeof sp === 'string') gap = sp.length > 10 ? sp.substring(0, 10) : sp;
+
+		var stack = [], indent = '';
+		function str(key, holder) {
+			var v = holder[key];
+			if (v !== null && (typeof v === 'object' || typeof v === 'bigint') && typeof v.toJSON === 'function') v = v.toJSON(key);
+			if (replacerFn !== undefined) v = apply(replacerFn, holder, [key, v]);
+			if (v === null) return 'null';
+			if (typeof v === 'object') {
+				var b;
+				if ((b = boxedNumber(v))) { return isFinite(b.n) ? nativeStringify(b.n) : 'null'; }
+				if ((b = boxedString(v))) return nativeStringify(b.s);
+				if ((b = boxedBoolean(v))) return b.b ? 'true' : 'false';
+				if (boxedBigInt(v)) throw new TypeErrorType('Do not know how to serialize a BigInt');
+				for (var s = 0; s < stack.length; s++) if (stack[s] === v) throw new TypeErrorType('Converting circular structure to JSON');
+				stack.push(v);
+				var out;
+				if (isArrayFn(v)) out = ja(v);
+				else if (typeof v === 'function') out = undefined;
+				else out = jo(v);
+				stack.pop();
+				return out;
+			}
+			if (typeof v === 'boolean') return v ? 'true' : 'false';
+			if (typeof v === 'string') return nativeStringify(v);
+			if (typeof v === 'number') return isFinite(v) ? nativeStringify(v) : 'null';
+			if (typeof v === 'bigint') throw new TypeErrorType('Do not know how to serialize a BigInt');
+			return undefined;
+		}
+		//parts are joined once with the native join, so building each container is
+		//linear in its member strings rather than quadratic.
+		function ja(array) {
+			var len = toLength(array.length);
+			if (len === 0) return '[]';
+			var stepback = indent; indent += gap;
+			var parts = [];
+			for (var i = 0; i < len; i++) { var s = str(String(i), array); parts.push(s === undefined ? 'null' : s); }
+			var out = gap === '' ? '[' + apply(nativeJoin, parts, [',']) + ']' : '[\n' + indent + apply(nativeJoin, parts, [',\n' + indent]) + '\n' + stepback + ']';
+			indent = stepback;
+			return out;
+		}
+		function jo(object) {
+			var stepback = indent; indent += gap;
+			var keys = propertyList !== undefined ? propertyList : keysOf(object), parts = [];
+			for (var i = 0; i < keys.length; i++) {
+				var s = str(keys[i], object);
+				if (s !== undefined) parts.push(nativeStringify(keys[i]) + (gap === '' ? ':' : ': ') + s);
+			}
+			var out;
+			if (parts.length === 0) out = '{}';
+			else out = gap === '' ? '{' + apply(nativeJoin, parts, [',']) + '}' : '{\n' + indent + apply(nativeJoin, parts, [',\n' + indent]) + '\n' + stepback + '}';
+			indent = stepback;
+			return out;
+		}
+		var root = {};
+		root[''] = value;
+		return str('', root);
+	}));
 })`
 
 var hardeningProgram = mustCompileHardening()

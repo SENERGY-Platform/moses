@@ -109,6 +109,19 @@ type RuntimeNotifier interface {
 	// CancelHistory aborts a run and returns where it stood. It reports
 	// runtime.ErrNoHistory when nothing is known.
 	CancelHistory(id string) (moses_runtime.HistoryStatus, error)
+
+	// QuarantineOf returns why the crash brake held an environment back, or nil
+	// when it runs normally, so the api can report it read-only.
+	QuarantineOf(id string) *repo.Quarantine
+}
+
+// quarantineOf reports an environment's quarantine, tolerating a nil notifier
+// (the store-only api of a test).
+func quarantineOf(notifier RuntimeNotifier, id string) *repo.Quarantine {
+	if notifier == nil {
+		return nil
+	}
+	return notifier.QuarantineOf(id)
 }
 
 // A nil notifier means the api runs as a store only, valid in a test, so this

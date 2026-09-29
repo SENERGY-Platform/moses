@@ -32,6 +32,7 @@ import (
 	"github.com/SENERGY-Platform/moses/docs"
 	"github.com/SENERGY-Platform/moses/lib"
 	"github.com/SENERGY-Platform/moses/lib/config"
+	"github.com/SENERGY-Platform/moses/lib/jsguard"
 	"github.com/SENERGY-Platform/moses/lib/util"
 
 	//the container image ships no tzdata, and the dataset upload interprets
@@ -41,6 +42,7 @@ import (
 )
 
 func main() {
+	jsguard.LimitStack()
 	config, err := config.LoadConfig()
 	if err != nil {
 		// the logger is not configured yet, so this one stays on the standard library
