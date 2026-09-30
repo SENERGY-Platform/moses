@@ -24,12 +24,12 @@ import (
 	"os"
 	"sort"
 	"strconv"
-	"time"
 
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/config"
 	"github.com/SENERGY-Platform/moses/lib/domain"
 	"github.com/SENERGY-Platform/moses/lib/jsguard"
+	"github.com/SENERGY-Platform/moses/lib/platformhttp"
 	"github.com/SENERGY-Platform/moses/lib/repo"
 	moses_runtime "github.com/SENERGY-Platform/moses/lib/runtime"
 	"github.com/SENERGY-Platform/moses/lib/util"
@@ -311,10 +311,11 @@ func storeEnvironment(ctx context.Context, environments repo.Environments, env d
 	return environments.Put(ctx, env)
 }
 
-// mutationTimeout bounds a mutation that no longer ends with its request. It is
-// well above the api's write timeout of two minutes, so a slow platform still
-// gets to finish, while a call that hangs cannot hold the handler forever.
-const mutationTimeout = 5 * time.Minute
+// mutationTimeout bounds a mutation that no longer ends with its request, and with
+// it every device-manager write of that mutation; only its reads are held to the
+// shorter read timeout. It is well above the api's write timeout of two minutes,
+// so a slow platform still gets to finish, while a call that hangs cannot hold the handler forever.
+const mutationTimeout = platformhttp.WriteTimeout
 
 // mutationContext keeps the values of the request and drops its cancellation, so
 // a client or gateway that closes the connection cannot stop a handler between

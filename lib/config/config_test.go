@@ -337,6 +337,9 @@ func TestLoadConfigLocationLoadsTheShippedConfigJson(t *testing.T) {
 	if config.PublishWorkers != 16 {
 		t.Errorf("PublishWorkers: expected the shipped 16, got %v", config.PublishWorkers)
 	}
+	if config.PlatformHttpTimeout != 10*time.Second {
+		t.Errorf("PlatformHttpTimeout: expected 10s from platform_http_timeout=10000000000, got %v", config.PlatformHttpTimeout)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -416,6 +419,7 @@ func TestConfigFieldsMapToTheExpectedEnvironmentVariableNames(t *testing.T) {
 		"MongoUser":                 "MONGO_USER",
 		"NotificationUrl":           "NOTIFICATION_URL",
 		"PermissionsV2Url":          "PERMISSIONS_V2_URL",
+		"PlatformHttpTimeout":       "PLATFORM_HTTP_TIMEOUT",
 		"PostgresDb":                "POSTGRES_DB",
 		"PostgresHost":              "POSTGRES_HOST",
 		"PostgresPort":              "POSTGRES_PORT",
@@ -910,6 +914,27 @@ func TestJsTimeoutTakesADurationStringFromTheEnvironment(t *testing.T) {
 	t.Setenv("JS_TIMEOUT", "5000000000")
 	if _, err := LoadConfigLocation(location); err == nil {
 		t.Fatal("JS_TIMEOUT=5000000000: expected an error for the missing unit, got nil")
+	}
+}
+
+// PLATFORM_HTTP_TIMEOUT is a duration field like JS_TIMEOUT: a duration string
+// from the environment, nanoseconds in the json file.
+func TestPlatformHttpTimeoutTakesADurationStringFromTheEnvironment(t *testing.T) {
+	neutralizeConfigEnv(t)
+	location := writeConfigFile(t, `{"platform_http_timeout": 10000000000}`)
+
+	t.Setenv("PLATFORM_HTTP_TIMEOUT", "3s")
+	config, err := LoadConfigLocation(location)
+	if err != nil {
+		t.Fatalf("PLATFORM_HTTP_TIMEOUT=3s: expected no error, got %v", err)
+	}
+	if config.PlatformHttpTimeout != 3*time.Second {
+		t.Errorf("PLATFORM_HTTP_TIMEOUT=3s: expected 3s, got %v", config.PlatformHttpTimeout)
+	}
+
+	t.Setenv("PLATFORM_HTTP_TIMEOUT", "3000000000")
+	if _, err := LoadConfigLocation(location); err == nil {
+		t.Fatal("PLATFORM_HTTP_TIMEOUT=3000000000: expected an error for the missing unit, got nil")
 	}
 }
 

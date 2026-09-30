@@ -38,6 +38,7 @@ import (
 	deviceRepoModel "github.com/SENERGY-Platform/device-repository/lib/model"
 	"github.com/SENERGY-Platform/models/go/models"
 	"github.com/SENERGY-Platform/moses/lib/domain"
+	"github.com/SENERGY-Platform/moses/lib/platformhttp"
 	"github.com/google/uuid"
 )
 
@@ -86,6 +87,9 @@ type Catalog struct {
 	repoUrl    string
 	managerUrl string
 	protocol   string
+	// clients carry every request made here directly: the reads with the read
+	// timeout, the writes bounded by their context.
+	clients platformhttp.Clients
 	// protocolId is resolved once and cached: it never changes while the
 	// service runs, and every device type query needs it. Guarded, because
 	// concurrent requests resolve it.
@@ -93,12 +97,14 @@ type Catalog struct {
 	protocolId  string
 }
 
-func NewCatalog(deviceRepoUrl string, deviceManagerUrl string, protocol string) *Catalog {
+// NewCatalog takes the shared platform clients; an unset one is replaced by its default.
+func NewCatalog(deviceRepoUrl string, deviceManagerUrl string, protocol string, clients platformhttp.Clients) *Catalog {
 	return &Catalog{
 		repo:       deviceRepo.NewClient(deviceRepoUrl, nil),
 		repoUrl:    deviceRepoUrl,
 		managerUrl: deviceManagerUrl,
 		protocol:   protocol,
+		clients:    clients,
 	}
 }
 
@@ -329,9 +335,9 @@ func (this *Catalog) RenameDevice(ctx context.Context, token string, id string, 
 	return response.Body.Close()
 }
 
-// send talks to the device-manager with the caller's token and turns anything
-// but a 2xx into an error carrying the answer, bounded: the body is not ours
-// and an error page can be large.
+// send makes a device-manager write with the caller's token, bounded by ctx and
+// not by the read timeout, and turns anything but a 2xx into an error carrying
+// the answer, bounded: the body is not ours and an error page can be large.
 func (this *Catalog) send(ctx context.Context, token string, method string, url string, body []byte) (*http.Response, error) {
 	var reader io.Reader
 	if body != nil {
@@ -345,7 +351,7 @@ func (this *Catalog) send(ctx context.Context, token string, method string, url 
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	response, err := http.DefaultClient.Do(request)
+	response, err := this.clients.Writes().Do(request)
 	if err != nil {
 		return nil, err
 	}

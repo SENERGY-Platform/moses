@@ -17,15 +17,21 @@
 package state
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/SENERGY-Platform/moses/lib/platformhttp"
 	sc_jwt "github.com/SENERGY-Platform/service-commons/pkg/jwt"
 )
+
+// testClient is bounded, so a test against a server that stops answering fails instead of hanging.
+var testClient = platformhttp.New(5 * time.Second)
 
 // These tests are the ones that used to live on lib/jwt's JwtImpersonate. The
 // helpers replaced it, the behaviour did not change, so the assertions moved
@@ -43,7 +49,7 @@ func TestTheCallersTokenIsForwardedVerbatim(t *testing.T) {
 	defer server.Close()
 
 	result := map[string]interface{}{}
-	if err := deviceManagerGetJson("Bearer head.payload.sig", server.URL, &result); err != nil {
+	if err := deviceManagerGetJson(context.Background(), testClient, "Bearer head.payload.sig", server.URL, &result); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 	if forwarded := <-seen; forwarded != "Bearer head.payload.sig" {
@@ -61,7 +67,7 @@ func TestGetJsonDecodesTheResponseBody(t *testing.T) {
 		Id    string `json:"id"`
 		Count int    `json:"count"`
 	}{}
-	if err := deviceManagerGetJson("Bearer t", server.URL, &result); err != nil {
+	if err := deviceManagerGetJson(context.Background(), testClient, "Bearer t", server.URL, &result); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 	if result.Id != "a" || result.Count != 2 {
@@ -76,7 +82,7 @@ func TestGetJsonReturnsAnErrorForANonJsonBody(t *testing.T) {
 	defer server.Close()
 
 	result := map[string]interface{}{}
-	if err := deviceManagerGetJson("Bearer t", server.URL, &result); err == nil {
+	if err := deviceManagerGetJson(context.Background(), testClient, "Bearer t", server.URL, &result); err == nil {
 		t.Error("expected a decoding error, got nil")
 	}
 }
@@ -96,7 +102,7 @@ func TestPostJsonSendsTheBodyAsJsonAndDecodesTheResponse(t *testing.T) {
 	defer server.Close()
 
 	result := payload{}
-	if err := deviceManagerPostJson("Bearer t", server.URL, payload{Name: "request"}, &result); err != nil {
+	if err := deviceManagerPostJson(context.Background(), testClient, "Bearer t", server.URL, payload{Name: "request"}, &result); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 	if body := <-seenBody; body != `{"name":"request"}` {
@@ -116,7 +122,7 @@ func TestPostJsonSkipsDecodingWhenNoResultIsWanted(t *testing.T) {
 	}))
 	defer server.Close()
 
-	if err := deviceManagerPostJson("Bearer t", server.URL, map[string]string{}, nil); err != nil {
+	if err := deviceManagerPostJson(context.Background(), testClient, "Bearer t", server.URL, map[string]string{}, nil); err != nil {
 		t.Fatalf("expected a nil result to skip decoding, got %v", err)
 	}
 }
@@ -129,7 +135,7 @@ func TestPostJsonReturnsTheEncodingErrorBeforeSendingAnything(t *testing.T) {
 	defer server.Close()
 
 	// channels cannot be json encoded
-	if err := deviceManagerPostJson("Bearer t", server.URL, make(chan int), nil); err == nil {
+	if err := deviceManagerPostJson(context.Background(), testClient, "Bearer t", server.URL, make(chan int), nil); err == nil {
 		t.Fatal("expected a json encoding error, got nil")
 	}
 	select {
@@ -148,7 +154,7 @@ func TestDeleteSucceedsOnAPlain200(t *testing.T) {
 	}))
 	defer server.Close()
 
-	if err := deviceManagerDelete("Bearer t", server.URL); err != nil {
+	if err := deviceManagerDelete(context.Background(), testClient, "Bearer t", server.URL); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 }
@@ -161,9 +167,13 @@ func TestA401BecomesAccessDenied(t *testing.T) {
 	defer server.Close()
 
 	calls := map[string]func(string) error{
-		"get":    func(url string) error { return deviceManagerGetJson("Bearer t", url, &map[string]interface{}{}) },
-		"post":   func(url string) error { return deviceManagerPostJson("Bearer t", url, map[string]string{}, nil) },
-		"delete": func(url string) error { return deviceManagerDelete("Bearer t", url) },
+		"get": func(url string) error {
+			return deviceManagerGetJson(context.Background(), testClient, "Bearer t", url, &map[string]interface{}{})
+		},
+		"post": func(url string) error {
+			return deviceManagerPostJson(context.Background(), testClient, "Bearer t", url, map[string]string{}, nil)
+		},
+		"delete": func(url string) error { return deviceManagerDelete(context.Background(), testClient, "Bearer t", url) },
 	}
 	for name, call := range calls {
 		err := call(server.URL)
@@ -188,21 +198,21 @@ func TestEverySuccessStatusOtherThan200IsTreatedAsAnError(t *testing.T) {
 			writer.WriteHeader(status)
 		}))
 
-		err := deviceManagerGetJson("Bearer t", server.URL, &map[string]interface{}{})
+		err := deviceManagerGetJson(context.Background(), testClient, "Bearer t", server.URL, &map[string]interface{}{})
 		if err == nil {
 			t.Errorf("status %d: expected an error, got nil", status)
 		} else if err.Error() != "unexpected statuscode in response for GET "+server.URL {
 			t.Errorf("status %d: unexpected message %q", status, err.Error())
 		}
 
-		err = deviceManagerDelete("Bearer t", server.URL)
+		err = deviceManagerDelete(context.Background(), testClient, "Bearer t", server.URL)
 		if err == nil {
 			t.Errorf("status %d: expected an error from delete, got nil", status)
 		} else if err.Error() != "unexpected statuscode in response for DELETE "+server.URL {
 			t.Errorf("status %d: unexpected message %q", status, err.Error())
 		}
 
-		err = deviceManagerPostJson("Bearer t", server.URL, map[string]string{}, nil)
+		err = deviceManagerPostJson(context.Background(), testClient, "Bearer t", server.URL, map[string]string{}, nil)
 		if err == nil {
 			t.Errorf("status %d: expected an error from post, got nil", status)
 		} else if err.Error() != "unexpected statuscode in response for POST "+server.URL {
@@ -220,13 +230,13 @@ func TestAnUnusableUrlIsAnErrorAndNeverAPanic(t *testing.T) {
 		}
 	}()
 
-	if err := deviceManagerGetJson("Bearer t", "http://%zz", &struct{}{}); err == nil {
+	if err := deviceManagerGetJson(context.Background(), testClient, "Bearer t", "http://%zz", &struct{}{}); err == nil {
 		t.Error("get: expected an error for an unparsable url, got nil")
 	}
-	if err := deviceManagerPostJson("Bearer t", "http://%zz", map[string]string{}, nil); err == nil {
+	if err := deviceManagerPostJson(context.Background(), testClient, "Bearer t", "http://%zz", map[string]string{}, nil); err == nil {
 		t.Error("post: expected an error for an unparsable url, got nil")
 	}
-	if err := deviceManagerDelete("Bearer t", "http://%zz"); err == nil {
+	if err := deviceManagerDelete(context.Background(), testClient, "Bearer t", "http://%zz"); err == nil {
 		t.Error("delete: expected an error for an unparsable url, got nil")
 	}
 }
@@ -244,7 +254,7 @@ func TestTheDeviceTypeIdIsEscapedIntoThePath(t *testing.T) {
 
 	repo := &StateRepo{}
 	repo.Config.DeviceManagerUrl = server.URL
-	if _, err := repo.GetIotDeviceType(sc_jwt.Token{Token: "Bearer t", Sub: "user"}, "urn:infai:ses:device-type:a/../b"); err != nil {
+	if _, err := repo.GetIotDeviceType(context.Background(), sc_jwt.Token{Token: "Bearer t", Sub: "user"}, "urn:infai:ses:device-type:a/../b"); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 	path := <-seen

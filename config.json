@@ -34,6 +34,7 @@
     "permissions_v2_url": "http://permv2.permissions:8080",
     "device_manager_url":"http://device-manager.device-management:8080",
     "device_repo_url":"http://device-repository.device-management:8080",
+    "platform_http_timeout":10000000000,
     "auth_client_id":"",
     "auth_client_secret":"",
     "auth_expiration_time_buffer":1,

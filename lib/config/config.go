@@ -104,6 +104,11 @@ type Config struct {
 	DeviceManagerUrl string `json:"device_manager_url" env_var:"DEVICE_MANAGER_URL"`
 	DeviceRepoUrl    string `json:"device_repo_url" env_var:"DEVICE_REPO_URL"`
 
+	// PlatformHttpTimeout bounds one call moses makes to the device-manager or the
+	// device-repository with the caller's token, body included. Zero or less is the
+	// default of 10s. json: nanoseconds, env: duration string ("10s").
+	PlatformHttpTimeout time.Duration `json:"platform_http_timeout" env_var:"PLATFORM_HTTP_TIMEOUT"`
+
 	//AuthClientId is the keycloak client id. An OAuth2 client id is a public
 	//identifier, not a credential (RFC 6749 section 2.2), so it stays a plain
 	//string and remains readable in diagnostics. Only the secret is masked.

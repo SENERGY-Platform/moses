@@ -31,6 +31,7 @@ import (
 	"github.com/SENERGY-Platform/models/go/models"
 	"github.com/SENERGY-Platform/moses/lib/devices"
 	"github.com/SENERGY-Platform/moses/lib/domain"
+	"github.com/SENERGY-Platform/moses/lib/platformhttp"
 	"github.com/gin-gonic/gin"
 )
 
@@ -154,7 +155,7 @@ func newPlatformWitnesses(t *testing.T) platformWitnesses {
 	}
 	w.server = httptest.NewServer(w.platform)
 	t.Cleanup(w.server.Close)
-	catalog := devices.NewCatalog(w.server.URL, w.server.URL, "moses")
+	catalog := devices.NewCatalog(w.server.URL, w.server.URL, "moses", platformhttp.Clients{})
 	w.router = testRouterWithAll(w.store, w.shares, catalog, w.mirror, w.notifier, newFakePermissions())
 	return w
 }

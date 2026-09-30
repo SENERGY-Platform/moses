@@ -17,6 +17,7 @@
 package state
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
@@ -33,7 +34,7 @@ func (this *StateRepo) ReadWorlds(token sc_jwt.Token) (worlds []WorldMsg, err er
 	defer this.mux.RUnlock()
 	for _, world := range this.Worlds {
 		if world.Owner == token.GetUserId() {
-			msg, err := world.ToMsg()
+			msg, err := snapshotLocked(world)
 			if err != nil {
 				return worlds, err
 			}
@@ -349,11 +350,11 @@ func (this *StateRepo) UpdateDevice(token sc_jwt.Token, msg UpdateDeviceRequest)
 	return device, true, true, err
 }
 
-func (this *StateRepo) DeleteDevice(token sc_jwt.Token, id string) (device DeviceResponse, access bool, exists bool, err error) {
+func (this *StateRepo) DeleteDevice(ctx context.Context, token sc_jwt.Token, id string) (device DeviceResponse, access bool, exists bool, err error) {
 	device, access, exists, err = this.removeDevice(token, id)
 	//outside the lock, so the device-manager call holds up no api change or command; only a removed device gets here without error
 	if err == nil && access && exists {
-		if externalErr := this.DeleteExternalDevice(token, device.Device.ExternalRef); externalErr != nil {
+		if externalErr := this.DeleteExternalDevice(ctx, token, device.Device.ExternalRef); externalErr != nil {
 			util.Logger.Warn("unable to delete the platform device of a deleted device", attributes.ErrorKey, externalErr, "external_ref", device.Device.ExternalRef)
 		}
 	}
@@ -527,16 +528,16 @@ func (this *StateRepo) DeleteService(token sc_jwt.Token, id string) (service Ser
 	return service, true, true, err
 }
 
-func (this *StateRepo) CreateDeviceByType(token sc_jwt.Token, msg CreateDeviceByTypeRequest) (result DeviceResponse, access bool, worldAndExists bool, err error) {
+func (this *StateRepo) CreateDeviceByType(ctx context.Context, token sc_jwt.Token, msg CreateDeviceByTypeRequest) (result DeviceResponse, access bool, worldAndExists bool, err error) {
 	room, access, worldAndExists, err := this.ReadRoom(token, msg.Room)
 	if err != nil || !access || !worldAndExists {
 		return result, access, worldAndExists, err
 	}
-	services, err := this.prepareServices(token, msg.DeviceTypeId)
+	services, err := this.prepareServices(ctx, token, msg.DeviceTypeId)
 	if err != nil {
 		return result, access, worldAndExists, err
 	}
-	externalDevice, err := this.GenerateExternalDevice(token, msg)
+	externalDevice, err := this.GenerateExternalDevice(ctx, token, msg)
 	if err != nil {
 		return result, access, worldAndExists, err
 	}
@@ -556,9 +557,9 @@ func (this *StateRepo) CreateDeviceByType(token sc_jwt.Token, msg CreateDeviceBy
 	return result, true, true, err
 }
 
-func (this *StateRepo) prepareServices(token sc_jwt.Token, deviceTypeId string) (result map[string]Service, err error) {
+func (this *StateRepo) prepareServices(ctx context.Context, token sc_jwt.Token, deviceTypeId string) (result map[string]Service, err error) {
 	result = map[string]Service{}
-	devicetype, err := this.GetIotDeviceType(token, deviceTypeId)
+	devicetype, err := this.GetIotDeviceType(ctx, token, deviceTypeId)
 	if err != nil {
 		return result, err
 	}

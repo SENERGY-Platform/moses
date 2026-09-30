@@ -30,6 +30,7 @@ import (
 
 	"github.com/SENERGY-Platform/models/go/models"
 	"github.com/SENERGY-Platform/moses/lib/domain"
+	"github.com/SENERGY-Platform/moses/lib/platformhttp"
 )
 
 // repositoryDouble answers the three list reads of the check the way the
@@ -139,7 +140,7 @@ func checkingCatalog(t *testing.T, repository http.Handler) *Catalog {
 	t.Helper()
 	server := httptest.NewServer(repository)
 	t.Cleanup(server.Close)
-	return NewCatalog(server.URL, server.URL, "moses")
+	return NewCatalog(server.URL, server.URL, "moses", platformhttp.Clients{})
 }
 
 func problemPaths(problems []domain.Problem) []string {

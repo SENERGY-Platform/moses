@@ -17,9 +17,13 @@
 package state
 
 import (
+	"context"
+	"net/http"
+
 	deviceRepo "github.com/SENERGY-Platform/device-repository/lib/client"
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/models/go/models"
+	"github.com/SENERGY-Platform/moses/lib/platformhttp"
 	"github.com/SENERGY-Platform/moses/lib/util"
 	permClient "github.com/SENERGY-Platform/permissions-v2/pkg/client"
 	"github.com/SENERGY-Platform/platform-connector-lib/model"
@@ -28,16 +32,35 @@ import (
 	"net/url"
 )
 
-func (this *StateRepo) GetIotDeviceType(token sc_jwt.Token, id string) (dt model.DeviceType, err error) {
-	err = deviceManagerGetJson(token.Jwt(), this.Config.DeviceManagerUrl+"/device-types/"+url.PathEscape(id), &dt)
+// readClient is the shared read client lib.New sets, or one bounded by the configured timeout.
+func (this *StateRepo) readClient() *http.Client {
+	if this.PlatformClients.Read != nil {
+		return this.PlatformClients.Read
+	}
+	return platformhttp.New(this.Config.PlatformHttpTimeout)
+}
+
+// writeContext drops the cancellation of ctx and bounds the write instead: a write
+// the device-manager may already have applied must end with an answer, or the
+// world and the platform disagree about the device.
+func (this *StateRepo) writeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	timeout := this.externalWriteTimeout
+	if timeout <= 0 {
+		timeout = platformhttp.WriteTimeout
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), timeout)
+}
+
+func (this *StateRepo) GetIotDeviceType(ctx context.Context, token sc_jwt.Token, id string) (dt model.DeviceType, err error) {
+	err = deviceManagerGetJson(ctx, this.readClient(), token.Jwt(), this.Config.DeviceManagerUrl+"/device-types/"+url.PathEscape(id), &dt)
 	if err != nil {
 		util.Logger.Error("unable to get device type", attributes.ErrorKey, err, "id", id)
 	}
 	return
 }
 
-func (this *StateRepo) GetIotDeviceTypes(token sc_jwt.Token) (result []model.DeviceType, err error) {
-	err = deviceManagerGetJson(token.Jwt(), this.Config.DeviceManagerUrl+"/device-types", &result)
+func (this *StateRepo) GetIotDeviceTypes(ctx context.Context, token sc_jwt.Token) (result []model.DeviceType, err error) {
+	err = deviceManagerGetJson(ctx, this.readClient(), token.Jwt(), this.Config.DeviceManagerUrl+"/device-types", &result)
 	if err != nil {
 		util.Logger.Error("unable to list device types", attributes.ErrorKey, err)
 	}
@@ -90,18 +113,24 @@ func (this *StateRepo) GetMosesDeviceTypesIds(token sc_jwt.Token) (result []stri
 	return
 }
 
-func (this *StateRepo) GenerateExternalDevice(token sc_jwt.Token, request CreateDeviceByTypeRequest) (device model.Device, err error) {
+// GenerateExternalDevice and DeleteExternalDevice ignore the cancellation of ctx
+// and are bounded by platformhttp.WriteTimeout instead of the read timeout, see writeContext.
+func (this *StateRepo) GenerateExternalDevice(ctx context.Context, token sc_jwt.Token, request CreateDeviceByTypeRequest) (device model.Device, err error) {
 	deviceInp := model.Device{Name: request.Name, DeviceTypeId: request.DeviceTypeId, LocalId: uuid.NewString()}
-	err = deviceManagerPostJson(token.Jwt(), this.Config.DeviceManagerUrl+"/devices", deviceInp, &device)
+	ctx, cancel := this.writeContext(ctx)
+	defer cancel()
+	err = deviceManagerPostJson(ctx, this.PlatformClients.Writes(), token.Jwt(), this.Config.DeviceManagerUrl+"/devices", deviceInp, &device)
 	if err != nil {
 		util.Logger.Error("unable to create device in device repository", attributes.ErrorKey, err, "device_type_id", request.DeviceTypeId, "name", request.Name)
 	}
 	return
 }
 
-func (this *StateRepo) DeleteExternalDevice(token sc_jwt.Token, id string) (err error) {
+func (this *StateRepo) DeleteExternalDevice(ctx context.Context, token sc_jwt.Token, id string) (err error) {
 	if id != "" {
-		err = deviceManagerDelete(token.Jwt(), this.Config.DeviceManagerUrl+"/devices/"+url.PathEscape(id))
+		ctx, cancel := this.writeContext(ctx)
+		defer cancel()
+		err = deviceManagerDelete(ctx, this.PlatformClients.Writes(), token.Jwt(), this.Config.DeviceManagerUrl+"/devices/"+url.PathEscape(id))
 	}
 	return
 }

@@ -26,6 +26,7 @@ import (
 	"github.com/SENERGY-Platform/moses/lib/config"
 	"github.com/SENERGY-Platform/moses/lib/crashbrake"
 	"github.com/SENERGY-Platform/moses/lib/devices"
+	"github.com/SENERGY-Platform/moses/lib/platformhttp"
 	"github.com/SENERGY-Platform/moses/lib/repo"
 	"github.com/SENERGY-Platform/moses/lib/runtime"
 	"github.com/SENERGY-Platform/moses/lib/state"
@@ -164,8 +165,10 @@ func New(config config.Config, ctx context.Context) (err error) {
 	}
 	cleanup.add(environments.Close)
 
+	platformClients := newPlatformClients(config.PlatformHttpTimeout)
+
 	util.Logger.Info("loading states from the database")
-	staterepo := &state.StateRepo{Persistence: persistence, Config: config, Connector: connector, StateLogger: logger}
+	staterepo := &state.StateRepo{Persistence: persistence, Config: config, Connector: connector, StateLogger: logger, PlatformClients: platformClients}
 	err = staterepo.Load()
 	if err != nil {
 		util.Logger.Error("unable to load the state repo", attributes.ErrorKey, err)
@@ -236,7 +239,7 @@ func New(config config.Config, ctx context.Context) (err error) {
 
 	util.Logger.Info("starting the api", "port", config.ServerPort)
 
-	catalog := devices.NewCatalog(config.DeviceRepoUrl, config.DeviceManagerUrl, config.Protocol)
+	catalog := devices.NewCatalog(config.DeviceRepoUrl, config.DeviceManagerUrl, config.Protocol, platformClients)
 	//the graph api of the device-repository, which is what mirrors an environment
 	//for the applications that read graphs. nil for the gateway token: moses
 	//always forwards the caller's own token
@@ -268,6 +271,15 @@ func New(config config.Config, ctx context.Context) (err error) {
 		environments.Close()
 	}()
 	return nil
+}
+
+// newPlatformClients are the one pair of clients for the device-manager and
+// device-repository calls of both models; an unset read timeout is reported, since it falls back to the default.
+func newPlatformClients(readTimeout time.Duration) platformhttp.Clients {
+	if readTimeout <= 0 {
+		util.Logger.Warn("no platform http timeout configured, using the default", "default", platformhttp.DefaultTimeout)
+	}
+	return platformhttp.NewClients(readTimeout)
 }
 
 // applyQuarantine stores the brake's decisions and fails a quarantined environment's

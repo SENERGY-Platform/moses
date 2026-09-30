@@ -217,7 +217,7 @@ func (this *Catalog) getRepository(ctx context.Context, token string, pathAndQue
 		return err
 	}
 	request.Header.Set("Authorization", token)
-	response, err := http.DefaultClient.Do(request)
+	response, err := this.clients.Reads().Do(request)
 	if err != nil {
 		return err
 	}

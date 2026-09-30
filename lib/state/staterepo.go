@@ -22,6 +22,7 @@ import (
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/config"
 	"github.com/SENERGY-Platform/moses/lib/crashbrake"
+	"github.com/SENERGY-Platform/moses/lib/platformhttp"
 	"github.com/SENERGY-Platform/moses/lib/util"
 	platform_connector_lib "github.com/SENERGY-Platform/platform-connector-lib"
 	"github.com/SENERGY-Platform/platform-connector-lib/connectionlog"
@@ -48,6 +49,12 @@ type StateRepo struct {
 	mux                    sync.RWMutex
 	MosesProtocolId        string
 	StateLogger            connectionlog.Logger
+
+	// PlatformClients call the device-manager; lib.New shares them with the catalog.
+	// An unset read client is built from Config.PlatformHttpTimeout.
+	PlatformClients platformhttp.Clients
+	// externalWriteTimeout bounds one device-manager write; zero is platformhttp.WriteTimeout.
+	externalWriteTimeout time.Duration
 
 	// Brake records, per world, when a script run is in flight, so a fatal crash
 	// is quarantined on the next boot instead of looping. nil disables it. lib.New

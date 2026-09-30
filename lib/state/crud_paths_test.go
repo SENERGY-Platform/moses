@@ -17,6 +17,7 @@
 package state
 
 import (
+	"context"
 	"errors"
 	"math"
 	"net/http"
@@ -108,7 +109,7 @@ var crudMutators = []crudMutator{
 		return access, exists, err
 	}},
 	{"DeleteDevice", false, "d", func(repo *StateRepo, token sc_jwt.Token, id string) (bool, bool, error) {
-		_, access, exists, err := repo.DeleteDevice(token, id)
+		_, access, exists, err := repo.DeleteDevice(context.Background(), token, id)
 		return access, exists, err
 	}},
 	{"CreateService", false, "d", func(repo *StateRepo, token sc_jwt.Token, id string) (bool, bool, error) {
@@ -512,7 +513,7 @@ func TestCreateDeviceByTypeAddsTheDeviceToTheCurrentWorld(t *testing.T) {
 	t.Cleanup(manager.Close)
 	repo, store := pathTestRepo(t)
 	repo.Config.DeviceManagerUrl = manager.URL
-	result, access, exists, err := repo.CreateDeviceByType(crudToken, CreateDeviceByTypeRequest{DeviceTypeId: "dt", Room: "r", Name: "typed"})
+	result, access, exists, err := repo.CreateDeviceByType(context.Background(), crudToken, CreateDeviceByTypeRequest{DeviceTypeId: "dt", Room: "r", Name: "typed"})
 	if err != nil {
 		t.Fatal(err)
 	}

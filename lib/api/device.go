@@ -41,7 +41,7 @@ func DeviceEndpoints(config config.Config, states *state.StateRepo, router gin.I
 		if !bindLimitedJSON(gc, &msg, maxRequestBytes, "") {
 			return
 		}
-		result, access, worldAndRoomExists, err := states.CreateDeviceByType(token, msg)
+		result, access, worldAndRoomExists, err := states.CreateDeviceByType(gc.Request.Context(), token, msg)
 		if err != nil {
 			util.Logger.Error("unable to create device by type", attributes.ErrorKey, err)
 			gc.String(http.StatusInternalServerError, "unable to create device by type")
@@ -143,7 +143,7 @@ func DeviceEndpoints(config config.Config, states *state.StateRepo, router gin.I
 			return
 		}
 		id := gc.Param("id")
-		_, access, exists, err := states.DeleteDevice(token, id)
+		_, access, exists, err := states.DeleteDevice(gc.Request.Context(), token, id)
 		if err != nil {
 			util.Logger.Error("unable to delete device", attributes.ErrorKey, err)
 			gc.String(http.StatusInternalServerError, "unable to delete device")

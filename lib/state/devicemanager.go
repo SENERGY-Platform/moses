@@ -18,6 +18,7 @@ package state
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,8 +41,8 @@ import (
 var errAccessDenied = errors.New("access denied")
 
 // deviceManagerGetJson issues a GET and decodes the json response into result.
-func deviceManagerGetJson(token string, endpoint string, result interface{}) error {
-	response, err := deviceManagerRequest(token, http.MethodGet, endpoint, "", nil)
+func deviceManagerGetJson(ctx context.Context, client *http.Client, token string, endpoint string, result interface{}) error {
+	response, err := deviceManagerRequest(ctx, client, token, http.MethodGet, endpoint, "", nil)
 	if err != nil {
 		return err
 	}
@@ -50,14 +51,14 @@ func deviceManagerGetJson(token string, endpoint string, result interface{}) err
 }
 
 // result may be nil when the response is not wanted.
-func deviceManagerPostJson(token string, endpoint string, body interface{}, result interface{}) error {
+func deviceManagerPostJson(ctx context.Context, client *http.Client, token string, endpoint string, body interface{}, result interface{}) error {
 	encoded := new(bytes.Buffer)
 	// encoded first, so an unencodable body never reaches the network
 	err := json.NewEncoder(encoded).Encode(body)
 	if err != nil {
 		return err
 	}
-	response, err := deviceManagerRequest(token, http.MethodPost, endpoint, "application/json", encoded)
+	response, err := deviceManagerRequest(ctx, client, token, http.MethodPost, endpoint, "application/json", encoded)
 	if err != nil {
 		return err
 	}
@@ -69,8 +70,8 @@ func deviceManagerPostJson(token string, endpoint string, body interface{}, resu
 }
 
 // deviceManagerDelete issues a DELETE and discards the response body.
-func deviceManagerDelete(token string, endpoint string) error {
-	response, err := deviceManagerRequest(token, http.MethodDelete, endpoint, "", nil)
+func deviceManagerDelete(ctx context.Context, client *http.Client, token string, endpoint string) error {
+	response, err := deviceManagerRequest(ctx, client, token, http.MethodDelete, endpoint, "", nil)
 	if err != nil {
 		return err
 	}
@@ -83,8 +84,8 @@ func deviceManagerDelete(token string, endpoint string) error {
 // deviceManagerRequest hands the response back only for a 200, and then the
 // caller owns the body. Every other outcome closes it here, so no caller has to
 // guess whether it owns a body it also got an error for.
-func deviceManagerRequest(token string, method string, endpoint string, contentType string, body io.Reader) (*http.Response, error) {
-	request, err := http.NewRequest(method, endpoint, body)
+func deviceManagerRequest(ctx context.Context, client *http.Client, token string, method string, endpoint string, contentType string, body io.Reader) (*http.Response, error) {
+	request, err := http.NewRequestWithContext(ctx, method, endpoint, body)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +93,7 @@ func deviceManagerRequest(token string, method string, endpoint string, contentT
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}
-	response, err := http.DefaultClient.Do(request)
+	response, err := client.Do(request)
 	if err != nil {
 		return nil, err
 	}
