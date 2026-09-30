@@ -1504,7 +1504,12 @@ func (this *Runtime) execute(env *environment, gen *generation, binding channelB
 		this.reportScriptFailure(env, binding, err)
 		return
 	}
-	err := runScriptInBraked(&env.scripts, gen, binding.script, this.jsApi(env, gen, binding, input, send, now), this.jsTimeout, &env.mux, this.brake, env.id, binding.channel.Id, &env.sink)
+	var err error
+	if engineQJS {
+		err = this.executeQJS(env, gen, binding, input, send, now)
+	} else {
+		err = runScriptInBraked(&env.scripts, gen, binding.script, this.jsApi(env, gen, binding, input, send, now), this.jsTimeout, &env.mux, this.brake, env.id, binding.channel.Id, &env.sink)
+	}
 	if err != nil {
 		this.reportScriptFailure(env, binding, err)
 	}

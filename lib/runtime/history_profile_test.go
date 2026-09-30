@@ -17,9 +17,16 @@
 package runtime
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
+	"runtime"
+	"sort"
 	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -54,6 +61,59 @@ func (discardingPublisher) TimeShapeOf(string, string) (devices.TimeShape, error
 		TimePath:     []string{"time"},
 		TimeEncoding: devices.TimeAsUnixMilliseconds,
 	}, nil
+}
+
+// recordingPublisher keeps every reading per service for an engine comparison
+// (MOSES_PROFILE_DIGEST=file), spike only.
+type recordingPublisher struct {
+	discardingPublisher
+	mux      sync.Mutex
+	readings map[string][]string
+}
+
+func (this *recordingPublisher) PublishEventAt(device string, service string, value interface{}, at time.Time) error {
+	encoded, _ := json.Marshal(value)
+	if number, ok := value.(float64); ok {
+		encoded = []byte(strconv.FormatFloat(number, 'g', -1, 64))
+	}
+	this.mux.Lock()
+	this.readings[service] = append(this.readings[service], strconv.FormatInt(at.UnixMilli(), 10)+"|"+string(encoded))
+	this.mux.Unlock()
+	return nil
+}
+
+func (this *recordingPublisher) PublishEvent(device string, service string, value interface{}) error {
+	return this.PublishEventAt(device, service, value, time.Time{})
+}
+
+// digest writes count, numeric sum and a hash of the time-ordered readings per service.
+func (this *recordingPublisher) digest(path string) error {
+	out := map[string]map[string]interface{}{}
+	for service, readings := range this.readings {
+		sort.Strings(readings)
+		sum := 0.0
+		hash := sha256.New()
+		for _, reading := range readings {
+			hash.Write([]byte(reading))
+			hash.Write([]byte{10})
+			if number, err := strconv.ParseFloat(reading[strings.IndexByte(reading, '|')+1:], 64); err == nil {
+				sum += number
+			}
+		}
+		out[service] = map[string]interface{}{"count": len(readings), "sum": sum, "sha256": hex.EncodeToString(hash.Sum(nil))[:16]}
+	}
+	if raw := os.Getenv("MOSES_PROFILE_RAW"); raw != "" {
+		readings := append([]string(nil), this.readings[raw]...)
+		sort.Strings(readings)
+		if err := os.WriteFile(path+".raw", []byte(strings.Join(readings, "\n")), 0o644); err != nil {
+			return err
+		}
+	}
+	encoded, err := json.MarshalIndent(out, "", " ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, encoded, 0o644)
 }
 
 func TestProfileTheHistoryRunOfADocument(t *testing.T) {
@@ -125,7 +185,13 @@ func TestProfileTheHistoryRunOfADocument(t *testing.T) {
 	from := time.Date(2025, 9, 8, 0, 0, 0, 0, time.UTC)
 	to := from.Add(time.Duration(days) * 24 * time.Hour)
 
-	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), discardingPublisher{})
+	var publisher eventPublisher = discardingPublisher{}
+	recorder := &recordingPublisher{readings: map[string][]string{}}
+	digestPath := os.Getenv("MOSES_PROFILE_DIGEST")
+	if digestPath != "" {
+		publisher = recorder
+	}
+	rt := newRuntime(testConfig(time.Hour), newFakeEnvironments(def), newFakeStates(), nil, newFakeHistoryJobs(), publisher)
 	//MOSES_PROFILE_BRAKE=1 measures the per-run crash-brake cost (goID and the slot)
 	if os.Getenv("MOSES_PROFILE_BRAKE") != "" {
 		brake, _, brakeErr := crashbrake.Open(t.TempDir())
@@ -162,6 +228,29 @@ func TestProfileTheHistoryRunOfADocument(t *testing.T) {
 		t.Fatal(err)
 	}
 	elapsed := time.Since(started)
+	var memory runtime.MemStats
+	runtime.ReadMemStats(&memory)
+	instances, pages := env.scripts.qjs.pages()
+	t.Logf("memory after the run: heap in use %d MB, sys %d MB, qjs instances kept %d holding %d MB of linear memory",
+		memory.HeapInuse>>20, memory.Sys>>20, instances, pages>>20)
+	if digestPath != "" {
+		//the final state as well: script channels mostly write state that formulas publish
+		record := func(scope string, values map[string]interface{}) {
+			for key, value := range values {
+				recorder.readings["state:"+scope+":"+key] = []string{"0|" + fmt.Sprintf("%#v", value)}
+			}
+		}
+		record("context", env.state.Context)
+		for id, values := range env.state.Zones {
+			record("zone:"+id, values)
+		}
+		for id, values := range env.state.Assets {
+			record("asset:"+id, values)
+		}
+		if err := recorder.digest(digestPath); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	steps := int64(0)
 	for _, channel := range result.Channels {
@@ -177,6 +266,9 @@ func TestProfileTheHistoryRunOfADocument(t *testing.T) {
 	t.Logf("window %d days in %v: %.0f publish steps/s, %.3f ms per step",
 		days, elapsed.Round(time.Millisecond), float64(steps)/elapsed.Seconds(), float64(elapsed.Microseconds())/float64(steps)/1000)
 	t.Logf("a year at this rate: %v", (elapsed * 365 / time.Duration(days)).Round(time.Minute))
+	if engineQJS {
+		t.Logf("qjs: %d runs, %d host calls (%.1f per run), %d instances prepared", qjsCounters.runs.Load(), qjsCounters.hostCalls.Load(), float64(qjsCounters.hostCalls.Load())/float64(max(qjsCounters.runs.Load(), 1)), qjsCounters.prepares.Load())
+	}
 	if checkpoints > 0 {
 		t.Logf("checkpoints %d, %d KB each", checkpoints, checkpointBytes/checkpoints/1024)
 	}

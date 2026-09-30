@@ -231,6 +231,7 @@ type scriptVMs struct {
 	gen   *generation
 	vms   map[*goja.Program]*cachedVM
 	order *list.List // least recently used at the back
+	qjs   qjsVMs     // SPIKE: the QuickJS instances, cleared with the goja ones
 }
 
 // take returns the vm of a program, preparing one if there is none; a program of
@@ -312,6 +313,7 @@ func (this *scriptVMs) drop(program *goja.Program) {
 }
 
 func (this *scriptVMs) clear() {
+	this.qjs.clear()
 	for program := range this.vms {
 		this.drop(program)
 	}
