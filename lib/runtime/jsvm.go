@@ -219,6 +219,9 @@ func runScriptInBraked(vms *scriptVMs, gen *generation, program *goja.Program, m
 	if brake != nil {
 		defer brake.Enter(environmentId, channelId)()
 	}
+	if scriptRunWatch != nil {
+		defer scriptRunWatch.enter()()
+	}
 	var prepared *scriptVM
 	var err error
 	if vms != nil {

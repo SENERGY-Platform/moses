@@ -213,11 +213,18 @@ func (this *publishPool) Submit(job publishJob) {
 	this.recent = shard
 }
 
+// publishPoolWaitHook, set by a worker before any run, is told whenever the loop
+// is about to wait for acks, so readings it holds for batching go out first.
+var publishPoolWaitHook func()
+
 // Throttle is the backpressure. The loop calls it between two instants with no
 // mutex held, so what a run holds in memory is one instant plus the mark rather
 // than the whole window. It gives up when the run is over, or an abort would
 // leave it waiting for workers that no longer send.
 func (this *publishPool) Throttle() {
+	if publishPoolWaitHook != nil {
+		publishPoolWaitHook()
+	}
 	this.openMux.Lock()
 	defer this.openMux.Unlock()
 	for this.ctx.Err() == nil && (this.open >= this.mark || this.stagedRecently() >= publishQueuePerWorker) {
@@ -240,6 +247,9 @@ func (this *publishPool) stagedRecently() int {
 // has to happen before a run reads its counters, measures how far it lags the
 // clock, or hands the environment back to the live simulation.
 func (this *publishPool) Drain() {
+	if publishPoolWaitHook != nil {
+		publishPoolWaitHook()
+	}
 	this.openMux.Lock()
 	for this.open > 0 {
 		this.openCond.Wait()

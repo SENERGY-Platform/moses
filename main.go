@@ -33,6 +33,7 @@ import (
 	"github.com/SENERGY-Platform/moses/lib"
 	"github.com/SENERGY-Platform/moses/lib/config"
 	"github.com/SENERGY-Platform/moses/lib/jsguard"
+	mosesruntime "github.com/SENERGY-Platform/moses/lib/runtime"
 	"github.com/SENERGY-Platform/moses/lib/util"
 
 	//the container image ships no tzdata, and the dataset upload interprets
@@ -42,6 +43,10 @@ import (
 )
 
 func main() {
+	//the environment worker of the SNRGY-4817 spike: one environment per process, no config, no api
+	if os.Getenv(mosesruntime.WorkerModeEnv) == "1" {
+		os.Exit(mosesruntime.RunWorker())
+	}
 	jsguard.LimitStack()
 	config, err := config.LoadConfig()
 	if err != nil {
