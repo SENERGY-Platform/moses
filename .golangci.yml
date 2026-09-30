@@ -1,0 +1,8 @@
+version: "2"
+
+linters:
+  settings:
+    staticcheck:
+      # the check set a run without this file reports, minus ST1006: `this` is
+      # the receiver name throughout this code base and the SENERGY services
+      checks: ["all", "-ST1000", "-ST1003", "-ST1006", "-ST1008", "-ST1016", "-ST1020", "-ST1021", "-ST1022"]
