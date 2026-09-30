@@ -108,10 +108,6 @@ type environment struct {
 	gen     *generation
 	cancel  context.CancelFunc
 	runners sync.WaitGroup
-
-	// quarantine, when set, is why the crash brake held this environment back: it
-	// is not started and reports this through the api until a reload clears it.
-	quarantine *repo.Quarantine
 }
 
 // snapshotSeries copies the series map of one generation under env.mux, which

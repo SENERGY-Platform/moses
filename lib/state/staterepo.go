@@ -140,6 +140,10 @@ func (this *StateRepo) DevUpdateRoom(worldId string, room RoomMsg) (err error) {
 		return errors.New("missing world id")
 	}
 	world, exists, err := this.DevGetWorld(worldId)
+	if err != nil {
+		// a failed conversion leaves world without its id, states and routines, and persisting that would store a broken world
+		return err
+	}
 	if !exists {
 		return errors.New("unknown world id")
 	}
@@ -185,6 +189,10 @@ func (this *StateRepo) DevUpdateDevice(worldId string, roomId string, device Dev
 		this.Worlds = map[string]*World{}
 	}
 	world, exists, err := this.DevGetWorld(worldId)
+	if err != nil {
+		// a failed conversion leaves world without its id, states and routines, and persisting that would store a broken world
+		return err
+	}
 	if !exists {
 		return errors.New("unknown world id")
 	}

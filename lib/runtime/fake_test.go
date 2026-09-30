@@ -658,12 +658,6 @@ func (this *fakeHistoryJobs) saveBudgetsOfState(environmentId string, state Hist
 	return result
 }
 
-func (this *fakeHistoryJobs) deletedJobIds() []string {
-	this.mux.Lock()
-	defer this.mux.Unlock()
-	return append([]string{}, this.deleted...)
-}
-
 func copyHistoryJobRecord(record repo.HistoryJobRecord) (repo.HistoryJobRecord, error) {
 	result := repo.HistoryJobRecord{}
 	err := copyThroughBson(record, &result)

@@ -125,8 +125,7 @@ func (this *StateRepo) UpdateRoom(token sc_jwt.Token, msg UpdateRoomRequest) (ro
 }
 
 func (this *StateRepo) CreateRoom(token sc_jwt.Token, msg CreateRoomRequest) (room RoomResponse, access bool, worldExists bool, err error) {
-	worldMsg := WorldMsg{}
-	worldMsg, access, worldExists, err = this.ReadWorld(token, msg.World)
+	worldMsg, access, worldExists, err := this.ReadWorld(token, msg.World)
 	if err != nil || !access || !worldExists {
 		return room, access, worldExists, err
 	}
@@ -151,8 +150,7 @@ func (this *StateRepo) DeleteRoom(token sc_jwt.Token, id string) (room RoomRespo
 	if err != nil || !access || !exists {
 		return
 	}
-	world := WorldMsg{}
-	world, exists, err = this.DevGetWorld(room.World)
+	world, exists, err := this.DevGetWorld(room.World)
 	if err != nil {
 		return
 	}
@@ -190,8 +188,7 @@ func (this *StateRepo) ReadDevice(token sc_jwt.Token, id string) (device DeviceR
 }
 
 func (this *StateRepo) CreateDevice(token sc_jwt.Token, msg CreateDeviceRequest) (device DeviceResponse, access bool, worldAndExists bool, err error) {
-	room := RoomResponse{}
-	room, access, worldAndExists, err = this.ReadRoom(token, msg.Room)
+	room, access, worldAndExists, err := this.ReadRoom(token, msg.Room)
 	if err != nil || !access || !worldAndExists {
 		return device, access, worldAndExists, err
 	}
@@ -237,8 +234,7 @@ func (this *StateRepo) DeleteDevice(token sc_jwt.Token, id string) (device Devic
 	if err != nil || !access || !exists {
 		return
 	}
-	world := WorldMsg{}
-	world, exists, err = this.DevGetWorld(device.World)
+	world, exists, err := this.DevGetWorld(device.World)
 	if err != nil {
 		return
 	}
@@ -289,8 +285,7 @@ func (this *StateRepo) ReadService(token sc_jwt.Token, id string) (service Servi
 }
 
 func (this *StateRepo) CreateService(token sc_jwt.Token, msg CreateServiceRequest) (service ServiceResponse, access bool, worldAndExists bool, err error) {
-	device := DeviceResponse{}
-	device, access, worldAndExists, err = this.ReadDevice(token, msg.Device)
+	device, access, worldAndExists, err := this.ReadDevice(token, msg.Device)
 	if err != nil || !access || !worldAndExists {
 		return service, access, worldAndExists, err
 	}
@@ -362,8 +357,7 @@ func (this *StateRepo) DeleteService(token sc_jwt.Token, id string) (service Ser
 }
 
 func (this *StateRepo) CreateDeviceByType(token sc_jwt.Token, msg CreateDeviceByTypeRequest) (result DeviceResponse, access bool, worldAndExists bool, err error) {
-	room := RoomResponse{}
-	room, access, worldAndExists, err = this.ReadRoom(token, msg.Room)
+	room, access, worldAndExists, err := this.ReadRoom(token, msg.Room)
 	if err != nil || !access || !worldAndExists {
 		return result, access, worldAndExists, err
 	}
@@ -447,9 +441,11 @@ func (this *StateRepo) CreateChangeRoutine(token sc_jwt.Token, msg CreateChangeR
 	}
 	routine := ChangeRoutine{Interval: msg.Interval, Code: msg.Code, Id: uid.String()}
 	result = ChangeRoutineResponse{Id: routine.Id, Code: routine.Code, Interval: routine.Interval, RefId: msg.RefId, RefType: msg.RefType}
+	// the cases assign the named results instead of shadowing them, so a failed update reaches the caller
 	switch msg.RefType {
 	case "world":
-		world, access, exists, err := this.ReadWorld(token, msg.RefId)
+		var world WorldMsg
+		world, access, exists, err = this.ReadWorld(token, msg.RefId)
 		if err != nil || !access || !exists {
 			return result, access, exists, err
 		}
@@ -459,7 +455,8 @@ func (this *StateRepo) CreateChangeRoutine(token sc_jwt.Token, msg CreateChangeR
 		world.ChangeRoutines[routine.Id] = routine
 		err = this.DevUpdateWorld(world)
 	case "room":
-		room, access, exists, err := this.ReadRoom(token, msg.RefId)
+		var room RoomResponse
+		room, access, exists, err = this.ReadRoom(token, msg.RefId)
 		if err != nil || !access || !exists {
 			return result, access, exists, err
 		}
@@ -469,7 +466,8 @@ func (this *StateRepo) CreateChangeRoutine(token sc_jwt.Token, msg CreateChangeR
 		room.Room.ChangeRoutines[routine.Id] = routine
 		err = this.DevUpdateRoom(room.World, room.Room)
 	case "device":
-		device, access, exists, err := this.ReadDevice(token, msg.RefId)
+		var device DeviceResponse
+		device, access, exists, err = this.ReadDevice(token, msg.RefId)
 		if err != nil || !access || !exists {
 			return result, access, exists, err
 		}
@@ -492,23 +490,27 @@ func (this *StateRepo) UpdateChangeRoutine(token sc_jwt.Token, msg UpdateChangeR
 	changeRoutine := ChangeRoutine{Interval: msg.Interval, Code: msg.Code, Id: msg.Id}
 	routine.Code = changeRoutine.Code
 	routine.Interval = changeRoutine.Interval
+	// the cases assign the named results instead of shadowing them, so a failed update reaches the caller
 	switch routine.RefType {
 	case "world":
-		world, access, exists, err := this.ReadWorld(token, routine.RefId)
+		var world WorldMsg
+		world, access, exists, err = this.ReadWorld(token, routine.RefId)
 		if err != nil || !access || !exists {
 			return routine, access, exists, err
 		}
 		world.ChangeRoutines[msg.Id] = changeRoutine
 		err = this.DevUpdateWorld(world)
 	case "room":
-		room, access, exists, err := this.ReadRoom(token, routine.RefId)
+		var room RoomResponse
+		room, access, exists, err = this.ReadRoom(token, routine.RefId)
 		if err != nil || !access || !exists {
 			return routine, access, exists, err
 		}
 		room.Room.ChangeRoutines[msg.Id] = changeRoutine
 		err = this.DevUpdateRoom(room.World, room.Room)
 	case "device":
-		device, access, exists, err := this.ReadDevice(token, routine.RefId)
+		var device DeviceResponse
+		device, access, exists, err = this.ReadDevice(token, routine.RefId)
 		if err != nil || !access || !exists {
 			return routine, access, exists, err
 		}
@@ -580,21 +582,25 @@ func (this *StateRepo) DeleteChangeRoutine(token sc_jwt.Token, id string) (routi
 	if err != nil || !access || !exists {
 		return
 	}
+	// the cases assign the named results instead of shadowing them, so a failed update reaches the caller
 	switch routine.RefType {
 	case "world":
-		world, access, exists, err := this.ReadWorld(token, routine.RefId)
+		var world WorldMsg
+		world, access, exists, err = this.ReadWorld(token, routine.RefId)
 		if err != nil || !access || !exists {
 			return routine, access, exists, err
 		}
 		err = this.DevUpdateWorld(world)
 	case "room":
-		room, access, exists, err := this.ReadRoom(token, routine.RefId)
+		var room RoomResponse
+		room, access, exists, err = this.ReadRoom(token, routine.RefId)
 		if err != nil || !access || !exists {
 			return routine, access, exists, err
 		}
 		err = this.DevUpdateRoom(room.World, room.Room)
 	case "device":
-		device, access, exists, err := this.ReadDevice(token, routine.RefId)
+		var device DeviceResponse
+		device, access, exists, err = this.ReadDevice(token, routine.RefId)
 		if err != nil || !access || !exists {
 			return routine, access, exists, err
 		}
@@ -673,6 +679,9 @@ func (this *StateRepo) UpdateChangeRoutineByTemplate(token sc_jwt.Token, msg Upd
 	}
 	updateRequest := UpdateChangeRoutineRequest{Id: msg.RoutineId, Interval: msg.Interval}
 	updateRequest.Code, err = RenderTempl(templ.Template, msg.Parameter)
+	if err != nil {
+		return routine, true, exists, err
+	}
 	return this.UpdateChangeRoutine(token, updateRequest)
 }
 
@@ -683,6 +692,9 @@ func (this *StateRepo) CreateChangeRoutineByTemplate(token sc_jwt.Token, msg Cre
 	}
 	createRequest := CreateChangeRoutineRequest{RefId: msg.RefId, RefType: msg.RefType, Interval: msg.Interval}
 	createRequest.Code, err = RenderTempl(templ.Template, msg.Parameter)
+	if err != nil {
+		return routine, true, exists, err
+	}
 	return this.CreateChangeRoutine(token, createRequest)
 }
 
