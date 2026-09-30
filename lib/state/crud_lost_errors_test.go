@@ -67,7 +67,7 @@ var crudToken = sc_jwt.Token{Sub: crudOwner}
 // crudTestRepo runs one world "w" with room "r" and device "d", each carrying
 // one change routine ("routine-world", "routine-room", "routine-device").
 // Interval 0 keeps the routines indexed without starting a ticker.
-func crudTestRepo(t *testing.T, persistence *crudPersistence) *StateRepo {
+func crudTestRepo(t *testing.T, persistence PersistenceInterface) *StateRepo {
 	t.Helper()
 	msg := WorldMsg{
 		Id:             "w",

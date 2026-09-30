@@ -87,19 +87,11 @@ func (this *StateRepo) DevUpdateWorld(worldMsg WorldMsg) (err error) {
 		}
 		world.Id = uid.String()
 	}
-	err = this.persistWorld(world)
+	err = this.replaceWorld(world)
 	if err != nil {
-		util.Logger.Error("unable to persist world", attributes.ErrorKey, err, "world", world.Id)
-		return err
+		util.Logger.Error("unable to replace world", attributes.ErrorKey, err, "world", world.Id)
 	}
-	err = this.Stop()
-	if err != nil {
-		util.Logger.Error("unable to stop change routines", attributes.ErrorKey, err)
-		return err
-	}
-	this.Worlds[world.Id] = &world
-	this.Start()
-	return
+	return err
 }
 
 func (this *StateRepo) DevGetWorld(id string) (world WorldMsg, exist bool, err error) {
@@ -118,17 +110,19 @@ func (this *StateRepo) DevGetWorld(id string) (world WorldMsg, exist bool, err e
 func (this *StateRepo) DevDeleteWorld(id string) (err error) {
 	this.mux.Lock()
 	defer this.mux.Unlock()
-	err = this.Persistence.DeleteWorld(id)
-	if err != nil {
-		return err
-	}
+	//stopped before the delete, so no run still holding the world can store it again
 	err = this.Stop()
 	if err != nil {
 		util.Logger.Error("unable to stop change routines", attributes.ErrorKey, err)
 		return err
 	}
+	//Start rebuilds from this.Worlds, so a failed delete resumes the world
+	defer this.Start()
+	err = this.Persistence.DeleteWorld(id)
+	if err != nil {
+		return err
+	}
 	delete(this.Worlds, id)
-	this.Start()
 	return
 }
 
@@ -163,19 +157,9 @@ func (this *StateRepo) DevUpdateRoom(worldId string, room RoomMsg) (err error) {
 	if err != nil {
 		return err
 	}
-	err = this.persistWorld(worldModel)
-	if err != nil {
-		return err
-	}
 	this.mux.Lock()
 	defer this.mux.Unlock()
-	err = this.Stop()
-	if err != nil {
-		return err
-	}
-	this.Worlds[world.Id] = &worldModel
-	this.Start()
-	return
+	return this.replaceWorld(worldModel)
 }
 
 // Update for HTTP-DEV-API
@@ -224,19 +208,9 @@ func (this *StateRepo) DevUpdateDevice(worldId string, roomId string, device Dev
 		return err
 	}
 
-	err = this.persistWorld(worldModel)
-	if err != nil {
-		return err
-	}
 	this.mux.Lock()
 	defer this.mux.Unlock()
-	err = this.Stop()
-	if err != nil {
-		return err
-	}
-	this.Worlds[world.Id] = &worldModel
-	this.Start()
-	return
+	return this.replaceWorld(worldModel)
 }
 
 // Stops all change routines if any are running and loads state repo from the database (no restart of change routines)
@@ -332,6 +306,23 @@ func (this *StateRepo) ExternalRefWorldIds() map[string]string {
 		result[ref] = world.Id
 	}
 	return result
+}
+
+// replaceWorld stores world and runs it in place of the running world with its id; the caller holds this.mux.
+// The routines are stopped before the write: a run still holding the old world persists it on state.set, which must not land after the new one.
+func (this *StateRepo) replaceWorld(world World) (err error) {
+	err = this.Stop()
+	if err != nil {
+		return err
+	}
+	//Start rebuilds from this.Worlds, so a failed write resumes the unchanged worlds
+	defer this.Start()
+	err = this.persistWorld(world)
+	if err != nil {
+		return err
+	}
+	this.Worlds[world.Id] = &world
+	return nil
 }
 
 // persists given world; will not stop any change routines, nor will it request a lock on the world mutex
