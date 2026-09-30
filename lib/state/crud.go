@@ -539,7 +539,8 @@ func (this *StateRepo) ReadChangeRoutine(token sc_jwt.Token, id string) (routine
 	routine.Id = id
 	switch routine.RefType {
 	case "world":
-		world, access, exists, err := this.ReadWorld(token, routine.RefId)
+		var world WorldMsg
+		world, access, exists, err = this.ReadWorld(token, routine.RefId)
 		if err != nil || !access || !exists {
 			return routine, access, exists, err
 		}
@@ -550,7 +551,8 @@ func (this *StateRepo) ReadChangeRoutine(token sc_jwt.Token, id string) (routine
 		routine.Code = worldRoutine.Code
 		routine.Interval = worldRoutine.Interval
 	case "room":
-		room, access, exists, err := this.ReadRoom(token, routine.RefId)
+		var room RoomResponse
+		room, access, exists, err = this.ReadRoom(token, routine.RefId)
 		if err != nil || !access || !exists {
 			return routine, access, exists, err
 		}
@@ -561,7 +563,8 @@ func (this *StateRepo) ReadChangeRoutine(token sc_jwt.Token, id string) (routine
 		routine.Code = roomRoutine.Code
 		routine.Interval = roomRoutine.Interval
 	case "device":
-		device, access, exists, err := this.ReadDevice(token, routine.RefId)
+		var device DeviceResponse
+		device, access, exists, err = this.ReadDevice(token, routine.RefId)
 		if err != nil || !access || !exists {
 			return routine, access, exists, err
 		}
@@ -582,7 +585,8 @@ func (this *StateRepo) DeleteChangeRoutine(token sc_jwt.Token, id string) (routi
 	if err != nil || !access || !exists {
 		return
 	}
-	// the cases assign the named results instead of shadowing them, so a failed update reaches the caller
+	// the cases assign the named results instead of shadowing them, so a failed update reaches the caller.
+	// The DevUpdate* calls stop every routine and restart them from this.Worlds, which drops the deleted one's ticker and index entry.
 	switch routine.RefType {
 	case "world":
 		var world WorldMsg
@@ -590,6 +594,7 @@ func (this *StateRepo) DeleteChangeRoutine(token sc_jwt.Token, id string) (routi
 		if err != nil || !access || !exists {
 			return routine, access, exists, err
 		}
+		delete(world.ChangeRoutines, routine.Id)
 		err = this.DevUpdateWorld(world)
 	case "room":
 		var room RoomResponse
@@ -597,6 +602,7 @@ func (this *StateRepo) DeleteChangeRoutine(token sc_jwt.Token, id string) (routi
 		if err != nil || !access || !exists {
 			return routine, access, exists, err
 		}
+		delete(room.Room.ChangeRoutines, routine.Id)
 		err = this.DevUpdateRoom(room.World, room.Room)
 	case "device":
 		var device DeviceResponse
@@ -604,6 +610,7 @@ func (this *StateRepo) DeleteChangeRoutine(token sc_jwt.Token, id string) (routi
 		if err != nil || !access || !exists {
 			return routine, access, exists, err
 		}
+		delete(device.Device.ChangeRoutines, routine.Id)
 		err = this.DevUpdateDevice(device.World, device.Room, device.Device)
 	default:
 		err = errors.New("unknown ref type")
