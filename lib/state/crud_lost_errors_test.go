@@ -104,7 +104,8 @@ func crudTestRepo(t *testing.T, persistence PersistenceInterface) *StateRepo {
 		StateLogger: &recordingConnectionLog{},
 	}
 	repo.Start()
-	t.Cleanup(func() { _ = repo.Stop() })
+	//under the lock, so a cleanup after a failed test cannot stop the routines alongside an update still in Stop
+	t.Cleanup(repo.Shutdown)
 	return repo
 }
 

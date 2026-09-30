@@ -63,6 +63,9 @@ type StateRepo struct {
 	// on purpose: this package is being replaced, and it must not grow a
 	// dependency on the package replacing it. lib.New fills it in.
 	SkipWorldIds map[string]bool
+
+	// shutDown is set under mux by Shutdown; from then on no update starts the routines again.
+	shutDown bool
 }
 
 // Update for HTTP-DEV-API
@@ -97,19 +100,32 @@ func (this *StateRepo) DevUpdateWorld(worldMsg WorldMsg) (err error) {
 func (this *StateRepo) DevGetWorld(id string) (world WorldMsg, exist bool, err error) {
 	this.mux.Lock()
 	defer this.mux.Unlock()
+	return this.devGetWorldLocked(id)
+}
+
+// devGetWorldLocked is DevGetWorld for a caller that holds this.mux, read or write.
+func (this *StateRepo) devGetWorldLocked(id string) (world WorldMsg, exist bool, err error) {
 	worldp, exist := this.Worlds[id]
 	if !exist {
 		return world, exist, nil
 	}
-	worldp.mux.Lock()
-	defer worldp.mux.Unlock()
-	world, err = worldp.ToMsg()
+	world, err = snapshotLocked(worldp)
 	return world, exist, err
+}
+
+// snapshotLocked converts world under its mutex; the caller holds this.mux.
+func snapshotLocked(world *World) (WorldMsg, error) {
+	world.mux.Lock()
+	defer world.mux.Unlock()
+	return world.ToMsg()
 }
 
 func (this *StateRepo) DevDeleteWorld(id string) (err error) {
 	this.mux.Lock()
 	defer this.mux.Unlock()
+	if this.shutDown {
+		return errShutDown
+	}
 	//stopped before the delete, so no run still holding the world can store it again
 	err = this.Stop()
 	if err != nil {
@@ -118,29 +134,49 @@ func (this *StateRepo) DevDeleteWorld(id string) (err error) {
 	}
 	//Start rebuilds from this.Worlds, so a failed delete resumes the world
 	defer this.Start()
+	return this.deleteWorldLocked(id)
+}
+
+// deleteWorldLocked deletes world id; the caller holds this.mux and has stopped the routines.
+func (this *StateRepo) deleteWorldLocked(id string) (err error) {
 	err = this.Persistence.DeleteWorld(id)
 	if err != nil {
 		return err
 	}
 	delete(this.Worlds, id)
-	return
+	return nil
 }
 
 // Update for HTTP-DEV-API
 // Stops all change routines and redeploys new world with new room
 // requests a mutex lock on the state repo
 func (this *StateRepo) DevUpdateRoom(worldId string, room RoomMsg) (err error) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
 	if worldId == "" {
 		return errors.New("missing world id")
 	}
-	world, exists, err := this.DevGetWorld(worldId)
+	world, exists := this.Worlds[worldId]
+	if !exists {
+		return errors.New("unknown world id")
+	}
+	snapshot, stopped, err := this.beginEditLocked(world)
+	if stopped {
+		defer this.Start()
+	}
 	if err != nil {
 		// a failed conversion leaves world without its id, states and routines, and persisting that would store a broken world
 		return err
 	}
-	if !exists {
-		return errors.New("unknown world id")
+	model, err := withRoom(snapshot, room)
+	if err != nil {
+		return err
 	}
+	return this.storeWorldLocked(model)
+}
+
+// withRoom is the change DevUpdateRoom makes to a world snapshot, converted but not stored.
+func withRoom(world WorldMsg, room RoomMsg) (result World, err error) {
 	if world.Rooms == nil {
 		world.Rooms = map[string]RoomMsg{}
 	}
@@ -148,47 +184,56 @@ func (this *StateRepo) DevUpdateRoom(worldId string, room RoomMsg) (err error) {
 		uid, err := uuid.NewRandom()
 		if err != nil {
 			util.Logger.Error("unable to generate room id", attributes.ErrorKey, err)
-			return err
+			return result, err
 		}
 		room.Id = uid.String()
 	}
 	world.Rooms[room.Id] = room
-	worldModel, err := world.ToModel()
-	if err != nil {
-		return err
-	}
-	this.mux.Lock()
-	defer this.mux.Unlock()
-	return this.replaceWorld(worldModel)
+	return world.ToModel()
 }
 
 // Update for HTTP-DEV-API
 // Stops all change routines and redeploys new world with new room and device
 // requests a mutex lock on the state repo
 func (this *StateRepo) DevUpdateDevice(worldId string, roomId string, device DeviceMsg) (err error) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
 	if worldId == "" {
 		return errors.New("missing world id")
 	}
 	if this.Worlds == nil {
 		this.Worlds = map[string]*World{}
 	}
-	world, exists, err := this.DevGetWorld(worldId)
+	world, exists := this.Worlds[worldId]
+	if !exists {
+		return errors.New("unknown world id")
+	}
+	snapshot, stopped, err := this.beginEditLocked(world)
+	if stopped {
+		defer this.Start()
+	}
 	if err != nil {
 		// a failed conversion leaves world without its id, states and routines, and persisting that would store a broken world
 		return err
 	}
-	if !exists {
-		return errors.New("unknown world id")
+	model, err := withDevice(snapshot, roomId, device)
+	if err != nil {
+		return err
 	}
+	return this.storeWorldLocked(model)
+}
+
+// withDevice is the change DevUpdateDevice makes to a world snapshot, converted but not stored.
+func withDevice(world WorldMsg, roomId string, device DeviceMsg) (result World, err error) {
 	if world.Rooms == nil {
 		world.Rooms = map[string]RoomMsg{}
 	}
 	if roomId == "" {
-		return errors.New("missing room id")
+		return result, errors.New("missing room id")
 	}
 	room, ok := world.Rooms[roomId]
 	if !ok {
-		return errors.New("unknown room id: " + roomId)
+		return result, errors.New("unknown room id: " + roomId)
 	}
 	if room.Devices == nil {
 		room.Devices = map[string]DeviceMsg{}
@@ -197,20 +242,13 @@ func (this *StateRepo) DevUpdateDevice(worldId string, roomId string, device Dev
 		uid, err := uuid.NewRandom()
 		if err != nil {
 			util.Logger.Error("unable to generate device id", attributes.ErrorKey, err)
-			return err
+			return result, err
 		}
 		device.Id = uid.String()
 	}
 	room.Devices[device.Id] = device
 	world.Rooms[room.Id] = room
-	worldModel, err := world.ToModel()
-	if err != nil {
-		return err
-	}
-
-	this.mux.Lock()
-	defer this.mux.Unlock()
-	return this.replaceWorld(worldModel)
+	return world.ToModel()
 }
 
 // Stops all change routines if any are running and loads state repo from the database (no restart of change routines)
@@ -308,15 +346,49 @@ func (this *StateRepo) ExternalRefWorldIds() map[string]string {
 	return result
 }
 
+// errShutDown refuses a world change after Shutdown, whose restart would outlive the service.
+var errShutDown = errors.New("the legacy state repository is shut down")
+
+// Shutdown stops every change routine for good. It takes this.mux, so it cannot run Stop alongside an update's
+// Stop, where both would send on the same stop channel and the second send would block forever.
+func (this *StateRepo) Shutdown() {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	this.shutDown = true
+	_ = this.Stop()
+}
+
 // replaceWorld stores world and runs it in place of the running world with its id; the caller holds this.mux.
 // The routines are stopped before the write: a run still holding the old world persists it on state.set, which must not land after the new one.
 func (this *StateRepo) replaceWorld(world World) (err error) {
+	if this.shutDown {
+		return errShutDown
+	}
 	err = this.Stop()
 	if err != nil {
 		return err
 	}
 	//Start rebuilds from this.Worlds, so a failed write resumes the unchanged worlds
 	defer this.Start()
+	return this.storeWorldLocked(world)
+}
+
+// beginEditLocked stops the routines and converts world for an edit; the caller holds this.mux and calls Start when stopped is true.
+// With the routines stopped no run holds the world mutex, so an edit waits for running scripts once, in Stop.
+func (this *StateRepo) beginEditLocked(world *World) (snapshot WorldMsg, stopped bool, err error) {
+	if this.shutDown {
+		return snapshot, false, errShutDown
+	}
+	err = this.Stop()
+	if err != nil {
+		return snapshot, false, err
+	}
+	snapshot, err = snapshotLocked(world)
+	return snapshot, true, err
+}
+
+// storeWorldLocked stores world and puts it in place of the running world with its id; the caller holds this.mux and has stopped the routines.
+func (this *StateRepo) storeWorldLocked(world World) (err error) {
 	err = this.persistWorld(world)
 	if err != nil {
 		return err

@@ -17,6 +17,7 @@
 package state
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -88,6 +89,8 @@ func run(code string, moses interface{}, timeout time.Duration, mux sync.Locker,
 	}
 	vm.Interrupt = make(chan func(), 1) // The buffer prevents blocking
 
+	//httpGet shares the interrupt's budget, which counts from here, including the wait for the world
+	deadline := time.Now().Add(timeout)
 	go func() {
 		time.Sleep(timeout) // Stop after two seconds
 		vm.Interrupt <- func() {
@@ -99,7 +102,7 @@ func run(code string, moses interface{}, timeout time.Duration, mux sync.Locker,
 		return
 	}
 
-	err = vm.Set("httpGet", httpGet)
+	err = vm.Set("httpGet", httpGetUntil(deadline))
 	if err != nil {
 		util.Logger.Warn("unable to set up httpGet in javascript vm", attributes.ErrorKey, err)
 		return
@@ -118,16 +121,37 @@ func run(code string, moses interface{}, timeout time.Duration, mux sync.Locker,
 	return
 }
 
-func httpGet(endpoint string) string {
-	resp, err := http.Get(endpoint)
-	if err != nil {
-		util.Logger.Warn("httpGet failed", attributes.ErrorKey, err, "endpoint", endpoint)
-		return ""
+// httpGetUntil is the script's httpGet for a run whose requests end at deadline. A request cut off by the deadline
+// ends the run as the interrupt does, so the rest of the statement never sees an empty answer it would store.
+func httpGetUntil(deadline time.Time) func(endpoint string) string {
+	return func(endpoint string) string {
+		ctx, cancel := context.WithDeadline(context.Background(), deadline)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			util.Logger.Warn("httpGet failed", attributes.ErrorKey, err, "endpoint", endpoint)
+			return ""
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			util.Logger.Warn("httpGet failed", attributes.ErrorKey, err, "endpoint", endpoint)
+			haltOnDeadline(ctx)
+			return ""
+		}
+		defer func() { _ = resp.Body.Close() }()
+		temp, err := io.ReadAll(resp.Body)
+		if err != nil {
+			util.Logger.Warn("httpGet unable to read response body", attributes.ErrorKey, err, "endpoint", endpoint)
+			haltOnDeadline(ctx)
+			return ""
+		}
+		return string(temp)
 	}
-	temp, err := io.ReadAll(resp.Body)
-	if err != nil {
-		util.Logger.Warn("httpGet unable to read response body", attributes.ErrorKey, err, "endpoint", endpoint)
-		return ""
+}
+
+// haltOnDeadline ends the run like the interrupt when the request failed because the run's time is up.
+func haltOnDeadline(ctx context.Context) {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		panic(halt)
 	}
-	return string(temp)
 }

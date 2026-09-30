@@ -201,7 +201,7 @@ func New(config config.Config, ctx context.Context) (err error) {
 
 	util.Logger.Info("starting state routines", "skipped_worlds", len(staterepo.SkipWorldIds))
 	staterepo.Start()
-	cleanup.add(func() { staterepo.Stop() })
+	cleanup.add(staterepo.Shutdown)
 
 	util.Logger.Info("starting the environment runtime")
 	environmentRuntime := runtime.New(config, environments, environments.States(), environments.Datasets(), environments.HistoryJobs(), connector, logger, brake)
@@ -256,7 +256,8 @@ func New(config config.Config, ctx context.Context) (err error) {
 		<-ctx.Done()
 		//runtime first, its final flush needs the store closed below
 		environmentRuntime.Stop()
-		staterepo.Stop()
+		//under the repository lock, so it cannot overlap the Stop of a legacy update still running
+		staterepo.Shutdown()
 		//after both runtimes stopped, so nothing is in flight: mark the register
 		//clean, or the next boot would read this deliberate shutdown as a crash
 		if brake != nil {

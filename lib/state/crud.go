@@ -54,7 +54,9 @@ func (this *StateRepo) CreateWorld(token sc_jwt.Token, msg CreateWorldRequest) (
 }
 
 func (this *StateRepo) ReadWorld(token sc_jwt.Token, id string) (world WorldMsg, access bool, exists bool, err error) {
-	world, exists, err = this.DevGetWorld(id)
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	world, exists, err = this.devGetWorldLocked(id)
 	if err != nil || !exists {
 		return
 	}
@@ -64,54 +66,124 @@ func (this *StateRepo) ReadWorld(token sc_jwt.Token, id string) (world WorldMsg,
 	return world, true, true, err
 }
 
+// beginWorldEditLocked is ReadWorld for a mutator, with the same results; the caller holds this.mux and calls Start when stopped is true.
+// A world that does not convert is an error before it is a denial, as in ReadWorld.
+func (this *StateRepo) beginWorldEditLocked(token sc_jwt.Token, id string) (world WorldMsg, access bool, exists bool, stopped bool, err error) {
+	worldp, exists := this.Worlds[id]
+	if !exists {
+		return world, false, false, false, nil
+	}
+	if worldp.Owner != token.GetUserId() {
+		_, err = snapshotLocked(worldp)
+		return WorldMsg{}, false, true, false, err
+	}
+	world, stopped, err = this.beginEditLocked(worldp)
+	if err != nil && stopped {
+		return world, false, true, stopped, err
+	}
+	return world, true, true, stopped, err
+}
+
 func (this *StateRepo) UpdateWorld(token sc_jwt.Token, msg UpdateWorldRequest) (world WorldMsg, access bool, exists bool, err error) {
-	world, access, exists, err = this.ReadWorld(token, msg.Id)
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	world, access, exists, stopped, err := this.beginWorldEditLocked(token, msg.Id)
+	if stopped {
+		defer this.Start()
+	}
 	if err != nil || !access || !exists {
-		world = WorldMsg{}
-		return
+		return WorldMsg{}, access, exists, err
 	}
 	world.Name = msg.Name
 	world.States = msg.States
 	world.ChangeRoutines = msg.ChangeRoutines
-	err = this.DevUpdateWorld(world)
-	return
+	err = this.storeEditLocked(world)
+	return world, true, true, err
 }
 
 func (this *StateRepo) DeleteWorld(token sc_jwt.Token, id string) (access bool, exists bool, err error) {
-	world, exists, err := this.DevGetWorld(id)
-	if err != nil || !exists {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	_, access, exists, stopped, err := this.beginWorldEditLocked(token, id)
+	if stopped {
+		defer this.Start()
+	}
+	if !exists || (err != nil && !access) {
 		util.Logger.Warn("world not found", attributes.ErrorKey, err, "id", id, "exists", exists)
 		return access, exists, err
 	}
-	if world.Owner != token.GetUserId() {
-		util.Logger.Warn("access denied", "owner", world.Owner, "user_id", token.GetUserId())
+	if !access {
+		util.Logger.Warn("access denied", "owner", this.Worlds[id].Owner, "user_id", token.GetUserId())
 		return false, exists, err
 	}
-	err = this.DevDeleteWorld(id)
+	if err != nil {
+		return true, exists, err
+	}
+	err = this.deleteWorldLocked(id)
 	return true, exists, err
+}
+
+// storeEditLocked converts and stores an edited world snapshot; the caller holds this.mux and has stopped the routines.
+func (this *StateRepo) storeEditLocked(world WorldMsg) error {
+	model, err := world.ToModel()
+	if err != nil {
+		util.Logger.Error("unable to convert world message to model", attributes.ErrorKey, err)
+		return err
+	}
+	return this.storeWorldLocked(model)
+}
+
+// worldOfRoomLocked is the lookup and owner check of ReadRoom; the caller holds this.mux.
+func (this *StateRepo) worldOfRoomLocked(token sc_jwt.Token, id string) (world *World, access bool, exists bool) {
+	world, exists = this.roomWorldIndex[id]
+	if !exists {
+		util.Logger.Warn("no world for room id found", "id", id)
+		return nil, false, exists
+	}
+	if world.Owner != token.GetUserId() {
+		util.Logger.Warn("access denied", "owner", world.Owner, "user_id", token.GetUserId())
+		return world, false, exists
+	}
+	return world, true, true
 }
 
 func (this *StateRepo) ReadRoom(token sc_jwt.Token, id string) (room RoomResponse, access bool, exists bool, err error) {
 	this.mux.RLock()
 	defer this.mux.RUnlock()
-	world, exists := this.roomWorldIndex[id]
-	if !exists {
-		util.Logger.Warn("no world for room id found", "id", id)
-		return room, false, exists, nil
+	world, access, exists := this.worldOfRoomLocked(token, id)
+	if !access || !exists {
+		return room, access, exists, nil
 	}
 	world.mux.Lock()
 	defer world.mux.Unlock()
-	if world.Owner != token.GetUserId() {
-		util.Logger.Warn("access denied", "owner", world.Owner, "user_id", token.GetUserId())
-		return room, false, exists, nil
-	}
 	room.World = world.Id
 	room.Room, err = world.Rooms[id].ToMsg()
 	return room, true, true, err
 }
 
+// beginRoomEditLocked is ReadRoom for a mutator, returning the whole world snapshot the room is taken from;
+// the caller holds this.mux and calls Start when stopped is true.
+func (this *StateRepo) beginRoomEditLocked(token sc_jwt.Token, id string) (world WorldMsg, room RoomResponse, access bool, exists bool, stopped bool, err error) {
+	worldp, access, exists := this.worldOfRoomLocked(token, id)
+	if !access || !exists {
+		return world, room, access, exists, false, nil
+	}
+	room.World = worldp.Id
+	world, stopped, err = this.beginEditLocked(worldp)
+	if err != nil {
+		return world, room, true, true, stopped, err
+	}
+	room.Room = world.Rooms[id]
+	return world, room, true, true, stopped, nil
+}
+
 func (this *StateRepo) UpdateRoom(token sc_jwt.Token, msg UpdateRoomRequest) (room RoomResponse, access bool, exists bool, err error) {
-	room, access, exists, err = this.ReadRoom(token, msg.Id)
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	world, room, access, exists, stopped, err := this.beginRoomEditLocked(token, msg.Id)
+	if stopped {
+		defer this.Start()
+	}
 	if err != nil || !access || !exists {
 		util.Logger.Warn("unable to update room", attributes.ErrorKey, err, "id", msg.Id, "access", access, "exists", exists)
 		return
@@ -120,12 +192,20 @@ func (this *StateRepo) UpdateRoom(token sc_jwt.Token, msg UpdateRoomRequest) (ro
 	room.Room.Name = msg.Name
 	room.Room.Id = msg.Id
 	room.Room.ChangeRoutines = msg.ChangeRoutines
-	err = this.DevUpdateRoom(room.World, room.Room)
+	model, err := withRoom(world, room.Room)
+	if err == nil {
+		err = this.storeWorldLocked(model)
+	}
 	return
 }
 
 func (this *StateRepo) CreateRoom(token sc_jwt.Token, msg CreateRoomRequest) (room RoomResponse, access bool, worldExists bool, err error) {
-	worldMsg, access, worldExists, err := this.ReadWorld(token, msg.World)
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	worldMsg, access, worldExists, stopped, err := this.beginWorldEditLocked(token, msg.World)
+	if stopped {
+		defer this.Start()
+	}
 	if err != nil || !access || !worldExists {
 		return room, access, worldExists, err
 	}
@@ -141,54 +221,83 @@ func (this *StateRepo) CreateRoom(token sc_jwt.Token, msg CreateRoomRequest) (ro
 	if err != nil {
 		return room, true, true, err
 	}
-	err = this.DevUpdateRoom(room.World, room.Room)
+	model, err := withRoom(worldMsg, room.Room)
+	if err == nil {
+		err = this.storeWorldLocked(model)
+	}
 	return room, true, true, err
 }
 
 func (this *StateRepo) DeleteRoom(token sc_jwt.Token, id string) (room RoomResponse, access bool, exists bool, err error) {
-	room, access, exists, err = this.ReadRoom(token, id)
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	world, room, access, exists, stopped, err := this.beginRoomEditLocked(token, id)
+	if stopped {
+		defer this.Start()
+	}
 	if err != nil || !access || !exists {
 		return
 	}
-	world, exists, err := this.DevGetWorld(room.World)
-	if err != nil {
-		return
-	}
-	if !exists {
-		err = errors.New("inconsistent world existence read")
-		return
-	}
 	delete(world.Rooms, room.Room.Id)
-	err = this.DevUpdateWorld(world)
-	return room, true, exists, err
+	err = this.storeEditLocked(world)
+	return room, true, true, err
+}
+
+// worldOfDeviceLocked is the lookup and owner check of ReadDevice; the caller holds this.mux.
+func (this *StateRepo) worldOfDeviceLocked(token sc_jwt.Token, id string) (world *World, room *Room, access bool, exists bool, err error) {
+	world, exists = this.deviceWorldIndex[id]
+	if !exists {
+		return nil, nil, false, exists, nil
+	}
+	if world.Owner != token.GetUserId() {
+		return world, nil, false, exists, nil
+	}
+	room, exists = this.deviceRoomIndex[id]
+	if !exists {
+		return world, nil, false, exists, errors.New("inconsistent deviceRoomIndex")
+	}
+	return world, room, true, true, nil
 }
 
 func (this *StateRepo) ReadDevice(token sc_jwt.Token, id string) (device DeviceResponse, access bool, exists bool, err error) {
 	this.mux.RLock()
 	defer this.mux.RUnlock()
-	world, exists := this.deviceWorldIndex[id]
-	if !exists {
-		return device, false, exists, nil
+	world, room, access, exists, err := this.worldOfDeviceLocked(token, id)
+	if err != nil || !access || !exists {
+		return device, access, exists, err
 	}
 	world.mux.Lock()
 	defer world.mux.Unlock()
-	if world.Owner != token.GetUserId() {
-		return device, false, exists, nil
-	}
-
-	room, exists := this.deviceRoomIndex[id]
-	if !exists {
-		return device, false, exists, errors.New("inconsistent deviceRoomIndex")
-	}
-
 	device.World = world.Id
 	device.Room = room.Id
 	device.Device, err = room.Devices[id].ToMsg()
 	return device, true, true, err
 }
 
+// beginDeviceEditLocked is ReadDevice for a mutator, returning the whole world snapshot the device is taken from;
+// the caller holds this.mux and calls Start when stopped is true.
+func (this *StateRepo) beginDeviceEditLocked(token sc_jwt.Token, id string) (world WorldMsg, device DeviceResponse, access bool, exists bool, stopped bool, err error) {
+	worldp, room, access, exists, err := this.worldOfDeviceLocked(token, id)
+	if err != nil || !access || !exists {
+		return world, device, access, exists, false, err
+	}
+	device.World = worldp.Id
+	device.Room = room.Id
+	world, stopped, err = this.beginEditLocked(worldp)
+	if err != nil {
+		return world, device, true, true, stopped, err
+	}
+	device.Device = world.Rooms[room.Id].Devices[id]
+	return world, device, true, true, stopped, nil
+}
+
 func (this *StateRepo) CreateDevice(token sc_jwt.Token, msg CreateDeviceRequest) (device DeviceResponse, access bool, worldAndExists bool, err error) {
-	room, access, worldAndExists, err := this.ReadRoom(token, msg.Room)
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	world, room, access, worldAndExists, stopped, err := this.beginRoomEditLocked(token, msg.Room)
+	if stopped {
+		defer this.Start()
+	}
 	if err != nil || !access || !worldAndExists {
 		return device, access, worldAndExists, err
 	}
@@ -203,12 +312,20 @@ func (this *StateRepo) CreateDevice(token sc_jwt.Token, msg CreateDeviceRequest)
 	device.World = room.World
 	device.Room = msg.Room
 	device.Device.ChangeRoutines = map[string]ChangeRoutine{}
-	err = this.DevUpdateDevice(device.World, device.Room, device.Device)
+	model, err := withDevice(world, device.Room, device.Device)
+	if err == nil {
+		err = this.storeWorldLocked(model)
+	}
 	return device, true, true, err
 }
 
 func (this *StateRepo) UpdateDevice(token sc_jwt.Token, msg UpdateDeviceRequest) (device DeviceResponse, access bool, exists bool, err error) {
-	device, access, exists, err = this.ReadDevice(token, msg.Id)
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	world, device, access, exists, stopped, err := this.beginDeviceEditLocked(token, msg.Id)
+	if stopped {
+		defer this.Start()
+	}
 	if err != nil || !access || !exists {
 		return
 	}
@@ -225,67 +342,110 @@ func (this *StateRepo) UpdateDevice(token sc_jwt.Token, msg UpdateDeviceRequest)
 			return device, true, true, err
 		}
 	}
-	err = this.DevUpdateDevice(device.World, device.Room, device.Device)
+	model, err := withDevice(world, device.Room, device.Device)
+	if err == nil {
+		err = this.storeWorldLocked(model)
+	}
 	return device, true, true, err
 }
 
 func (this *StateRepo) DeleteDevice(token sc_jwt.Token, id string) (device DeviceResponse, access bool, exists bool, err error) {
-	device, access, exists, err = this.ReadDevice(token, id)
+	device, access, exists, err = this.removeDevice(token, id)
+	//outside the lock, so the device-manager call holds up no api change or command; only a removed device gets here without error
+	if err == nil && access && exists {
+		if externalErr := this.DeleteExternalDevice(token, device.Device.ExternalRef); externalErr != nil {
+			util.Logger.Warn("unable to delete the platform device of a deleted device", attributes.ErrorKey, externalErr, "external_ref", device.Device.ExternalRef)
+		}
+	}
+	return device, access, exists, err
+}
+
+// removeDevice is the world change of DeleteDevice.
+func (this *StateRepo) removeDevice(token sc_jwt.Token, id string) (device DeviceResponse, access bool, exists bool, err error) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	world, device, access, exists, stopped, err := this.beginDeviceEditLocked(token, id)
+	if stopped {
+		defer this.Start()
+	}
 	if err != nil || !access || !exists {
 		return
 	}
-	world, exists, err := this.DevGetWorld(device.World)
-	if err != nil {
-		return
-	}
-	if !exists {
-		err = errors.New("inconsistent world existence read")
-		return
-	}
 	delete(world.Rooms[device.Room].Devices, device.Device.Id)
-	err = this.DevUpdateWorld(world) //update world is more efficient than update room
-	if err == nil {
-		this.DeleteExternalDevice(token, device.Device.ExternalRef)
-	}
+	err = this.storeEditLocked(world)
 	return device, true, true, err
 }
 
-func (this *StateRepo) ReadService(token sc_jwt.Token, id string) (service ServiceResponse, access bool, exists bool, err error) {
-	this.mux.RLock()
-	defer this.mux.RUnlock()
-	devicep, exists := this.serviceDeviceIndex[id]
+// worldOfServiceLocked is the lookup and owner check of ReadService; the caller holds this.mux.
+func (this *StateRepo) worldOfServiceLocked(token sc_jwt.Token, id string) (world *World, room *Room, device *Device, access bool, exists bool, err error) {
+	device, exists = this.serviceDeviceIndex[id]
 	if !exists {
-		return service, false, exists, nil
+		return nil, nil, nil, false, exists, nil
 	}
-	world, exists := this.deviceWorldIndex[devicep.Id]
+	world, exists = this.deviceWorldIndex[device.Id]
 	if !exists {
-		return service, false, exists, errors.New("inconsistent deviceWorldIndex")
+		return nil, nil, device, false, exists, errors.New("inconsistent deviceWorldIndex")
 	}
-	world.mux.Lock()
-	defer world.mux.Unlock()
 	if world.Owner != token.GetUserId() {
-		return service, false, exists, nil
+		return world, nil, device, false, exists, nil
 	}
-
-	room, exists := this.deviceRoomIndex[devicep.Id]
+	room, exists = this.deviceRoomIndex[device.Id]
 	if !exists {
-		return service, false, exists, errors.New("inconsistent deviceRoomIndex")
+		return world, nil, device, false, exists, errors.New("inconsistent deviceRoomIndex")
 	}
+	return world, room, device, true, true, nil
+}
 
+// serviceResponse is what ReadService returns for service id of device in room of world.
+func serviceResponse(world *World, room *Room, device *Device, id string) (service ServiceResponse) {
 	service.World = world.Id
 	service.Room = room.Id
-	service.Device = devicep.Id
-	serviceModel := devicep.Services[id]
+	service.Device = device.Id
+	serviceModel := device.Services[id]
 	service.Service.Id = serviceModel.Id
 	service.Service.ExternalRef = serviceModel.ExternalRef
 	service.Service.Name = serviceModel.Name
 	service.Service.Code = serviceModel.Code
 	service.Service.SensorInterval = serviceModel.SensorInterval
-	return service, true, true, err
+	return service
+}
+
+func (this *StateRepo) ReadService(token sc_jwt.Token, id string) (service ServiceResponse, access bool, exists bool, err error) {
+	this.mux.RLock()
+	defer this.mux.RUnlock()
+	world, room, device, access, exists, err := this.worldOfServiceLocked(token, id)
+	if err != nil || !access || !exists {
+		return service, access, exists, err
+	}
+	return serviceResponse(world, room, device, id), true, true, nil
+}
+
+// beginServiceEditLocked is ReadService followed by ReadDevice of its device for a mutator, returning the whole
+// world snapshot the device is taken from; the caller holds this.mux and calls Start when stopped is true.
+func (this *StateRepo) beginServiceEditLocked(token sc_jwt.Token, id string) (world WorldMsg, service ServiceResponse, device DeviceResponse, access bool, exists bool, stopped bool, err error) {
+	worldp, room, devicep, access, exists, err := this.worldOfServiceLocked(token, id)
+	if err != nil || !access || !exists {
+		return world, service, device, access, exists, false, err
+	}
+	//a service is only ever replaced with its world, so its fields are read like ReadService reads them
+	service = serviceResponse(worldp, room, devicep, id)
+	device.World = worldp.Id
+	device.Room = room.Id
+	world, stopped, err = this.beginEditLocked(worldp)
+	if err != nil {
+		return world, service, device, true, true, stopped, err
+	}
+	device.Device = world.Rooms[room.Id].Devices[devicep.Id]
+	return world, service, device, true, true, stopped, nil
 }
 
 func (this *StateRepo) CreateService(token sc_jwt.Token, msg CreateServiceRequest) (service ServiceResponse, access bool, worldAndExists bool, err error) {
-	device, access, worldAndExists, err := this.ReadDevice(token, msg.Device)
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	world, device, access, worldAndExists, stopped, err := this.beginDeviceEditLocked(token, msg.Device)
+	if stopped {
+		defer this.Start()
+	}
 	if err != nil || !access || !worldAndExists {
 		return service, access, worldAndExists, err
 	}
@@ -308,7 +468,10 @@ func (this *StateRepo) CreateService(token sc_jwt.Token, msg CreateServiceReques
 	if err != nil {
 		return service, access, worldAndExists, err
 	}
-	err = this.DevUpdateDevice(service.World, service.Room, device.Device)
+	model, err := withDevice(world, service.Room, device.Device)
+	if err == nil {
+		err = this.storeWorldLocked(model)
+	}
 	return service, true, true, err
 }
 
@@ -322,11 +485,12 @@ func (this *StateRepo) PopulateServiceService(token sc_jwt.Token, serviceMsg Upd
 }
 
 func (this *StateRepo) UpdateService(token sc_jwt.Token, msg UpdateServiceRequest) (service ServiceResponse, access bool, exists bool, err error) {
-	service, access, exists, err = this.ReadService(token, msg.Id)
-	if err != nil || !access || !exists {
-		return
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	world, service, device, access, exists, stopped, err := this.beginServiceEditLocked(token, msg.Id)
+	if stopped {
+		defer this.Start()
 	}
-	device, access, exists, err := this.ReadDevice(token, service.Device)
 	if err != nil || !access || !exists {
 		return service, access, exists, err
 	}
@@ -338,21 +502,28 @@ func (this *StateRepo) UpdateService(token sc_jwt.Token, msg UpdateServiceReques
 	if err != nil {
 		return service, access, exists, err
 	}
-	err = this.DevUpdateDevice(service.World, service.Room, device.Device)
+	model, err := withDevice(world, service.Room, device.Device)
+	if err == nil {
+		err = this.storeWorldLocked(model)
+	}
 	return service, true, true, err
 }
 
 func (this *StateRepo) DeleteService(token sc_jwt.Token, id string) (service ServiceResponse, access bool, exists bool, err error) {
-	service, access, exists, err = this.ReadService(token, id)
-	if err != nil || !access || !exists {
-		return
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	world, service, device, access, exists, stopped, err := this.beginServiceEditLocked(token, id)
+	if stopped {
+		defer this.Start()
 	}
-	device, access, exists, err := this.ReadDevice(token, service.Device)
 	if err != nil || !access || !exists {
 		return service, access, exists, err
 	}
 	delete(device.Device.Services, service.Service.Id)
-	err = this.DevUpdateDevice(device.World, device.Room, device.Device)
+	model, err := withDevice(world, device.Room, device.Device)
+	if err == nil {
+		err = this.storeWorldLocked(model)
+	}
 	return service, true, true, err
 }
 
@@ -380,6 +551,7 @@ func (this *StateRepo) CreateDeviceByType(token sc_jwt.Token, msg CreateDeviceBy
 	result.World = room.World
 	result.Room = msg.Room
 	result.Device.Services = services
+	//the device-manager calls above stay outside the lock; DevUpdateDevice re-reads the world under it
 	err = this.DevUpdateDevice(result.World, result.Room, result.Device)
 	return result, true, true, err
 }
@@ -441,11 +613,17 @@ func (this *StateRepo) CreateChangeRoutine(token sc_jwt.Token, msg CreateChangeR
 	}
 	routine := ChangeRoutine{Interval: msg.Interval, Code: msg.Code, Id: uid.String()}
 	result = ChangeRoutineResponse{Id: routine.Id, Code: routine.Code, Interval: routine.Interval, RefId: msg.RefId, RefType: msg.RefType}
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	var stopped bool
 	// the cases assign the named results instead of shadowing them, so a failed update reaches the caller
 	switch msg.RefType {
 	case "world":
 		var world WorldMsg
-		world, access, exists, err = this.ReadWorld(token, msg.RefId)
+		world, access, exists, stopped, err = this.beginWorldEditLocked(token, msg.RefId)
+		if stopped {
+			defer this.Start()
+		}
 		if err != nil || !access || !exists {
 			return result, access, exists, err
 		}
@@ -453,10 +631,14 @@ func (this *StateRepo) CreateChangeRoutine(token sc_jwt.Token, msg CreateChangeR
 			world.ChangeRoutines = map[string]ChangeRoutine{}
 		}
 		world.ChangeRoutines[routine.Id] = routine
-		err = this.DevUpdateWorld(world)
+		err = this.storeEditLocked(world)
 	case "room":
+		var world WorldMsg
 		var room RoomResponse
-		room, access, exists, err = this.ReadRoom(token, msg.RefId)
+		world, room, access, exists, stopped, err = this.beginRoomEditLocked(token, msg.RefId)
+		if stopped {
+			defer this.Start()
+		}
 		if err != nil || !access || !exists {
 			return result, access, exists, err
 		}
@@ -464,10 +646,14 @@ func (this *StateRepo) CreateChangeRoutine(token sc_jwt.Token, msg CreateChangeR
 			room.Room.ChangeRoutines = map[string]ChangeRoutine{}
 		}
 		room.Room.ChangeRoutines[routine.Id] = routine
-		err = this.DevUpdateRoom(room.World, room.Room)
+		err = this.storeRoomLocked(world, room.Room)
 	case "device":
+		var world WorldMsg
 		var device DeviceResponse
-		device, access, exists, err = this.ReadDevice(token, msg.RefId)
+		world, device, access, exists, stopped, err = this.beginDeviceEditLocked(token, msg.RefId)
+		if stopped {
+			defer this.Start()
+		}
 		if err != nil || !access || !exists {
 			return result, access, exists, err
 		}
@@ -475,50 +661,111 @@ func (this *StateRepo) CreateChangeRoutine(token sc_jwt.Token, msg CreateChangeR
 			device.Device.ChangeRoutines = map[string]ChangeRoutine{}
 		}
 		device.Device.ChangeRoutines[routine.Id] = routine
-		err = this.DevUpdateDevice(device.World, device.Room, device.Device)
+		err = this.storeDeviceLocked(world, device.Room, device.Device)
 	default:
 		err = errors.New("unknown ref type")
 	}
 	return result, true, true, err
 }
 
+// storeRoomLocked stores world with room put in; the caller holds this.mux and has stopped the routines.
+func (this *StateRepo) storeRoomLocked(world WorldMsg, room RoomMsg) error {
+	model, err := withRoom(world, room)
+	if err != nil {
+		return err
+	}
+	return this.storeWorldLocked(model)
+}
+
+// storeDeviceLocked stores world with device put into room roomId; the caller holds this.mux and has stopped the routines.
+func (this *StateRepo) storeDeviceLocked(world WorldMsg, roomId string, device DeviceMsg) error {
+	model, err := withDevice(world, roomId, device)
+	if err != nil {
+		return err
+	}
+	return this.storeWorldLocked(model)
+}
+
+// changeRoutineEdit is where in a world snapshot a routine lives, as beginChangeRoutineEditLocked found it.
+type changeRoutineEdit struct {
+	world  WorldMsg
+	room   RoomResponse
+	device DeviceResponse
+}
+
+// routines returns the routine map of the routine's ref in the snapshot.
+func (this *changeRoutineEdit) routines(refType string) map[string]ChangeRoutine {
+	switch refType {
+	case "world":
+		return this.world.ChangeRoutines
+	case "room":
+		return this.room.Room.ChangeRoutines
+	case "device":
+		return this.device.Device.ChangeRoutines
+	}
+	return nil
+}
+
+// store writes the snapshot back the way the routine's ref type was always written.
+func (this *StateRepo) storeChangeRoutineEditLocked(refType string, edit changeRoutineEdit) error {
+	switch refType {
+	case "world":
+		return this.storeEditLocked(edit.world)
+	case "room":
+		return this.storeRoomLocked(edit.world, edit.room.Room)
+	case "device":
+		return this.storeDeviceLocked(edit.world, edit.device.Room, edit.device.Device)
+	}
+	return errors.New("unknown ref type")
+}
+
+// beginChangeRoutineEditLocked is ReadChangeRoutine for a mutator, returning the world snapshot the routine is taken from;
+// the caller holds this.mux and calls Start when stopped is true.
+func (this *StateRepo) beginChangeRoutineEditLocked(token sc_jwt.Token, id string) (edit changeRoutineEdit, routine ChangeRoutineResponse, access bool, exists bool, stopped bool, err error) {
+	index, exists := this.changeRoutineIndex[id]
+	if !exists {
+		return edit, routine, access, exists, false, err
+	}
+	routine.RefType = index.RefType
+	routine.RefId = index.RefId
+	routine.Id = id
+	switch routine.RefType {
+	case "world":
+		edit.world, access, exists, stopped, err = this.beginWorldEditLocked(token, routine.RefId)
+	case "room":
+		edit.world, edit.room, access, exists, stopped, err = this.beginRoomEditLocked(token, routine.RefId)
+	case "device":
+		edit.world, edit.device, access, exists, stopped, err = this.beginDeviceEditLocked(token, routine.RefId)
+	default:
+		return edit, routine, true, true, false, errors.New("unknown ref type")
+	}
+	if err != nil || !access || !exists {
+		return edit, routine, access, exists, stopped, err
+	}
+	found, ok := edit.routines(routine.RefType)[routine.Id]
+	if !ok {
+		return edit, routine, access, exists, stopped, errors.New("inconsistent routine id existence")
+	}
+	routine.Code = found.Code
+	routine.Interval = found.Interval
+	return edit, routine, true, true, stopped, nil
+}
+
 func (this *StateRepo) UpdateChangeRoutine(token sc_jwt.Token, msg UpdateChangeRoutineRequest) (routine ChangeRoutineResponse, access bool, exists bool, err error) {
-	routine, access, exists, err = this.ReadChangeRoutine(token, msg.Id)
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	edit, routine, access, exists, stopped, err := this.beginChangeRoutineEditLocked(token, msg.Id)
+	if stopped {
+		defer this.Start()
+	}
 	if err != nil || !access || !exists {
 		return routine, access, exists, err
 	}
-	changeRoutine := ChangeRoutine{Interval: msg.Interval, Code: msg.Code, Id: msg.Id}
+	changeRoutine := ChangeRoutine(msg)
 	routine.Code = changeRoutine.Code
 	routine.Interval = changeRoutine.Interval
-	// the cases assign the named results instead of shadowing them, so a failed update reaches the caller
-	switch routine.RefType {
-	case "world":
-		var world WorldMsg
-		world, access, exists, err = this.ReadWorld(token, routine.RefId)
-		if err != nil || !access || !exists {
-			return routine, access, exists, err
-		}
-		world.ChangeRoutines[msg.Id] = changeRoutine
-		err = this.DevUpdateWorld(world)
-	case "room":
-		var room RoomResponse
-		room, access, exists, err = this.ReadRoom(token, routine.RefId)
-		if err != nil || !access || !exists {
-			return routine, access, exists, err
-		}
-		room.Room.ChangeRoutines[msg.Id] = changeRoutine
-		err = this.DevUpdateRoom(room.World, room.Room)
-	case "device":
-		var device DeviceResponse
-		device, access, exists, err = this.ReadDevice(token, routine.RefId)
-		if err != nil || !access || !exists {
-			return routine, access, exists, err
-		}
-		device.Device.ChangeRoutines[msg.Id] = changeRoutine
-		err = this.DevUpdateDevice(device.World, device.Room, device.Device)
-	default:
-		err = errors.New("unknown ref type")
-	}
+	edit.routines(routine.RefType)[msg.Id] = changeRoutine
+	err = this.storeChangeRoutineEditLocked(routine.RefType, edit)
 	return routine, true, true, err
 }
 
@@ -581,40 +828,18 @@ func (this *StateRepo) ReadChangeRoutine(token sc_jwt.Token, id string) (routine
 }
 
 func (this *StateRepo) DeleteChangeRoutine(token sc_jwt.Token, id string) (routine ChangeRoutineResponse, access bool, exists bool, err error) {
-	routine, access, exists, err = this.ReadChangeRoutine(token, id)
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	edit, routine, access, exists, stopped, err := this.beginChangeRoutineEditLocked(token, id)
+	if stopped {
+		defer this.Start()
+	}
 	if err != nil || !access || !exists {
 		return
 	}
-	// the cases assign the named results instead of shadowing them, so a failed update reaches the caller.
-	// The DevUpdate* calls stop every routine and restart them from this.Worlds, which drops the deleted one's ticker and index entry.
-	switch routine.RefType {
-	case "world":
-		var world WorldMsg
-		world, access, exists, err = this.ReadWorld(token, routine.RefId)
-		if err != nil || !access || !exists {
-			return routine, access, exists, err
-		}
-		delete(world.ChangeRoutines, routine.Id)
-		err = this.DevUpdateWorld(world)
-	case "room":
-		var room RoomResponse
-		room, access, exists, err = this.ReadRoom(token, routine.RefId)
-		if err != nil || !access || !exists {
-			return routine, access, exists, err
-		}
-		delete(room.Room.ChangeRoutines, routine.Id)
-		err = this.DevUpdateRoom(room.World, room.Room)
-	case "device":
-		var device DeviceResponse
-		device, access, exists, err = this.ReadDevice(token, routine.RefId)
-		if err != nil || !access || !exists {
-			return routine, access, exists, err
-		}
-		delete(device.Device.ChangeRoutines, routine.Id)
-		err = this.DevUpdateDevice(device.World, device.Room, device.Device)
-	default:
-		err = errors.New("unknown ref type")
-	}
+	// storing stops every routine and restarts them from this.Worlds, which drops the deleted one's ticker and index entry
+	delete(edit.routines(routine.RefType), routine.Id)
+	err = this.storeChangeRoutineEditLocked(routine.RefType, edit)
 	return routine, true, true, err
 }
 

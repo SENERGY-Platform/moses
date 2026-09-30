@@ -396,13 +396,14 @@ func TestAStaleRoutineRunDoesNotOverwriteAWorldUpdate(t *testing.T) {
 	}
 }
 
-// A service command run that starts between the snapshot DevUpdateRoom and
-// DevUpdateDevice take and the moment they store the world holds the old world
-// too, and must not overwrite the update either.
+// A service command run that is queued while DevUpdateRoom or DevUpdateDevice
+// waits for the write lock must run on the updated world: the old code read the
+// world under one write lock and stored it under a second, and a run admitted
+// in between held the old world and overwrote the update.
 func TestAStaleServiceRunDoesNotOverwriteARoomOrDeviceUpdate(t *testing.T) {
 	cases := []struct {
 		name string
-		// frame is the update's own function, where it waits for the write lock after its snapshot
+		// frame is the update's own function, where it waits for the write lock
 		frame    string
 		update   func(repo *StateRepo, snapshot WorldMsg) error
 		routines func(world World) map[string]ChangeRoutine
@@ -470,42 +471,43 @@ func TestAStaleServiceRunDoesNotOverwriteARoomOrDeviceUpdate(t *testing.T) {
 			hold.waitEntered(t)
 			done := make(chan error, 1)
 			update := goSpawn(func() { done <- tc.update(repo, snapshot) })
-			waitInStack(t, update, "to the snapshot's write lock", inFrames(".(*StateRepo).DevGetWorld(", "sync.(*RWMutex).Lock("))
+			waitInStack(t, update, "to the write lock", inFrames(tc.frame, "sync.(*RWMutex).Lock("))
 			//a reader queued behind a pending writer is admitted when that writer unlocks,
-			//so the late run starts right after the snapshot and before the update locks again
+			//so the late run starts as soon as the update, or the old code's snapshot, is done
 			lateDone := make(chan error, 1)
 			lateRun := goSpawn(func() { _, err := repo.RunService("late", nil); lateDone <- err })
 			waitInStack(t, lateRun, "to the read lock", inFrames(".(*StateRepo).RunService(", "sync.(*RWMutex).RLock("))
 			hold.open()
 			late.waitEntered(t)
-			//the late run holds the read lock, so the update waits here for the swap: the
-			//old code has stored the new world by then, the fixed code has not yet
-			waitInStack(t, update, "to the swap's write lock", func(stack string) bool {
-				return inFrames(tc.frame, "sync.(*RWMutex).Lock(")(stack) && !strings.Contains(stack, ".(*StateRepo).DevGetWorld(")
-			})
 			late.open()
 			for _, ch := range []<-chan error{done, holdDone, lateDone} {
 				if err := awaitResult(t, ch); err != nil {
 					t.Fatal(err)
 				}
 			}
-			assertStaleWriteFirst(t, store.history(), func(write storeWrite) bool {
-				_, updated := tc.routines(write.world)["added"]
+			lateWrites := 0
+			for _, write := range store.history() {
 				room := write.world.Rooms["r"]
-				if room == nil || room.Devices["d"] == nil {
-					return false
+				if write.failed || room == nil || room.Devices["d"] == nil || room.Devices["d"].States["late"] == nil {
+					continue
 				}
-				return !updated && room.Devices["d"].States["late"] != nil
-			}, func(write storeWrite) bool {
-				_, updated := tc.routines(write.world)["added"]
-				return updated
-			})
+				lateWrites++
+				if _, updated := tc.routines(write.world)["added"]; !updated {
+					t.Fatal("the late run stored the world as it was before the update")
+				}
+			}
+			if lateWrites == 0 {
+				t.Fatal("interleaving not reached: the late run never stored its world")
+			}
 			world, exists := store.stored(t, "w")
 			if !exists {
 				t.Fatal("the world is gone from the store")
 			}
 			if _, ok := tc.routines(world)["added"]; !ok {
 				t.Fatal("the stored world lost the update")
+			}
+			if world.Rooms["r"].Devices["d"].States["late"] == nil {
+				t.Fatal("the stored world lost the late run's state")
 			}
 		})
 	}
