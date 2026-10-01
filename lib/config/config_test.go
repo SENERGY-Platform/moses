@@ -340,6 +340,10 @@ func TestLoadConfigLocationLoadsTheShippedConfigJson(t *testing.T) {
 	if config.PlatformHttpTimeout != 10*time.Second {
 		t.Errorf("PlatformHttpTimeout: expected 10s from platform_http_timeout=10000000000, got %v", config.PlatformHttpTimeout)
 	}
+	// no allowlist by default: any public host, the internal-address refusal applies regardless
+	if config.ScriptHttpAllowedHosts != "" {
+		t.Errorf("ScriptHttpAllowedHosts: expected the shipped empty list, got %q", config.ScriptHttpAllowedHosts)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -398,6 +402,7 @@ func TestConfigFieldsMapToTheExpectedEnvironmentVariableNames(t *testing.T) {
 		"IotCacheUrls":              "IOT_CACHE_URLS",
 		"JsTimeout":                 "JS_TIMEOUT",
 		"ScriptCrashDir":            "SCRIPT_CRASH_DIR",
+		"ScriptHttpAllowedHosts":    "SCRIPT_HTTP_ALLOWED_HOSTS",
 		"JwtExpiration":             "JWT_EXPIRATION",
 		"JwtIssuer":                 "JWT_ISSUER",
 		"JwtPrivateKey":             "JWT_PRIVATE_KEY",
@@ -935,6 +940,22 @@ func TestPlatformHttpTimeoutTakesADurationStringFromTheEnvironment(t *testing.T)
 	t.Setenv("PLATFORM_HTTP_TIMEOUT", "3000000000")
 	if _, err := LoadConfigLocation(location); err == nil {
 		t.Fatal("PLATFORM_HTTP_TIMEOUT=3000000000: expected an error for the missing unit, got nil")
+	}
+}
+
+// SCRIPT_HTTP_ALLOWED_HOSTS replaces the file's list as one plain string; the
+// comma split is the script http client's.
+func TestScriptHttpAllowedHostsComesFromTheEnvironment(t *testing.T) {
+	neutralizeConfigEnv(t)
+	location := writeConfigFile(t, `{"script_http_allowed_hosts": "file.example"}`)
+
+	t.Setenv("SCRIPT_HTTP_ALLOWED_HOSTS", "a.example, b.example")
+	config, err := LoadConfigLocation(location)
+	if err != nil {
+		t.Fatalf("SCRIPT_HTTP_ALLOWED_HOSTS: expected no error, got %v", err)
+	}
+	if config.ScriptHttpAllowedHosts != "a.example, b.example" {
+		t.Errorf("SCRIPT_HTTP_ALLOWED_HOSTS: expected the variable's value, got %q", config.ScriptHttpAllowedHosts)
 	}
 }
 

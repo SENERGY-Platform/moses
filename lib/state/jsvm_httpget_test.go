@@ -37,7 +37,7 @@ func TestLegacyHttpGetEndsTheRunAtItsTimeout(t *testing.T) {
 	done := make(chan error, 1)
 	started := time.Now()
 	go func() {
-		done <- run(fmt.Sprintf(`moses.world.state.set("key", httpGet(%q));`, gate.url), repo.getJsWorldApi(world), timeout, world.mux, nil, "w", "c")
+		done <- run(fmt.Sprintf(`moses.world.state.set("key", httpGet(%q));`, gate.url), repo.getJsWorldApi(world), timeout, world.mux, nil, "w", "c", repo.ScriptHttp)
 	}()
 	select {
 	case err := <-done:
@@ -86,7 +86,7 @@ func TestLegacyHttpGetBudgetCountsFromTheRunsStart(t *testing.T) {
 	done := make(chan error, 1)
 	started := time.Now()
 	runner := goSpawn(func() {
-		done <- run(fmt.Sprintf(`moses.world.state.set("key", httpGet(%q));`, server.URL), repo.getJsWorldApi(world), timeout, world.mux, nil, "w", "c")
+		done <- run(fmt.Sprintf(`moses.world.state.set("key", httpGet(%q));`, server.URL), repo.getJsWorldApi(world), timeout, world.mux, nil, "w", "c", repo.ScriptHttp)
 	})
 	waitInStack(t, runner, "to the world mutex", inFrames("state.run(", "sync.(*Mutex).Lock("))
 	//how long the other run holds the world, not an interleaving
@@ -127,7 +127,7 @@ func TestLegacyHttpGetReturnsTheBodyOrAnEmptyString(t *testing.T) {
 	got := []string{}
 	moses := map[string]interface{}{"got": func(value string) { got = append(got, value) }}
 	code := fmt.Sprintf(`moses.got(httpGet(%q)); moses.got(httpGet(%q));`, server.URL, refusedUrl)
-	if err := run(code, moses, time.Second, nil, nil, "w", "c"); err != nil {
+	if err := run(code, moses, time.Second, nil, nil, "w", "c", loopbackScriptHTTP(t)); err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 2 || got[0] != "body" || got[1] != "" {
@@ -190,7 +190,7 @@ func TestLegacyHttpGetBodyAndAddressFailures(t *testing.T) {
 	t.Run("body stalls past the deadline", func(t *testing.T) {
 		got := []string{}
 		moses := map[string]interface{}{"got": func(value string) { got = append(got, value) }}
-		err := run(fmt.Sprintf(`moses.got(httpGet(%q));`, stalled.URL), moses, 300*time.Millisecond, nil, nil, "w", "c")
+		err := run(fmt.Sprintf(`moses.got(httpGet(%q));`, stalled.URL), moses, 300*time.Millisecond, nil, nil, "w", "c", loopbackScriptHTTP(t))
 		if err == nil || err.Error() != "Some code took to long" {
 			t.Fatalf("expected the timeout error, got %v", err)
 		}
@@ -202,7 +202,7 @@ func TestLegacyHttpGetBodyAndAddressFailures(t *testing.T) {
 		got := []string{}
 		moses := map[string]interface{}{"got": func(value string) { got = append(got, value) }}
 		code := fmt.Sprintf(`moses.got(httpGet(%q)); moses.got(httpGet("http://a b"));`, broken.URL)
-		if err := run(code, moses, time.Second, nil, nil, "w", "c"); err != nil {
+		if err := run(code, moses, time.Second, nil, nil, "w", "c", loopbackScriptHTTP(t)); err != nil {
 			t.Fatal(err)
 		}
 		if len(got) != 2 || got[0] != "" || got[1] != "" {

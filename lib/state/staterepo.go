@@ -23,6 +23,7 @@ import (
 	"github.com/SENERGY-Platform/moses/lib/config"
 	"github.com/SENERGY-Platform/moses/lib/crashbrake"
 	"github.com/SENERGY-Platform/moses/lib/platformhttp"
+	"github.com/SENERGY-Platform/moses/lib/scripthttp"
 	"github.com/SENERGY-Platform/moses/lib/util"
 	platform_connector_lib "github.com/SENERGY-Platform/platform-connector-lib"
 	"github.com/SENERGY-Platform/platform-connector-lib/connectionlog"
@@ -55,6 +56,10 @@ type StateRepo struct {
 	PlatformClients platformhttp.Clients
 	// externalWriteTimeout bounds one device-manager write; zero is platformhttp.WriteTimeout.
 	externalWriteTimeout time.Duration
+
+	// ScriptHttp serves the httpGet of every script; nil refuses every request.
+	// lib.New sets the client it shares with lib/runtime.
+	ScriptHttp *scripthttp.Client
 
 	// Brake records, per world, when a script run is in flight, so a fatal crash
 	// is quarantined on the next boot instead of looping. nil disables it. lib.New
@@ -461,7 +466,7 @@ func (this *StateRepo) HandleCommand(externalDeviceRef string, externalServiceRe
 
 	for _, service := range device.Services {
 		if service.ExternalRef == externalServiceRef {
-			err := run(service.Code, this.getJsCommandApi(world, room, device, cmdMsg, responder), this.Config.JsTimeout, world.mux, this.Brake, world.Id, service.Id)
+			err := run(service.Code, this.getJsCommandApi(world, room, device, cmdMsg, responder), this.Config.JsTimeout, world.mux, this.Brake, world.Id, service.Id, this.ScriptHttp)
 			if err != nil {
 				util.Logger.Warn("command handling failed", attributes.ErrorKey, err, "device", device.Name, "service", service.Name)
 			}
@@ -498,6 +503,6 @@ func (this *StateRepo) RunService(serviceId string, cmdMsg interface{}) (resp in
 	}
 	err = run(service.Code, this.getJsCommandApi(world, room, device, cmdMsg, func(respMsg interface{}) {
 		resp = respMsg
-	}), this.Config.JsTimeout, world.mux, this.Brake, world.Id, service.Id)
+	}), this.Config.JsTimeout, world.mux, this.Brake, world.Id, service.Id, this.ScriptHttp)
 	return
 }

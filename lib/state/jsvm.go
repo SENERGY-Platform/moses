@@ -20,26 +20,25 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"sync"
 	"time"
 
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/crashbrake"
 	"github.com/SENERGY-Platform/moses/lib/jsguard"
+	"github.com/SENERGY-Platform/moses/lib/scripthttp"
 	"github.com/SENERGY-Platform/moses/lib/util"
 	"github.com/robertkrimen/otto"
 )
 
-func startChangeRoutine(routine ChangeRoutine, callbacks map[string]interface{}, timeout time.Duration, mux sync.Locker, brake *crashbrake.Brake, worldId string, locationInfoForErrorLogging string) (ticker *time.Ticker, stop chan bool) {
+func startChangeRoutine(routine ChangeRoutine, callbacks map[string]interface{}, timeout time.Duration, mux sync.Locker, brake *crashbrake.Brake, worldId string, locationInfoForErrorLogging string, scriptHTTP *scripthttp.Client) (ticker *time.Ticker, stop chan bool) {
 	ticker = time.NewTicker(time.Duration(routine.Interval) * time.Second)
 	stop = make(chan bool)
 	go func() {
 		for {
 			select {
 			case <-ticker.C:
-				err := run(routine.Code, callbacks, timeout, mux, brake, worldId, routine.Id)
+				err := run(routine.Code, callbacks, timeout, mux, brake, worldId, routine.Id, scriptHTTP)
 				if err != nil {
 					util.Logger.Warn("change routine failed", attributes.ErrorKey, err, "location", locationInfoForErrorLogging, "code", trimCodeDefault(routine.Code))
 				}
@@ -69,7 +68,8 @@ var halt = errors.New("stop")
 // run executes a legacy script. The complexity check runs before otto parses
 // it, since otto's parser overflows the Go stack on deep nesting, a fatal crash;
 // this covers stored routines at load, on every tick, and service commands.
-func run(code string, moses interface{}, timeout time.Duration, mux sync.Locker, brake *crashbrake.Brake, worldId string, channelId string) (err error) {
+// scriptHTTP serves the script's httpGet; nil refuses every request.
+func run(code string, moses interface{}, timeout time.Duration, mux sync.Locker, brake *crashbrake.Brake, worldId string, channelId string, scriptHTTP *scripthttp.Client) (err error) {
 	if err := jsguard.ScriptTooComplex(code); err != nil {
 		return err
 	}
@@ -102,7 +102,7 @@ func run(code string, moses interface{}, timeout time.Duration, mux sync.Locker,
 		return
 	}
 
-	err = vm.Set("httpGet", httpGetUntil(deadline))
+	err = vm.Set("httpGet", httpGetUntil(scriptHTTP, deadline))
 	if err != nil {
 		util.Logger.Warn("unable to set up httpGet in javascript vm", attributes.ErrorKey, err)
 		return
@@ -123,29 +123,16 @@ func run(code string, moses interface{}, timeout time.Duration, mux sync.Locker,
 
 // httpGetUntil is the script's httpGet for a run whose requests end at deadline. A request cut off by the deadline
 // ends the run as the interrupt does, so the rest of the statement never sees an empty answer it would store.
-func httpGetUntil(deadline time.Time) func(endpoint string) string {
+func httpGetUntil(client *scripthttp.Client, deadline time.Time) func(endpoint string) string {
 	return func(endpoint string) string {
 		ctx, cancel := context.WithDeadline(context.Background(), deadline)
 		defer cancel()
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		body, err := client.Get(ctx, endpoint)
 		if err != nil {
-			util.Logger.Warn("httpGet failed", attributes.ErrorKey, err, "endpoint", endpoint)
-			return ""
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			util.Logger.Warn("httpGet failed", attributes.ErrorKey, err, "endpoint", endpoint)
 			haltOnDeadline(ctx)
 			return ""
 		}
-		defer func() { _ = resp.Body.Close() }()
-		temp, err := io.ReadAll(resp.Body)
-		if err != nil {
-			util.Logger.Warn("httpGet unable to read response body", attributes.ErrorKey, err, "endpoint", endpoint)
-			haltOnDeadline(ctx)
-			return ""
-		}
-		return string(temp)
+		return body
 	}
 }
 

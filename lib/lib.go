@@ -29,6 +29,7 @@ import (
 	"github.com/SENERGY-Platform/moses/lib/platformhttp"
 	"github.com/SENERGY-Platform/moses/lib/repo"
 	"github.com/SENERGY-Platform/moses/lib/runtime"
+	"github.com/SENERGY-Platform/moses/lib/scripthttp"
 	"github.com/SENERGY-Platform/moses/lib/state"
 	"github.com/SENERGY-Platform/moses/lib/util"
 	platform_connector_lib "github.com/SENERGY-Platform/platform-connector-lib"
@@ -51,6 +52,13 @@ func New(config config.Config, ctx context.Context) (err error) {
 	//it is refused here rather than discovered as missing data
 	if config.ProtocolSegmentName == runtime.EventTimeKey {
 		return errors.New("protocol_segment_name must not be " + runtime.EventTimeKey + ", which is reserved for the event time")
+	}
+
+	//one client for the httpGet of both runtimes, so both apply the same allowlist
+	scriptHTTP, err := scripthttp.New(config.ScriptHttpAllowedHosts)
+	if err != nil {
+		util.Logger.Error("unable to build the http client for scripts", attributes.ErrorKey, err)
+		return err
 	}
 
 	connector, err := platform_connector_lib.New(platform_connector_lib.Config{
@@ -168,7 +176,7 @@ func New(config config.Config, ctx context.Context) (err error) {
 	platformClients := newPlatformClients(config.PlatformHttpTimeout)
 
 	util.Logger.Info("loading states from the database")
-	staterepo := &state.StateRepo{Persistence: persistence, Config: config, Connector: connector, StateLogger: logger, PlatformClients: platformClients}
+	staterepo := &state.StateRepo{Persistence: persistence, Config: config, Connector: connector, StateLogger: logger, PlatformClients: platformClients, ScriptHttp: scriptHTTP}
 	err = staterepo.Load()
 	if err != nil {
 		util.Logger.Error("unable to load the state repo", attributes.ErrorKey, err)
@@ -207,7 +215,7 @@ func New(config config.Config, ctx context.Context) (err error) {
 	cleanup.add(staterepo.Shutdown)
 
 	util.Logger.Info("starting the environment runtime")
-	environmentRuntime := runtime.New(config, environments, environments.States(), environments.Datasets(), environments.HistoryJobs(), connector, logger, brake)
+	environmentRuntime := runtime.New(config, environments, environments.States(), environments.Datasets(), environments.HistoryJobs(), connector, logger, brake, scriptHTTP)
 	//before Start: even a decision the store failed to persist keeps its
 	//environment from starting into the same crash this boot
 	environmentRuntime.SetQuarantines(quarantinedEnvironments)

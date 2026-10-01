@@ -45,7 +45,7 @@ func TestAnOttoSinkCalledFromAGetterDoesNotNest(t *testing.T) {
 		moses.service.send(root);
 		if (calls !== 1) throw new Error("the getter ran " + calls + " times");
 	`
-	if err := run(code, api, 5*time.Second, nil, nil, "w", "s"); err != nil {
+	if err := run(code, api, 5*time.Second, nil, nil, "w", "s", nil); err != nil {
 		t.Fatal(err)
 	}
 	if responses != 1 {

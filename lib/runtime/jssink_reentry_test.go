@@ -59,7 +59,7 @@ func TestASinkCalledFromAGetterDoesNotNest(t *testing.T) {
 	var sent []interface{}
 	rt := &Runtime{jsTimeout: 5 * time.Second}
 	api := rt.jsApi(env, gen, binding, nil, func(value interface{}) { sent = append(sent, value) }, time.Now())
-	if err := runScriptInBraked(nil, nil, binding.script, api, rt.jsTimeout, nil, nil, "", "", &env.sink); err != nil {
+	if err := runScriptInBraked(nil, nil, binding.script, api, rt.jsTimeout, nil, nil, "", "", &env.sink, nil); err != nil {
 		t.Fatalf("expected the run to succeed, got %v", err)
 	}
 	if len(sent) != 1 {

@@ -23,9 +23,22 @@ import "errors"
 // converted, so conversions never nest and multiply the Go stack.
 var ErrSinkReentry = errors.New("a moses api call from inside another value conversion is not allowed")
 
-// SinkGuard marks a value conversion in progress. It holds no lock: every run of
-// one environment or world is serialised by that owner's mutex.
-type SinkGuard struct{ busy bool }
+// SinkGuard marks a value conversion in progress, and a run whose time is spent.
+// It holds no lock: every run of one environment or world is serialised by that
+// owner's mutex.
+type SinkGuard struct {
+	busy    bool
+	expired bool
+}
+
+// StartRun clears the mark of a previous run's spent time.
+func (this *SinkGuard) StartRun() { this.expired = false }
+
+// Expire marks the run's time as spent; its sinks write nothing until the next StartRun.
+func (this *SinkGuard) Expire() { this.expired = true }
+
+// Expired reports whether the current run's time is spent.
+func (this *SinkGuard) Expired() bool { return this.expired }
 
 // Enter reports false when a conversion is already in progress; otherwise the
 // caller must call Leave when its conversion ends.

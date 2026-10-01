@@ -34,7 +34,8 @@ func (this *StateRepo) StartWorld(world *World) (tickers []*time.Ticker, stops [
 				this.Config.JsTimeout,
 				world.mux,
 				this.Brake, world.Id,
-				fmt.Sprintf("world:%s, owner:%s", world.Name, world.Owner))
+				fmt.Sprintf("world:%s, owner:%s", world.Name, world.Owner),
+				this.ScriptHttp)
 			tickers = append(tickers, ticker)
 			stops = append(stops, stop)
 		}
@@ -61,7 +62,8 @@ func (this *StateRepo) StartRoom(world *World, room *Room) (tickers []*time.Tick
 				this.Config.JsTimeout,
 				world.mux,
 				this.Brake, world.Id,
-				fmt.Sprintf("world: %s, room:%s, owner:%s", world.Name, room.Name, world.Owner))
+				fmt.Sprintf("world: %s, room:%s, owner:%s", world.Name, room.Name, world.Owner),
+				this.ScriptHttp)
 			tickers = append(tickers, ticker)
 			stops = append(stops, stop)
 		}
@@ -94,7 +96,8 @@ func (this *StateRepo) StartDevice(world *World, room *Room, device *Device) (ti
 				this.Config.JsTimeout,
 				world.mux,
 				this.Brake, world.Id,
-				fmt.Sprintf("world: %s, room:%s, device:%s, owner:%s", world.Name, room.Name, device.Name, world.Owner))
+				fmt.Sprintf("world: %s, room:%s, device:%s, owner:%s", world.Name, room.Name, device.Name, world.Owner),
+				this.ScriptHttp)
 			tickers = append(tickers, ticker)
 			stops = append(stops, stop)
 		}
@@ -119,7 +122,8 @@ func (this *StateRepo) StartService(world *World, room *Room, device *Device, se
 			this.Config.JsTimeout,
 			world.mux,
 			this.Brake, world.Id,
-			fmt.Sprintf("world: %s, room:%s, device:%s, service:%s, owner:%s", world.Name, room.Name, device.Name, service.Name, world.Owner))
+			fmt.Sprintf("world: %s, room:%s, device:%s, service:%s, owner:%s", world.Name, room.Name, device.Name, service.Name, world.Owner),
+			this.ScriptHttp)
 		tickers = append(tickers, ticker)
 		stops = append(stops, stop)
 	}

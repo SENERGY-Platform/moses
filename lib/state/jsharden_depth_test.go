@@ -40,7 +40,7 @@ func TestOttoRefusesADeepValue(t *testing.T) {
 		try { JSON.stringify(a); } catch (e) { threw = (e instanceof RangeError); }
 		moses.world.state.set("stringifyThrew", threw ? 1 : 0);
 	`
-	if err := run(stringify, api, 5*time.Second, nil, nil, "", ""); err != nil {
+	if err := run(stringify, api, 5*time.Second, nil, nil, "", "", nil); err != nil {
 		t.Fatalf("stringify run failed: %v", err)
 	}
 	if !isOne(world.States["stringifyThrew"]) {
@@ -52,7 +52,7 @@ func TestOttoRefusesADeepValue(t *testing.T) {
 		moses.world.state.set("deep", a);
 		moses.world.state.set("shallow", 5);
 	`
-	if err := run(set, api, 5*time.Second, nil, nil, "", ""); err != nil {
+	if err := run(set, api, 5*time.Second, nil, nil, "", "", nil); err != nil {
 		t.Fatalf("set run failed: %v", err)
 	}
 	if _, stored := world.States["deep"]; stored {

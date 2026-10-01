@@ -43,6 +43,7 @@ import (
 	"github.com/SENERGY-Platform/moses/lib/domain"
 	"github.com/SENERGY-Platform/moses/lib/formula"
 	"github.com/SENERGY-Platform/moses/lib/repo"
+	"github.com/SENERGY-Platform/moses/lib/scripthttp"
 	"github.com/SENERGY-Platform/moses/lib/timeseries"
 	"github.com/SENERGY-Platform/moses/lib/util"
 	platform_connector_lib "github.com/SENERGY-Platform/platform-connector-lib"
@@ -81,6 +82,10 @@ type Runtime struct {
 	stateLogger   deviceStateLogger
 	jsTimeout     time.Duration
 	flushInterval time.Duration
+
+	// scriptHTTP serves every script's httpGet; nil refuses every request. New
+	// sets the client lib.New shares with the legacy runtime.
+	scriptHTTP *scripthttp.Client
 
 	// publishWorkers is how many readings a history run or a backfill has in
 	// flight at once, see publishpool.go.
@@ -172,13 +177,14 @@ type runningChannel struct {
 	binding channelBinding
 }
 
-func New(config config.Config, environments repo.Environments, states repo.States, datasets repo.Datasets, historyJobs repo.HistoryJobs, connector *platform_connector_lib.Connector, stateLogger deviceStateLogger, brake *crashbrake.Brake) *Runtime {
+func New(config config.Config, environments repo.Environments, states repo.States, datasets repo.Datasets, historyJobs repo.HistoryJobs, connector *platform_connector_lib.Connector, stateLogger deviceStateLogger, brake *crashbrake.Brake, scriptHTTP *scripthttp.Client) *Runtime {
 	result := newRuntime(config, environments, states, datasets, historyJobs, &connectorPublisher{
 		connector:   connector,
 		segmentName: config.ProtocolSegmentName,
 	})
 	result.brake = brake
 	result.stateLogger = stateLogger
+	result.scriptHTTP = scriptHTTP
 	if config.TimescaleWrapperUrl != "" {
 		result.fetcher = timeseries.New(config.TimescaleWrapperUrl)
 	}
@@ -1504,7 +1510,7 @@ func (this *Runtime) execute(env *environment, gen *generation, binding channelB
 		this.reportScriptFailure(env, binding, err)
 		return
 	}
-	err := runScriptInBraked(&env.scripts, gen, binding.script, this.jsApi(env, gen, binding, input, send, now), this.jsTimeout, &env.mux, this.brake, env.id, binding.channel.Id, &env.sink)
+	err := runScriptInBraked(&env.scripts, gen, binding.script, this.jsApi(env, gen, binding, input, send, now), this.jsTimeout, &env.mux, this.brake, env.id, binding.channel.Id, &env.sink, this.scriptHTTP)
 	if err != nil {
 		this.reportScriptFailure(env, binding, err)
 	}

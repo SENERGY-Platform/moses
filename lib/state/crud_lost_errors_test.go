@@ -102,6 +102,7 @@ func crudTestRepo(t *testing.T, persistence PersistenceInterface) *StateRepo {
 		Persistence: persistence,
 		Config:      config.Config{JsTimeout: time.Second},
 		StateLogger: &recordingConnectionLog{},
+		ScriptHttp:  loopbackScriptHTTP(t),
 	}
 	repo.Start()
 	//under the lock, so a cleanup after a failed test cannot stop the routines alongside an update still in Stop

@@ -51,7 +51,7 @@ func TestReadWorldsDoesNotRaceARunningScript(t *testing.T) {
 				return
 			default:
 			}
-			if err := run(code, api, time.Second, world.mux, nil, world.Id, "race"); err != nil {
+			if err := run(code, api, time.Second, world.mux, nil, world.Id, "race", nil); err != nil {
 				t.Errorf("the script failed: %v", err)
 				return
 			}

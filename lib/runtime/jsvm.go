@@ -29,10 +29,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"math/big"
-	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -42,6 +40,7 @@ import (
 	"github.com/SENERGY-Platform/go-service-base/struct-logger/attributes"
 	"github.com/SENERGY-Platform/moses/lib/crashbrake"
 	"github.com/SENERGY-Platform/moses/lib/jsguard"
+	"github.com/SENERGY-Platform/moses/lib/scripthttp"
 	"github.com/SENERGY-Platform/moses/lib/util"
 	"github.com/dop251/goja"
 	"github.com/dop251/goja/ast"
@@ -203,13 +202,14 @@ func runScript(program *goja.Program, moses interface{}, timeout time.Duration, 
 // declarations are only visible inside that block. And an integral number
 // arrives in Go as a float64, so a value above 2^53 is no longer exact.
 func runScriptIn(vms *scriptVMs, gen *generation, program *goja.Program, moses interface{}, timeout time.Duration, mux sync.Locker) error {
-	return runScriptInBraked(vms, gen, program, moses, timeout, mux, nil, "", "", nil)
+	return runScriptInBraked(vms, gen, program, moses, timeout, mux, nil, "", "", nil, nil)
 }
 
 // runScriptInBraked is runScriptIn plus the crash-brake entry marked in flight for
 // the duration of the run, inside the same lock, so a fatal crash names this
-// environment and goroutine on the next boot.
-func runScriptInBraked(vms *scriptVMs, gen *generation, program *goja.Program, moses interface{}, timeout time.Duration, mux sync.Locker, brake *crashbrake.Brake, environmentId string, channelId string, guard *jsguard.SinkGuard) error {
+// environment and goroutine on the next boot. scriptHTTP serves the script's
+// httpGet; nil refuses every request.
+func runScriptInBraked(vms *scriptVMs, gen *generation, program *goja.Program, moses interface{}, timeout time.Duration, mux sync.Locker, brake *crashbrake.Brake, environmentId string, channelId string, guard *jsguard.SinkGuard, scriptHTTP *scripthttp.Client) error {
 	if mux != nil {
 		mux.Lock()
 		defer mux.Unlock()
@@ -242,7 +242,22 @@ func runScriptInBraked(vms *scriptVMs, gen *generation, program *goja.Program, m
 	if err := vm.Set("moses", moses); err != nil {
 		return err
 	}
-	if err := vm.Set("httpGet", httpGet); err != nil {
+	//httpGet's requests end with the run's timer, which is armed right below. A
+	//request cut off by it also marks the run, since goja checks the interrupt only
+	//between instructions and a promise job or a getter calls the sinks natively
+	deadline := time.Now().Add(timeout)
+	expired := false
+	if guard != nil {
+		guard.StartRun()
+	}
+	expire := func() {
+		expired = true
+		if guard != nil {
+			guard.Expire()
+		}
+		vm.Interrupt(ErrScriptTimeout)
+	}
+	if err := vm.Set("httpGet", httpGetUntil(scriptHTTP, deadline, expire)); err != nil {
 		util.Logger.Warn("unable to set up httpGet in javascript vm", attributes.ErrorKey, err)
 		return err
 	}
@@ -252,7 +267,7 @@ func runScriptInBraked(vms *scriptVMs, gen *generation, program *goja.Program, m
 	}
 
 	fired := make(chan struct{})
-	timer := time.AfterFunc(timeout, func() {
+	timer := time.AfterFunc(time.Until(deadline), func() {
 		if delay := timeoutCallbackDelay.Load(); delay > 0 {
 			time.Sleep(time.Duration(delay))
 		}
@@ -271,7 +286,7 @@ func runScriptInBraked(vms *scriptVMs, gen *generation, program *goja.Program, m
 	var interrupted *goja.InterruptedError
 	var overflow *goja.StackOverflowError
 	switch {
-	case errors.As(err, &interrupted):
+	case errors.As(err, &interrupted) || expired:
 		return ErrScriptTimeout
 	case late || errors.As(err, &overflow):
 	default:
@@ -413,18 +428,20 @@ func writeBounded(b *strings.Builder, value interface{}, limit int) {
 	}
 }
 
-// httpGet is part of the script surface a migrated script may already use.
-func httpGet(endpoint string) string {
-	resp, err := http.Get(endpoint)
-	if err != nil {
-		util.Logger.Warn("httpGet failed", attributes.ErrorKey, err, "endpoint", endpoint)
-		return ""
+// httpGetUntil is the script's httpGet for a run whose requests end at deadline.
+// A request cut off by it interrupts the run before the script's next
+// instruction, so a statement never stores the empty answer of a timed-out run.
+func httpGetUntil(client *scripthttp.Client, deadline time.Time, expire func()) func(endpoint string) string {
+	return func(endpoint string) string {
+		ctx, cancel := context.WithDeadline(context.Background(), deadline)
+		defer cancel()
+		body, err := client.Get(ctx, endpoint)
+		if err != nil {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				expire()
+			}
+			return ""
+		}
+		return body
 	}
-	defer resp.Body.Close()
-	temp, err := io.ReadAll(resp.Body)
-	if err != nil {
-		util.Logger.Warn("httpGet unable to read response body", attributes.ErrorKey, err, "endpoint", endpoint)
-		return ""
-	}
-	return string(temp)
 }

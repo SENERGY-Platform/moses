@@ -46,8 +46,9 @@ writes into the state maps.
 - `httpGet` in a legacy script shares that budget, counted from the same
   instant as the interrupt timer. A request that misses it ends the run the way
   the interrupt does (`panic(halt)`), so nothing of that statement is stored;
-  other request errors return `""`. Inside `try`, otto v0.4.0 reports the halt
-  as a `TypeError` instead of the timeout text.
+  other request errors and refused requests (`docs/script-limits.md`) return
+  `""`. Inside `try`, otto v0.4.0 reports the halt as a `TypeError` instead of
+  the timeout text.
 - An edit therefore waits for running scripts once. A command behind an edit
   can still wait about two script timeouts, when a routine re-ticks just before
   `Stop` and a run is queued on the world.

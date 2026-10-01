@@ -69,6 +69,10 @@ func (this *Runtime) jsApi(env *environment, gen *generation, binding channelBin
 					attributes.ErrorKey, err, "environment", env.id, "field", "send")
 				return nil
 			}
+			//after the conversion: a getter it ran may have spent the run's time in httpGet
+			if env.sink.Expired() {
+				return ErrScriptTimeout
+			}
 			send(jsNumber(converted))
 			return nil
 		},
@@ -149,6 +153,9 @@ func jsStateApi(env *environment, states func() map[string]interface{}) map[stri
 			target := states()
 			value, ok := target[name]
 			if !ok {
+				if env.sink.Expired() {
+					return 0
+				}
 				target[name] = 0
 				env.dirty = true
 				return 0
@@ -187,6 +194,10 @@ func jsStateApi(env *environment, states func() map[string]interface{}) map[stri
 			copied, err := jsguard.CopyPlainData(converted)
 			if err != nil {
 				return fmt.Errorf("state %q: %w", name, err)
+			}
+			//after the conversion: a getter it ran may have spent the run's time in httpGet
+			if env.sink.Expired() {
+				return ErrScriptTimeout
 			}
 			states()[name] = jsNumber(copied)
 			env.dirty = true

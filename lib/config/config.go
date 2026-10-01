@@ -55,6 +55,11 @@ type Config struct {
 	ScriptCrashDir      string `json:"script_crash_dir" env_var:"SCRIPT_CRASH_DIR"`
 	ProtocolSegmentName string `json:"protocol_segment_name" env_var:"PROTOCOL_SEGMENT_NAME"`
 
+	// ScriptHttpAllowedHosts is the comma separated list of host names a script's
+	// httpGet may fetch from; empty allows any host. Loopback, private, link-local
+	// and other non-public addresses are refused either way.
+	ScriptHttpAllowedHosts string `json:"script_http_allowed_hosts" env_var:"SCRIPT_HTTP_ALLOWED_HOSTS"`
+
 	// EnvironmentCollectionName holds the environment definitions of the new
 	// domain model and StateCollectionName their runtime state. They are separate
 	// collections from the legacy worlds, so both models can coexist during the

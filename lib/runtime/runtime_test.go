@@ -241,7 +241,7 @@ func TestTwoChannelsOfOneEnvironmentNeverRunAtTheSameTime(t *testing.T) {
 		scriptChannel("ch-1", domain.Sensor, 1, serviceRefOf("env-a"), code),
 		scriptChannel("ch-2", domain.Sensor, 1, "urn:infai:ses:service:env-a-2", code),
 	)
-	startRuntime(t, testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), &fakePublisher{})
+	startRuntimeWith(t, testConfig(time.Hour), newFakeEnvironments(env), newFakeStates(), &fakePublisher{}, loopbackScriptHTTP(t))
 
 	if !waitFor(6*time.Second, func() bool { arrived, _ := gate.stats(); return arrived >= 2 }) {
 		arrived, _ := gate.stats()
@@ -262,7 +262,7 @@ func TestTwoEnvironmentsRunAtTheSameTime(t *testing.T) {
 		testEnvironment("env-a", scriptChannel("ch-1", domain.Sensor, 1, serviceRefOf("env-a"), code)),
 		testEnvironment("env-b", scriptChannel("ch-1", domain.Sensor, 1, serviceRefOf("env-b"), code)),
 	)
-	startRuntime(t, testConfig(time.Hour), envs, newFakeStates(), &fakePublisher{})
+	startRuntimeWith(t, testConfig(time.Hour), envs, newFakeStates(), &fakePublisher{}, loopbackScriptHTTP(t))
 
 	if !waitFor(8*time.Second, func() bool { _, maxInflight := gate.stats(); return maxInflight >= 2 }) {
 		arrived, maxInflight := gate.stats()

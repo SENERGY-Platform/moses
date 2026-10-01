@@ -131,6 +131,32 @@ well under `JS_TIMEOUT` (2 s), so a pathological match overshoots the run by at
 most that. otto translates every pattern to Go's RE2 (`regexp`), which is linear
 and has no backtracking engine, so it needs no timeout.
 
+**httpGet** (`lib/scripthttp`, one client for both runtimes). A script's
+`httpGet(url)` fetches `http` and `https` urls only, and only hosts written in
+ASCII: the transport dials the IDNA form of any other name, which no allowlist
+comparison can predict. The address check runs on the resolved address of every
+connection, redirects included, so neither DNS nor a redirect reaches loopback,
+private (RFC 1918, `fc00::/7`), link-local (`169.254.0.0/16` with the cloud
+metadata address, `fe80::/10`), CGNAT (`100.64.0.0/10`), unspecified, multicast,
+broadcast, reserved or documentation space, nor their IPv4-mapped forms. A NAT64
+address in `64:ff9b::/96` (IPv4 in the last 32 bits) or a 6to4 address
+(`2002::/16`) counts as the IPv4 address it embeds; the local-use NAT64 prefix
+`64:ff9b:1::/48` is refused. No proxy from the
+environment is used. At most 3 redirects are followed.
+`SCRIPT_HTTP_ALLOWED_HOSTS` (comma-separated host names, empty = any public host)
+restricts the hosts on every hop; the address check applies to allowlisted hosts
+too, and an entry that is no host name or IP address stops the service at start.
+A body over 1 MiB, a refused request and a failed one all return `""`, never a
+truncated body. They are logged at warn with the host and a fixed reason, never
+the text of a url or net/http error, which can quote the query, a password or a
+`Location` header. A request ends with its run: on goja the budget starts with
+the run's timer, after the environment's lock; on otto it starts with the run,
+before the world's lock. A request that misses it ends the run as a timeout, and
+nothing of the run is written after it: goja checks its interrupt only between
+instructions, so the run is marked as well, and `send`, `state.set` and the
+seeding of `state.get` refuse a marked run even when a promise job or a getter
+reaches them natively.
+
 Request bodies are limited to 16 MiB for documents (environment `PUT`/`POST`,
 state `PATCH`, legacy world, room and device) and to 1 MiB for everything else
 that carries JSON. A larger body is refused with `413` before it is decoded.
@@ -261,8 +287,10 @@ report, so it is not started back into the same crash.
 - **A backtracking regexp still stalls its own environment.** The 250 ms timeout
   stops the match, but a script that fires many keeps the environment's lock and a
   CPU core for its whole 2 s run. The process and every other environment survive.
-- **httpGet has no timeout.** A `httpGet` to an endpoint that never answers holds
-  the environment's lock indefinitely; only that environment stalls.
+- **httpGet still holds the lock for the rest of the run.** A slow endpoint keeps
+  the environment's or world's lock until the run's timeout, as a busy loop does.
+  Without an allowlist a script can send GET requests to any public host from the
+  service's address.
 - **Legacy-world quarantine is not durable.** It is re-derived from the register
   each boot, so it holds across the crash it is meant for, but a clean restart in
   between lets a quarantined world run again. Environments persist their quarantine.

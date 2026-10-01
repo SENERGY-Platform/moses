@@ -42,7 +42,7 @@ func TestNativeToStringLoopIsQuarantinedByTheBrake(t *testing.T) {
 		if err != nil {
 			os.Exit(4)
 		}
-		_ = runScriptInBraked(nil, nil, program, map[string]interface{}{}, 5*time.Second, nil, brake, "env-tostring", "ch-1", nil)
+		_ = runScriptInBraked(nil, nil, program, map[string]interface{}{}, 5*time.Second, nil, brake, "env-tostring", "ch-1", nil, nil)
 		os.Exit(0)
 	}
 	dir := t.TempDir()

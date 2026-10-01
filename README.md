@@ -65,7 +65,7 @@ A script source runs with `moses` bound in the VM:
 - `moses.environment.state` — the context (`get(key)` / `set(key, value)`)
 - `moses.zone.state`, `moses.asset.state`, `moses.channel.input` / `moses.channel.send(value)`
 - navigation: `moses.environment.getRoom(zoneId)`, `moses.zone.getDevice(assetId)`
-- `httpGet(url)` as a global
+- `httpGet(url)` as a global: `http`/`https` to public addresses only (optionally only the hosts in `SCRIPT_HTTP_ALLOWED_HOSTS`), bodies up to 1 MiB, ending with the run's timeout; a refused or failed request returns `""` (`docs/script-limits.md`)
 
 `world`, `room`, `device` and `service` are aliases of `environment`, `zone`,
 `asset` and `channel` — migrated legacy scripts run verbatim.

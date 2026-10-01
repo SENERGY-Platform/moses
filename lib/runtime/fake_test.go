@@ -32,6 +32,7 @@ import (
 	"github.com/SENERGY-Platform/moses/lib/devices"
 	"github.com/SENERGY-Platform/moses/lib/domain"
 	"github.com/SENERGY-Platform/moses/lib/repo"
+	"github.com/SENERGY-Platform/moses/lib/scripthttp"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/mgocompat"
 )
@@ -956,11 +957,19 @@ func testPublishPool(t *testing.T, rt *Runtime) *publishPool {
 }
 
 // startRuntime builds a runtime on the fakes and stops it when the test ends.
+// Its scripts' httpGet refuses every request.
 func startRuntime(t *testing.T, cfg config.Config, envs *fakeEnvironments, states *fakeStates, publisher *fakePublisher) *Runtime {
+	t.Helper()
+	return startRuntimeWith(t, cfg, envs, states, publisher, nil)
+}
+
+// startRuntimeWith is startRuntime with scriptHTTP serving the scripts' httpGet.
+func startRuntimeWith(t *testing.T, cfg config.Config, envs *fakeEnvironments, states *fakeStates, publisher *fakePublisher, scriptHTTP *scripthttp.Client) *Runtime {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	rt := newRuntime(cfg, envs, states, nil, newFakeHistoryJobs(), publisher)
+	rt.scriptHTTP = scriptHTTP
 	if err := rt.Start(ctx); err != nil {
 		t.Fatalf("unable to start the runtime: %v", err)
 	}

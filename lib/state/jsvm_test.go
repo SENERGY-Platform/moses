@@ -64,7 +64,7 @@ func TestJsvmRun(t *testing.T) {
 		return testmoses.State[field]
 	}
 
-	err := run(script, testmoses, 2*time.Second, nil, nil, "", "")
+	err := run(script, testmoses, 2*time.Second, nil, nil, "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestJsvmTimeout(t *testing.T) {
 	testmoses := JsvmTestMoses{State: map[string]interface{}{}}
 	done := make(chan error, 1)
 	go func() {
-		done <- run(script, testmoses, 100*time.Millisecond, nil, nil, "", "")
+		done <- run(script, testmoses, 100*time.Millisecond, nil, nil, "", "", nil)
 	}()
 	select {
 	case err := <-done:

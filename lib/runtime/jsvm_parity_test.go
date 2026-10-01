@@ -124,7 +124,7 @@ func runOnOtto(code string, moses interface{}) error {
 	if err := vm.Set("moses", moses); err != nil {
 		return err
 	}
-	if err := vm.Set("httpGet", httpGet); err != nil {
+	if err := vm.Set("httpGet", noHttpGet); err != nil {
 		return err
 	}
 	_, err := vm.Run(code)
