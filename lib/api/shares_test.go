@@ -1241,6 +1241,67 @@ func storeWithGraphEnvironment() *fakeEnvironments {
 	return store
 }
 
+const testMeterGraph = "urn:infai:ses:graph:meter-1"
+
+// storeWithBothGraphs holds an environment saved since the meter graph exists,
+// so it owns both mirrors; storeWithGraphEnvironment is one stored before.
+func storeWithBothGraphs() *fakeEnvironments {
+	store := newFakeEnvironments()
+	env := sharedEnvironmentWithGraph()
+	env.ExternalMeterGraphRef = testMeterGraph
+	store.stored["env-1"] = env
+	return store
+}
+
+// The meter graph is one more graph: shared with the same accounts, and write
+// for the graph writers, through the same merge as the location graph.
+func TestSharingReachesBothGraphsAndGraphWritersWriteBoth(t *testing.T) {
+	store := storeWithBothGraphs()
+	shares := newFakeShares()
+	permissions := newFakePermissions("dev-1", "dev-2")
+	permissions.ownGraph(testGraph, "user-a")
+	permissions.ownGraph(testMeterGraph, "user-a")
+	router := testRouterWithShares(store, shares, nil, permissions)
+
+	resp := do(t, router, "PUT", "/environments/env-1/shares", "user-a", ShareRequest{
+		ShareTargets: ShareTargets{Users: []string{"demo-user", "other-user"}, Groups: []string{"/demo"}},
+		GraphWriters: &ShareTargets{Users: []string{"demo-user"}},
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if answer := sharesResponseOf(t, resp.Body.Bytes()); !answer.Graph || !answer.MeterGraph {
+		t.Errorf("the answer has to say that both graphs are shared, got %+v", answer)
+	}
+	for _, graph := range []string{testGraph, testMeterGraph} {
+		if rights := permissions.graphUserRights(graph, "demo-user"); !rights.Read || !rights.Execute || !rights.Write {
+			t.Errorf("%s: the graph writer holds read, execute and write, got %+v", graph, rights)
+		}
+		if rights := permissions.graphUserRights(graph, "other-user"); !rights.Read || rights.Write {
+			t.Errorf("%s: a shared account that is no graph writer reads only, got %+v", graph, rights)
+		}
+		if rights := permissions.graphGroupRights(graph, "/demo"); !rights.Read || !rights.Execute {
+			t.Errorf("%s: expected read and execute for the group, got %+v", graph, rights)
+		}
+		if rights := permissions.graphUserRights(graph, "user-a"); !rights.Administrate {
+			t.Errorf("%s: the owner must not be narrowed, got %+v", graph, rights)
+		}
+	}
+
+	read := do(t, router, "GET", "/environments/env-1/shares", "user-a", nil)
+	if !strings.Contains(read.Body.String(), `"meter_graph":true`) {
+		t.Errorf("the read has to say that the meter graph is shared, got %s", read.Body.String())
+	}
+
+	//and the withdrawal reaches the meter graph as well
+	if empty := do(t, router, "PUT", "/environments/env-1/shares", "user-a", ShareTargets{}); empty.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", empty.Code, empty.Body.String())
+	}
+	if permissions.graphKnowsUser(testMeterGraph, "demo-user") {
+		t.Error("the meter graph has to lose the entry with the devices")
+	}
+}
+
 func TestSharingReachesTheGraphOfTheEnvironment(t *testing.T) {
 	store := storeWithGraphEnvironment()
 	shares := newFakeShares()
@@ -1290,14 +1351,14 @@ func TestAnEnvironmentWithoutAGraphDoesNotTouchTheGraphTopic(t *testing.T) {
 	if resp.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
 	}
-	if answer := sharesResponseOf(t, resp.Body.Bytes()); answer.Graph {
+	if answer := sharesResponseOf(t, resp.Body.Bytes()); answer.Graph || answer.MeterGraph {
 		t.Error("an environment without a graph must not claim one is shared")
 	}
 	if permissions.sawTopic(graphsTopic) {
 		t.Error("no graph, no call to the graph topic")
 	}
 	answer := sharesResponseOf(t, do(t, router, "GET", "/environments/env-1/shares", "user-a", nil).Body.Bytes())
-	if answer.Graph {
+	if answer.Graph || answer.MeterGraph {
 		t.Error("the read has to say the same")
 	}
 }
@@ -1356,9 +1417,10 @@ func TestAFailingDeviceIsReportedAsADevice(t *testing.T) {
 func TestAGraphCreatedByASaveInheritsTheShareSet(t *testing.T) {
 	store := storeWithSharedEnvironment() //no graph ref yet
 	shares := newFakeShares()
-	shares.set("env-1", []string{"demo-user"}, []string{"/demo"})
+	shares.setWithWriters("env-1", []string{"demo-user", "other-user"}, []string{"/demo"}, repo.Principals{Users: []string{"demo-user"}})
 	permissions := newFakePermissions("dev-1", "dev-2")
 	permissions.ownGraph("urn:infai:ses:graph:1", "user-a")
+	permissions.ownGraph("urn:infai:ses:graph:2", "user-a")
 	mirror := newFakeGraphMirror()
 	router := testRouterWithAll(store, shares, nil, mirror, nil, permissions)
 
@@ -1367,34 +1429,72 @@ func TestAGraphCreatedByASaveInheritsTheShareSet(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
 	}
 	stored := store.stored["env-1"]
-	if stored.ExternalGraphRef != "urn:infai:ses:graph:1" {
-		t.Fatalf("expected the save to create a graph, got %q", stored.ExternalGraphRef)
+	if stored.ExternalGraphRef != "urn:infai:ses:graph:1" || stored.ExternalMeterGraphRef != "urn:infai:ses:graph:2" {
+		t.Fatalf("expected the save to create both graphs, got %q and %q", stored.ExternalGraphRef, stored.ExternalMeterGraphRef)
 	}
-	if rights := permissions.graphUserRights("urn:infai:ses:graph:1", "demo-user"); !rights.Read || !rights.Execute {
-		t.Errorf("the new graph has to inherit the set, got %+v", rights)
+	for _, graph := range []string{"urn:infai:ses:graph:1", "urn:infai:ses:graph:2"} {
+		if rights := permissions.graphUserRights(graph, "demo-user"); !rights.Read || !rights.Execute || !rights.Write {
+			t.Errorf("%s: the new graph has to inherit the set, write of the graph writer included, got %+v", graph, rights)
+		}
+		if rights := permissions.graphUserRights(graph, "other-user"); !rights.Read || rights.Write {
+			t.Errorf("%s: a shared account that is no graph writer reads only, got %+v", graph, rights)
+		}
+		if rights := permissions.graphGroupRights(graph, "/demo"); !rights.Read {
+			t.Errorf("%s: the new graph has to inherit the groups too, got %+v", graph, rights)
+		}
 	}
-	if rights := permissions.graphGroupRights("urn:infai:ses:graph:1", "/demo"); !rights.Read {
-		t.Errorf("the new graph has to inherit the groups too, got %+v", rights)
+}
+
+// An environment stored before the meter graph existed gets one on its next
+// save. That graph is new and inherits the set; the location graph is only
+// rewritten and is left alone.
+func TestAMeterGraphCreatedForAStoredEnvironmentInheritsTheShareSet(t *testing.T) {
+	store := storeWithGraphEnvironment()
+	shares := newFakeShares()
+	shares.set("env-1", []string{"demo-user"}, nil)
+	permissions := newFakePermissions("dev-1", "dev-2")
+	permissions.ownGraph(testGraph, "user-a")
+	mirror := newFakeGraphMirror()
+	mirror.stored[testGraph] = models.Graph{Id: testGraph}
+	//ids the fake assigns must not collide with the seeded one
+	mirror.created = 10
+	permissions.ownGraph("urn:infai:ses:graph:11", "user-a")
+	router := testRouterWithAll(store, shares, nil, mirror, nil, permissions)
+
+	if code := do(t, router, "PUT", "/environments/env-1", "user-a", sharedEnvironmentWithGraph()).Code; code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	stored := store.stored["env-1"]
+	if stored.ExternalGraphRef != testGraph || stored.ExternalMeterGraphRef != "urn:infai:ses:graph:11" {
+		t.Fatalf("expected the location graph kept and a meter graph created, got %q and %q", stored.ExternalGraphRef, stored.ExternalMeterGraphRef)
+	}
+	if rights := permissions.graphUserRights("urn:infai:ses:graph:11", "demo-user"); !rights.Read || !rights.Execute {
+		t.Errorf("the new meter graph has to inherit the set, got %+v", rights)
+	}
+	if permissions.setsOf(testGraph) != 0 {
+		t.Error("a location graph that was only rewritten needs no rights written")
 	}
 }
 
 // The graph an environment already had carries the set since it was shared;
 // rewriting its rights on every save would be work for nothing.
 func TestASaveThatKeepsItsGraphDoesNotTouchTheGraphTopic(t *testing.T) {
-	store := storeWithGraphEnvironment()
+	store := storeWithBothGraphs()
 	shares := newFakeShares()
 	shares.set("env-1", []string{"demo-user"}, nil)
 	permissions := newFakePermissions("dev-1", "dev-2")
 	permissions.ownGraph("urn:infai:ses:graph:1", "user-a")
+	permissions.ownGraph(testMeterGraph, "user-a")
 	mirror := newFakeGraphMirror()
 	mirror.stored["urn:infai:ses:graph:1"] = models.Graph{Id: "urn:infai:ses:graph:1"}
+	mirror.stored[testMeterGraph] = models.Graph{Id: testMeterGraph}
 	router := testRouterWithAll(store, shares, nil, mirror, nil, permissions)
 
 	if code := do(t, router, "PUT", "/environments/env-1", "user-a", sharedEnvironmentWithGraph()).Code; code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", code)
 	}
-	if store.stored["env-1"].ExternalGraphRef != "urn:infai:ses:graph:1" {
-		t.Fatalf("expected the graph id to be kept, got %q", store.stored["env-1"].ExternalGraphRef)
+	if store.stored["env-1"].ExternalGraphRef != "urn:infai:ses:graph:1" || store.stored["env-1"].ExternalMeterGraphRef != testMeterGraph {
+		t.Fatalf("expected the graph ids to be kept, got %q and %q", store.stored["env-1"].ExternalGraphRef, store.stored["env-1"].ExternalMeterGraphRef)
 	}
 	if permissions.sawTopic(graphsTopic) {
 		t.Error("a graph that was only rewritten needs no rights of its own")
@@ -2071,13 +2171,15 @@ func TestAGraphCreatedByASaveInheritsTheGraphWriters(t *testing.T) {
 // Moses does not touch the rights of a graph it only rewrites, so the write of a
 // graph writer stands after a save; lib/test pins the repository's half of it.
 func TestASaveThatRewritesTheGraphKeepsTheWriteOfAGraphWriter(t *testing.T) {
-	store := storeWithGraphEnvironment()
+	store := storeWithBothGraphs()
 	shares := newFakeShares()
 	shares.setWithWriters("env-1", []string{"demo-user"}, nil, repo.Principals{Users: []string{"demo-user"}})
 	permissions := graphWriterPermissions()
 	permissions.graphRights("demo-user", permModel.PermissionsMap{Read: true, Write: true, Execute: true})
+	permissions.ownGraph(testMeterGraph, "user-a")
 	mirror := newFakeGraphMirror()
 	mirror.stored[testGraph] = models.Graph{Id: testGraph}
+	mirror.stored[testMeterGraph] = models.Graph{Id: testMeterGraph}
 	router := testRouterWithAll(store, shares, nil, mirror, nil, permissions)
 
 	sent := sharedEnvironmentWithGraph()
@@ -2085,8 +2187,11 @@ func TestASaveThatRewritesTheGraphKeepsTheWriteOfAGraphWriter(t *testing.T) {
 	if code := do(t, router, "PUT", "/environments/env-1", "user-a", sent).Code; code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", code)
 	}
-	if len(mirror.sent) != 1 || mirror.sent[0].Id != testGraph {
-		t.Fatalf("expected the save to rewrite the graph, got %+v", mirror.sent)
+	if len(mirror.sent) != 2 || mirror.sent[0].Id != testGraph || mirror.sent[1].Id != testMeterGraph {
+		t.Fatalf("expected the save to rewrite both graphs, got %+v", mirror.sent)
+	}
+	if permissions.setsOf(testMeterGraph) != 0 {
+		t.Error("a meter graph that is only rewritten needs no rights written")
 	}
 	if rights := permissions.graphUserRights(testGraph, "demo-user"); !rights.Write || !rights.Read || !rights.Execute {
 		t.Errorf("a rewrite must leave the graph writer's rights, got %+v", rights)

@@ -20,11 +20,14 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"reflect"
 	"sync"
 	"testing"
 
 	deviceRepo "github.com/SENERGY-Platform/device-repository/lib/client"
+	"github.com/SENERGY-Platform/models/go/models"
 	"github.com/SENERGY-Platform/moses/lib/domain"
 	"github.com/SENERGY-Platform/moses/lib/graphs"
 	"github.com/SENERGY-Platform/moses/lib/test/helper"
@@ -113,6 +116,41 @@ func TestEnvironmentGraphRoundtrip(t *testing.T) {
 		t.Errorf("expected the mirror to be one graph after two saves, got %d", len(all))
 	}
 
+	//the second mirror: a group, weights other than 100 and a conversion edge
+	t.Run("the meter graph is accepted and read back", func(t *testing.T) {
+		meters := meterEnvironment(user)
+		built := graphs.BuildMeterGraph(meters)
+		created, err, code := client.SetGraph(token, built)
+		if err != nil {
+			t.Fatalf("the repository refused the meter graph (%d): %v", code, err)
+		}
+		if created.Id == "" || created.Id == env.ExternalGraphRef {
+			t.Fatalf("expected a graph of its own, got %q", created.Id)
+		}
+		read, err, code := client.ReadGraph(token, created.Id)
+		if err != nil {
+			t.Fatalf("unable to read the meter graph back (%d): %v", code, err)
+		}
+		if got, want := edgeSet(read.Edges), edgeSet(built.Edges); !reflect.DeepEqual(got, want) {
+			t.Errorf("the meter graph came back different:\n%v\n%v", got, want)
+		}
+		if len(read.Nodes) != len(built.Nodes) {
+			t.Errorf("expected %d nodes, got %+v", len(built.Nodes), read.Nodes)
+		}
+		if got := rootName(t, client, token, created.Id); got != meters.Name+graphs.MeterRootSuffix {
+			t.Errorf("expected the meter graph's name on its root, got %q", got)
+		}
+
+		meters.ExternalMeterGraphRef = created.Id
+		updated, err, code := client.SetGraph(token, graphs.BuildMeterGraph(meters))
+		if err != nil || updated.Id != created.Id {
+			t.Fatalf("expected the update to stay on the same meter graph, got %q (%d): %v", updated.Id, code, err)
+		}
+		if err, code := client.DeleteGraph(token, created.Id); err != nil {
+			t.Fatalf("unable to delete the meter graph (%d): %v", code, err)
+		}
+	})
+
 	//the constraint that decides where the ref comes from
 	t.Run("a self chosen id is refused for a graph that does not exist", func(t *testing.T) {
 		invented := env
@@ -180,6 +218,46 @@ func TestEnvironmentGraphRoundtrip(t *testing.T) {
 	if err, code := client.DeleteGraph(token, created.Id); err != nil && code != http.StatusNotFound {
 		t.Errorf("a repeated delete has to be tolerated, got %d: %v", code, err)
 	}
+}
+
+// meterEnvironment carries every shape the meter graph adds to what the
+// repository is sent: a group node without a resource, weights of 70 and 30,
+// an equal split over a group and a conversion attribute.
+func meterEnvironment(owner string) domain.Environment {
+	asset := func(id string, kind domain.AssetKind, parents ...domain.MeterParent) domain.Asset {
+		return domain.Asset{Id: id, Name: id, Kind: kind, ExternalRef: "urn:infai:ses:device:" + id, MeterParents: parents}
+	}
+	return domain.Environment{
+		Id: "env-meters", Name: "Musterwerke", Owner: owner, Type: domain.IndustrialSite,
+		Zones: []domain.Zone{{
+			Id: "zone-werk", Name: "Werk", Type: domain.ZoneSite,
+			Assets: []domain.Asset{
+				asset("haupt", domain.AssetMeter),
+				asset("pv", domain.AssetInverter),
+				asset("gas", domain.AssetMeter),
+				asset("waerme", domain.AssetMeter, domain.MeterParent{Id: "gas", Conversion: true}),
+				asset("unter", domain.AssetMeter, domain.MeterParent{Id: "haupt", Weight: 70}, domain.MeterParent{Id: "pv", Weight: 30}),
+				asset("abgang", domain.AssetMeter, domain.MeterParent{Id: "abgaenge"}),
+			},
+		}},
+		MeterGroups: []domain.MeterGroup{{Id: "abgaenge", Name: "Abgänge", Parents: []domain.MeterParent{{Id: "haupt"}, {Id: "pv"}}}},
+	}
+}
+
+// edgeSet is the content of the edges, keyed by their ends: the repository may
+// order them and fill in an attribute origin as it likes.
+func edgeSet(edges []models.Edge) map[string]string {
+	result := map[string]string{}
+	for _, edge := range edges {
+		conversion := ""
+		for _, attribute := range edge.Attributes {
+			if attribute.Key == graphs.ConversionAttribute {
+				conversion = " " + attribute.Value
+			}
+		}
+		result[edge.FromNodeId+" -> "+edge.ToNodeId] = fmt.Sprintf("%s %d%s", edge.Id, edge.Weight, conversion)
+	}
+	return result
 }
 
 // startDeviceRepo brings up only what the graph api needs. The full server.New

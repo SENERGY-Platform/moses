@@ -40,7 +40,7 @@ func WalkAssets(env Environment, visit func(path string, asset Asset)) (nodes in
 	for i := range env.Zones {
 		walk(fmt.Sprintf("zones[%d]", i), env.Zones[i], 1)
 	}
-	return nodes
+	return nodes + len(env.MeterGroups)
 }
 
 // ChannelPath is the path Validate reports a problem of an asset's channel under.

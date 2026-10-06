@@ -94,6 +94,11 @@ type Environment struct {
 	// reconcileGraphRef in lib/api.
 	ExternalGraphRef string `json:"external_graph_ref" bson:"external_graph_ref"`
 
+	// ExternalMeterGraphRef is the id of the second graph this environment is
+	// mirrored as, the meter graph built from meter_parents and meter_groups.
+	// Decided and enforced by the server exactly like ExternalGraphRef.
+	ExternalMeterGraphRef string `json:"external_meter_graph_ref" bson:"external_meter_graph_ref"`
+
 	// Every stochastic source derives from Seed, so the same environment and
 	// clock produce the same values.
 	Seed int64 `json:"seed" bson:"seed"`
@@ -117,6 +122,32 @@ type Environment struct {
 	Timeline []DatedChange `json:"timeline,omitempty" bson:"timeline,omitempty"`
 
 	Zones []Zone `json:"zones" bson:"zones"`
+
+	// MeterGroups are quantities known only as the sum of their members, such
+	// as the outgoing feeders supplied jointly by grid, PV and battery. An asset
+	// becomes a member by naming the group in its meter_parents.
+	MeterGroups []MeterGroup `json:"meter_groups,omitempty" bson:"meter_groups,omitempty"`
+}
+
+// MeterGroup is a node of the meter graph that no single device measures.
+type MeterGroup struct {
+	Id      string        `json:"id" bson:"id"`
+	Name    string        `json:"name" bson:"name"`
+	Parents []MeterParent `json:"parents" bson:"parents"`
+}
+
+// MeterParent is one edge of the meter graph: the quantity of the child is
+// contained in, or supplied by, the asset or meter group named by Id.
+type MeterParent struct {
+	Id string `json:"id" bson:"id"`
+
+	// Weight is the share of the child's quantity this parent carries, in
+	// percent. Omitted on every parent of a list means an equal split.
+	Weight int `json:"weight,omitempty" bson:"weight,omitempty"`
+
+	// Conversion marks that the medium changes on this edge, gas to heat or
+	// heat to water, so a calorific value or an efficiency lies in between.
+	Conversion bool `json:"conversion,omitempty" bson:"conversion,omitempty"`
 }
 
 // Zone is a recursive node: site, building, floor, unit, hall and room are the
@@ -173,6 +204,11 @@ type Asset struct {
 	// reconciliation: nothing on the platform is read back to correct a wrong
 	// value, so a bad value only misrepresents this simulation's own meter tree.
 	SubmeteredBy string `json:"submetered_by,omitempty" bson:"submetered_by,omitempty"`
+
+	// MeterParents places this asset's device in the meter graph, under one or
+	// more weighted parents. Empty means submetered_by with the whole flow,
+	// see EffectiveMeterParents; the aggregate source never reads it.
+	MeterParents []MeterParent `json:"meter_parents,omitempty" bson:"meter_parents,omitempty"`
 
 	InitialStates map[string]interface{} `json:"initial_states" bson:"initial_states"`
 

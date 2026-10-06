@@ -4,7 +4,8 @@
 
 **Applies when** an asset's `submetered_by` is set, or a channel's source kind
 is `aggregate` - the two halves of the same feature: the tree, and the sum over
-it.
+it - or when an asset's `meter_parents` or the environment's `meter_groups` are
+set, which place devices in the meter graph.
 
 **Delimitation:** the neighbouring case is a `formula` source that sums
 specific channels by naming them explicitly
@@ -56,6 +57,51 @@ There is no separate check that the target has a platform device:
 already allowed shape (`docs/device-lifecycle-of-assets.md`). What happens to
 a submetered_by reference into a deviceless target is a graph mapping
 question, answered below, not a validation error.
+
+## Meter parents and meter groups
+
+`Asset.MeterParents` places an asset's device in the meter graph
+(`docs/environment-graphs.md`) under one or more parents. Each entry names an
+asset or a meter group by `id`, may carry a `weight` in percent, and sets
+`conversion` where the medium changes on that edge (gas to heat or
+electricity, heat to water). `Environment.MeterGroups` are quantities known only
+as the sum of their members - all outgoing feeders supplied jointly by grid, PV,
+battery and CHP. A group has an `id`, a `name` and `parents` of the same shape;
+an asset becomes a member by naming the group in its `meter_parents`.
+
+Where `meter_parents` is empty, `submetered_by` with weight 100 stands in; where
+both are set, `meter_parents` decides the meter graph and `submetered_by` still
+decides the location graph and the aggregate. The aggregate source never reads
+`meter_parents`.
+
+`lib/domain/validate_meter.go` refuses, at the entry (`…meter_parents[i]`,
+`meter_groups[i].parents[j]`) unless noted:
+
+- **an empty id, an id that is no asset and no meter group** (a zone or a
+  channel id is not a parent), the asset or group itself, and an id named twice
+  in one list,
+- **an asset parent outside the asset's top level zone**, as for
+  `submetered_by`,
+- **a meter group spanning top level zones**: its members and its asset parents
+  all stay in the top level zone of the first of them, and every other is
+  refused at its reference. A group without assets of its own takes the zone of
+  the groups it is linked to, and a group naming a group of another top level
+  zone as parent is refused at that parent,
+- **weights that are not either all omitted or all within 1..100 and summing to
+  exactly 100**, and more than 100 parents, reported at the list,
+- **a group without an id, a name or a parent**, and a group id that is already
+  used anywhere in the document, at `meter_groups[i]…`; ids are not assigned to
+  groups, since a group is only reachable by its id. A group id must also not
+  contain `->`, which would make two edge ids of the meter graph collide, nor be
+  `root` or an asset's `external_ref`, which are node ids there already. Groups
+  count towards the same limit of 10000 nodes as zones, assets and channels,
+- **a cycle** over the effective meter parents of the assets and the parents of
+  the groups, reported at the edge that closes it, naming that edge's two ends.
+  At most 100 cycles are listed, and at most 1000 problems of `meter_parents`
+  and `meter_groups` altogether; the rest are counted in one more problem.
+  Because `submetered_by` stands in for empty `meter_parents`, an asset placed
+  under an asset that `submetered_by` hangs below it closes a cycle as well. A
+  cycle of `submetered_by` alone is reported once, by the rule above.
 
 ## The graph mirror
 

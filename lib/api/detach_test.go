@@ -284,8 +284,9 @@ func TestACreateWhoseCallerGoesAwayStillCreatesEveryDeviceAndStoresTheDocument(t
 		if ref := assetNamed(t, env, "Zähler").ExternalRef; ref != "urn:device:zaehler" {
 			t.Errorf("the stored document has to name the second device, got %q", ref)
 		}
-		if env.ExternalGraphRef == "" || len(mirror.stored) != 1 {
-			t.Errorf("the graph has to be written and its ref stored, ref %q, graphs %d", env.ExternalGraphRef, len(mirror.stored))
+		if env.ExternalGraphRef == "" || env.ExternalMeterGraphRef == "" || len(mirror.stored) != 2 {
+			t.Errorf("both graphs have to be written and their refs stored, refs %q and %q, graphs %d",
+				env.ExternalGraphRef, env.ExternalMeterGraphRef, len(mirror.stored))
 		}
 	}
 	catalog.probe.assertBounded(t, "catalog")

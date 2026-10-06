@@ -235,6 +235,8 @@ func TestEveryBuiltGraphIsAcceptedByTheRepositoryModel(t *testing.T) {
 		"zone id root": environmentWithAZoneCalledRoot(),
 		"submetered":   environmentWithSubmetering(),
 		"device cycle": environmentWithADeviceCycle(),
+		"musterwerke":  musterwerke(),
+		"meter cycle":  meterCycle(),
 	} {
 		graph := Build(env)
 		if err := graph.Valid(); err != nil {
@@ -242,6 +244,13 @@ func TestEveryBuiltGraphIsAcceptedByTheRepositoryModel(t *testing.T) {
 		}
 		if graph.ContainsLoop() {
 			t.Errorf("%s: a location topology cannot contain a loop", name)
+		}
+		meters := BuildMeterGraph(env)
+		if err := meters.Valid(); err != nil {
+			t.Errorf("%s: the repository would refuse this meter graph: %v", name, err)
+		}
+		if meters.ContainsLoop() {
+			t.Errorf("%s: a meter graph cannot contain a loop", name)
 		}
 	}
 }

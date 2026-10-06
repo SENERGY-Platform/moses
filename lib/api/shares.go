@@ -127,6 +127,9 @@ type SharesResponse struct {
 	// along with the devices. False for an environment that has none, which is
 	// one whose mirror never succeeded.
 	Graph bool `json:"graph" example:"true"`
+
+	// MeterGraph says the same of the meter graph.
+	MeterGraph bool `json:"meter_graph" example:"true"`
 }
 
 // ShareFailure names one resource the share could not be applied to. The message
@@ -162,17 +165,34 @@ type shareResource struct {
 }
 
 // shareResourcesOf is everything a share of this environment reaches: its
-// managed devices in document order, and its graph last. An environment whose
-// mirror never succeeded carries no ref and contributes no graph.
+// managed devices in document order, then its location graph and its meter
+// graph. A graph whose mirror never succeeded has no ref and is left out.
 func shareResourcesOf(env *domain.Environment) []shareResource {
 	result := []shareResource{}
 	for _, device := range managedDevicesOf(env) {
 		result = append(result, deviceResource(device))
 	}
-	if env.ExternalGraphRef != "" {
-		result = append(result, graphResource(env.ExternalGraphRef))
+	for _, ref := range graphRefsOf(env).all() {
+		if ref != "" {
+			result = append(result, graphResource(ref))
+		}
 	}
 	return result
+}
+
+// graphRefs are the refs of the two graphs an environment is mirrored as.
+type graphRefs struct {
+	location string
+	meter    string
+}
+
+func graphRefsOf(env *domain.Environment) graphRefs {
+	return graphRefs{location: env.ExternalGraphRef, meter: env.ExternalMeterGraphRef}
+}
+
+// all lists the refs in the order they are shared and reported.
+func (this graphRefs) all() []string {
+	return []string{this.location, this.meter}
 }
 
 func deviceResource(device managedDevice) shareResource {
@@ -194,22 +214,25 @@ type sharePlan struct {
 }
 
 // newlySharedResources is what a save has to hand the stored set to: the devices
-// it created, and the graph only where the save created one rather than
+// it created, and each graph only where the save created it rather than
 // rewriting the graph the environment already had - that one carries the set
 // since it was shared.
-func newlySharedResources(created []managedDevice, graphBefore string, graphAfter string) []shareResource {
+func newlySharedResources(created []managedDevice, before graphRefs, after graphRefs) []shareResource {
 	result := []shareResource{}
 	for _, device := range created {
 		result = append(result, deviceResource(device))
 	}
-	if graphAfter != "" && graphAfter != graphBefore {
-		result = append(result, graphResource(graphAfter))
+	previous := before.all()
+	for i, ref := range after.all() {
+		if ref != "" && ref != previous[i] {
+			result = append(result, graphResource(ref))
+		}
 	}
 	return result
 }
 
 // @Summary The accounts the devices of one environment are shared with
-// @Description The stored set including `graph_writers`, plus the number of managed devices it acts on and whether the graph of this environment is shared along with them. A set stored before `graph_writers` existed serves it as empty lists. Only devices moses created for the assets of this environment count; a device attached by the caller is never shared, because moses does not own it.
+// @Description The stored set including `graph_writers`, plus the number of managed devices it acts on and whether the location graph (`graph`) and the meter graph (`meter_graph`) of this environment are shared along with them. A set stored before `graph_writers` existed serves it as empty lists. Only devices moses created for the assets of this environment count; a device attached by the caller is never shared, because moses does not own it.
 // @Description
 // @Description After a failed share the set stands at the union of what was stored and what was asked for, which is what the next call needs to withdraw the devices that did go through.
 // @Tags Environment
@@ -240,16 +263,17 @@ func getSharesH(environments repo.Environments, shares repo.Shares, permissions 
 			GraphWriters: writersOf(stored),
 			Devices:      len(managedDevicesOf(&env)),
 			Graph:        env.ExternalGraphRef != "",
+			MeterGraph:   env.ExternalMeterGraphRef != "",
 		})
 	}
 }
 
 // @Summary Share the devices of one environment with users and groups
-// @Description Replaces the set: everyone named gets `read` and `execute` on every device moses created for this environment and on the graph it is mirrored as, everyone who was in the stored set and is not named any more loses their entry. The environment document itself is not shared — it stays with its owner and the platform administrators.
+// @Description Replaces the set: everyone named gets `read` and `execute` on every device moses created for this environment and on both graphs it is mirrored as, the location graph and the meter graph, everyone who was in the stored set and is not named any more loses their entry. The environment document itself is not shared — it stays with its owner and the platform administrators.
 // @Description
-// @Description `graph_writers` names the part of `users` and `groups` that also gets `write` on the graph, never on a device. Sent as an object, `{}` included, it replaces the stored graph writers, and an entry not named in `users` or `groups` is refused with `400`. Absent or `null` it keeps the stored graph writers that are still shared, and is never refused. Every call sets `write` on the graph for every account in the stored or the requested set - on for the graph writers, off for the others - so a `write` nothing records does not outlive the next call; accounts outside the set and entries carrying `administrate` are not touched. Graph writers do not count again towards the limit of 100, since they are shared accounts already. The graph is rebuilt from the environment on every save, so an edit by a graph writer lasts until the next save.
+// @Description `graph_writers` names the part of `users` and `groups` that also gets `write` on both graphs, never on a device. Sent as an object, `{}` included, it replaces the stored graph writers, and an entry not named in `users` or `groups` is refused with `400`. Absent or `null` it keeps the stored graph writers that are still shared, and is never refused. Every call sets `write` on the graphs for every account in the stored or the requested set - on for the graph writers, off for the others - so a `write` nothing records does not outlive the next call; accounts outside the set and entries carrying `administrate` are not touched. Graph writers do not count again towards the limit of 100, since they are shared accounts already. The graphs are rebuilt from the environment on every save, so an edit by a graph writer lasts until the next save.
 // @Description
-// @Description A device attached to an asset by the caller is never touched, since moses does not own it. An environment whose graph was never mirrored has none to share and is not treated as an error. An entry carrying `administrate` is never changed or removed, which is what keeps the owner and the administrators out of the set. On a device, `write` an entry already had stays as it is while it is shared, and goes with the entry when the share is withdrawn.
+// @Description A device attached to an asset by the caller is never touched, since moses does not own it. A graph that was never mirrored is not shared and is not treated as an error. An entry carrying `administrate` is never changed or removed, which is what keeps the owner and the administrators out of the set. On a device, `write` an entry already had stays as it is while it is shared, and goes with the entry when the share is withdrawn.
 // @Description
 // @Description Applied resource by resource with the caller's own token, so the platform's own rule decides who may be named: a caller without the `admin` role may share with groups they are a member of and with users who share a group with them. Such a refusal comes back per resource, and when every failure of a call is one of them the answer is a `400` with that list; a `502` means at least one failure was not the caller's fault.
 // @Description
@@ -268,7 +292,7 @@ func getSharesH(environments repo.Environments, shares repo.Shares, permissions 
 // @Failure 404 {string} string "no such environment, or no access to it"
 // @Failure 409 {string} string "another share of this environment was stored in between; read the set again and repeat"
 // @Failure 500 {string} string "error message"
-// @Failure 502 {object} ShareFailures "the resources the rights could not be written on, and why; `kind` says whether it was a device or the graph, `status` what permissions-v2 answered"
+// @Failure 502 {object} ShareFailures "the resources the rights could not be written on, and why; `kind` says whether it was a device or a graph, `id` which one, `status` what permissions-v2 answered"
 // @Router /environments/{id}/shares [put]
 func putSharesH(environments repo.Environments, shares repo.Shares, permissions Permissions) (string, string, gin.HandlerFunc) {
 	return http.MethodPut, "/environments/:id/shares", func(gc *gin.Context) {
@@ -373,6 +397,7 @@ func putSharesH(environments repo.Environments, shares repo.Shares, permissions 
 			GraphWriters: desired.GraphWriters,
 			Devices:      len(managedDevicesOf(&env)),
 			Graph:        env.ExternalGraphRef != "",
+			MeterGraph:   env.ExternalMeterGraphRef != "",
 		})
 	}
 }

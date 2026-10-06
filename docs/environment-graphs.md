@@ -7,16 +7,19 @@ in a deployment that has a reachable device-repository. **Delimitation:** the
 neighbouring case is the graph a user drew by hand in the graph view — the same
 resource, the same api, opposite rule: that one is a document its author owns
 and nothing overwrites it. A graph carrying the attribute `moses/environment` is
-not that; it is a projection and is replaced wholesale on every save. The
-runtime path is out of scope as well: `PATCH /environments/{id}/state` changes
-live values, not the definition, and touches no graph.
+not that; it is a projection and is replaced wholesale on every save, and so
+are both graphs an environment is mirrored as. The runtime path is out of scope
+as well: `PATCH /environments/{id}/state` changes live values, not the
+definition, and touches no graph.
 
 ## What is mirrored
 
-Every environment is mirrored as one graph in the device-repository, so that
+Every environment is mirrored as two graphs in the device-repository, so that
 applications which consume the platform's graphs — the graph view, the energy
-flow evaluations — see a simulated site the way they see a real one. The mapping
-lives in `lib/graphs`, as a pure function, and is:
+flow evaluations — see a simulated site the way they see a real one: the
+**location graph**, where things are, and the **meter graph**, which quantity
+contains or supplies which (below). Both mappings live in `lib/graphs`, as pure
+functions. The location graph is:
 
 | Environment | Graph |
 |---|---|
@@ -31,7 +34,8 @@ lives in `lib/graphs`, as a pure function, and is:
 ## The four conventions that are contract
 
 None of these is expressed in a schema, all of them are what the frontend
-assumes, and `lib/graphs/build_test.go` pins each one:
+assumes, and `lib/graphs/build_test.go` and `lib/graphs/meter_test.go` pin each
+one for both graphs:
 
 - **An edge points from the child to the parent.** `from_node_id` is the
   contained thing, `to_node_id` the container. Reversing it reverses the tree
@@ -44,6 +48,51 @@ assumes, and `lib/graphs/build_test.go` pins each one:
   frontend addresses the node by id, the repository resolves the device by
   resource id.
 
+## The meter graph
+
+`lib/graphs/meter.go` (`BuildMeterGraph`) maps the document onto a graph in
+which an edge leads from a node to the node whose quantity contains or supplies
+it. A node may have several parents, each with a weight.
+
+| Environment | Meter graph |
+|---|---|
+| the environment | the graph; attributes `moses/environment` = environment id and `moses/graph` = `meter` |
+| its name | the `name` attribute of the root node, with ` (meters)` appended |
+| an asset with an `external_ref` whose kind is `meter` or `inverter`, that states meter parents, or that another node names as parent | a device node as in the location graph, belonging to the first asset carrying the device |
+| a meter group | a node with the group id, `name` attribute = group name, no resource |
+| the effective meter parents of an asset, or the parents of a group | one edge per parent, weighted |
+| a node without parents | an edge to `root` with weight 100 |
+
+The **effective meter parents** of an asset are its `meter_parents`, or, where
+that is empty, its `submetered_by` with weight 100 (`docs/submetering.md`).
+Zones are not part of the meter graph; sensors, actuators and machines that
+state no parents and are nobody's parent are left out.
+
+**Weights** are taken as given where the list sets them. Where every weight is
+omitted the flow is split equally, and the remainder of 100 divided by the
+number of parents goes one point each to the first parents in list order:
+three parents carry 34, 33 and 33.
+
+**Conversion.** An edge whose parent has `conversion: true` carries the
+attribute `moses/conversion` = `true`: the medium changes there, gas to heat
+or electricity, heat to water, so a calorific value or an efficiency lies in
+between. Every other edge carries no attributes.
+
+**Fallback to the root.** Dropping one parent of a list would break the weight
+sum the repository checks, so a node goes to the root with weight 100 as a
+whole when
+
+- one of its parents cannot be resolved: an unknown id, an asset without a
+  device, an asset on the node's own device, a group id that a device or an
+  earlier group already holds, or weights the repository would refuse,
+- two of its parents resolve to the same node,
+- two assets carrying its device state different parents (an asset stating
+  none does not count),
+- it is the member earliest in document order (devices by first carrier, then
+  groups) of a cycle that device sharing folded acyclic asset statements into.
+
+The same document always yields the same graph, node and edge order included.
+
 ## Why an asset without a device is missing
 
 An asset with no `external_ref` publishes nowhere - a helper inside the
@@ -52,7 +101,7 @@ and there is nothing behind it a consumer of the graph could read. Assets
 without a device are therefore left out; the zone they sit in is still there,
 so nothing disappears from the structure.
 
-## Why every edge has the weight 100
+## Why every edge of the location graph has the weight 100
 
 Weights apportion a flow: one meter supplying two areas is 70/30. A location
 topology has no such split — every node has exactly one parent and passes on
@@ -77,13 +126,16 @@ with no rule to decide which one is right. That includes the edits of a graph wr
 
 ## Who owns which graph
 
-`external_graph_ref` on the environment names the mirror. The server assigns and
-enforces it; a value sent by a client is discarded, for the same reason
+`external_graph_ref` on the environment names the location graph,
+`external_meter_graph_ref` the meter graph. Both follow the same rules below. The
+server assigns and enforces them; a value sent by a client is discarded, for the same reason
 `external_managed` is (`docs/device-lifecycle-of-assets.md`): the whole document
 is sent on every update, so an echoed or invented ref would let one environment
 write into the graph of another.
 
-- **An update of a stored document keeps the stored ref.**
+- **An update of a stored document keeps the stored ref.** A document stored
+  before the meter graph existed has no meter graph ref and gets a fresh meter
+  graph on its next save.
 - **A create, and a put to an id that is new here, start without one** and get a
   fresh graph. This is the case a copy of an export falls into: its ref still
   points at the graph of the original, and honouring it would have the copy
@@ -99,8 +151,9 @@ nothing in the client's signatures says it.
 
 ## Failures do not fail the request
 
-Mirroring and deleting the graph are best effort. A failure is a `WARN` with the
-environment and the graph, and the request succeeds — the same trade the device
+Mirroring and deleting the graphs are best effort, and each graph on its own: a
+failure is a `WARN` with the environment, the graph and which of the two it is
+(`kind`), it does not stop the other graph, and the request succeeds — the same trade the device
 cleanup makes, and for the same reason: an orphaned or stale graph is cheaper
 than a save that fails, and it is recoverable by hand. A reader being
 unreachable is not something the caller of a save can act on.
@@ -124,6 +177,10 @@ so the retry creates a second graph and the first is orphaned.
   by how often the store fails, and the alternative — writing the document
   first and the ref in a second write — leaks the same way when that second
   write fails, at the price of an extra write on every create.
+- **The first save of an environment stored before the meter graph existed
+  orphans that graph if the document write then fails**, a `409` or a lost
+  concurrent save included: the meter graph is created before the write, as on
+  a create, and its ref is only stored with it.
 - **The mirror inherits the concurrency gap of the document.** `PUT` is a
   read-modify-write without a version, so of two concurrent updates the loser's
   graph can be the one that stays.

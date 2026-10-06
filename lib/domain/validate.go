@@ -31,8 +31,9 @@ import (
 // document cannot nest without bound.
 const MaxZoneDepth = 8
 
-// MaxNodes bounds zones plus assets plus channels in one environment. An
-// imported document is untrusted input and must not be able to exhaust memory.
+// MaxNodes bounds zones plus assets plus channels plus meter groups in one
+// environment. An imported document is untrusted input and must not be able to
+// exhaust memory.
 const MaxNodes = 10000
 
 // MaxExternalIdLength bounds a platform id the document names, in bytes. Real
@@ -105,6 +106,20 @@ type validator struct {
 	assetSites   map[string]int
 	submeterRefs []submeterRef
 
+	// deviceRefs holds every external_ref, which a meter group id must not
+	// repeat: both are node ids of the meter graph.
+	deviceRefs map[string]bool
+
+	// meterLists collects every asset's meter_parents for the same second pass,
+	// since a parent may be an asset defined later or a meter group.
+	meterLists []meterList
+
+	// meterProblems counts what meterFail reported, meterUnlisted what it held
+	// back beyond maxMeterProblems, from meterFirstUnlisted on.
+	meterProblems      int
+	meterUnlisted      int
+	meterFirstUnlisted string
+
 	// gateRefs implements the second pass for a schedule's gate: the context key
 	// it waits for may be declared as a static context entry or driven by a
 	// context source, and both of those are read from the top of the document
@@ -149,7 +164,7 @@ func (this *validator) claimId(path string, id string) {
 // Validate checks an environment for everything that would make it unusable or
 // ambiguous. It returns a *ValidationError listing every problem, or nil.
 func Validate(env Environment) error {
-	v := &validator{ids: map[string]string{}, channelByIds: map[string]Channel{}, assetSites: map[string]int{}}
+	v := &validator{ids: map[string]string{}, channelByIds: map[string]Channel{}, assetSites: map[string]int{}, deviceRefs: map[string]bool{}}
 
 	if strings.TrimSpace(env.Name) == "" {
 		v.fail("name", "must not be empty")
@@ -171,6 +186,8 @@ func Validate(env Environment) error {
 		v.checkZone(fmt.Sprintf("zones[%d]", i), env.Zones[i], 1, i)
 	}
 
+	// meter groups are nodes of the meter graph and share the budget
+	v.nodes += len(env.MeterGroups)
 	if v.nodes > MaxNodes {
 		v.fail("", "environment has %d nodes, the limit is %d", v.nodes, MaxNodes)
 	}
@@ -234,6 +251,7 @@ func Validate(env Environment) error {
 		}
 	}
 	v.checkSubmeterCycles(parents)
+	v.checkMeterGraph(env, parents)
 
 	// the third second pass: a dated change names a channel, a context source or
 	// a context key, and whether it exists and what kind of source drives it is
@@ -304,6 +322,9 @@ func (this *validator) checkAsset(path string, asset Asset, site int) {
 	}
 	this.checkExternalId(path+".external_type_id", asset.ExternalTypeId)
 	this.checkExternalId(path+".external_ref", asset.ExternalRef)
+	if asset.ExternalRef != "" {
+		this.deviceRefs[asset.ExternalRef] = true
+	}
 	this.checkStates(path+".initial_states", asset.InitialStates)
 
 	if asset.SubmeteredBy != "" {
@@ -317,6 +338,12 @@ func (this *validator) checkAsset(path string, asset Asset, site int) {
 				site:    site,
 			})
 		}
+	}
+
+	if len(asset.MeterParents) > 0 {
+		this.meterLists = append(this.meterLists, meterList{
+			path: path + ".meter_parents", owner: asset.Id, site: site, parents: asset.MeterParents,
+		})
 	}
 
 	for i := range asset.Channels {
