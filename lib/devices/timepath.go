@@ -116,7 +116,7 @@ var ErrUnusableTimeShape = errors.New("the service cannot carry a timestamp")
 //     message before it looked the time up, and flatten wrapped every string in
 //     the single quotes it needs for the sql literal, so time.Parse saw
 //     `'2026-01-01T00:00:00Z'` and refused it. flatten now leaves values alone
-//     and the quoting happens in formatValue, after the time has been read.
+//     and they go to the query as parameters, after the time has been read.
 //
 // What remains is a declaration check per characteristic: the ingestion reads a
 // unix time out of a number and an iso timestamp out of a string, so a variable

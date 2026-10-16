@@ -60,15 +60,15 @@ import (
 // psql/publisher.go the mirrors below were taken from. See
 // TestTheMirroredIngestionInternalsAreStillTheOnesInTheLib.
 const (
-	libraryVersionThePinsWereReadFrom = "v0.0.0-20260827082232-c8133d0f997d"
-	publisherSourceSha256             = "0879fda0606d558f64649eed846c6560c95a3eab50f2863aad9d8e8a533b3e74"
+	libraryVersionThePinsWereReadFrom = "v0.0.0-20261016111927-8b8b183a7008"
+	publisherSourceSha256             = "19767eaa06c87b49c385aaaf55dcc9a215b80f067d3300ee389733ab54adc12d"
 )
 
 // flattenLikeThePlatform mirrors `flatten` in platform-connector-lib
 // psql/publisher.go. It used to wrap every string in the single quotes the sql
 // literal needs, which is what an iso timestamp foundered on; since c8133d0 it
-// leaves values as they were decoded and the quoting happens in formatValue,
-// after the time has been read.
+// leaves values as they were decoded; since 71864a1 they go to the query as
+// parameters instead of quoted literals, after the time has been read.
 func flattenLikeThePlatform(m map[string]interface{}) (values map[string]interface{}) {
 	values = make(map[string]interface{})
 	for k, v := range m {
