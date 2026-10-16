@@ -28,8 +28,8 @@ github.com/SENERGY-Platform/developer-notifications v0.0.6 h1:sUr3n5YTs3zTYKSEi4
 github.com/SENERGY-Platform/developer-notifications v0.0.6/go.mod h1:DwfWoj00UUN4v9fCi60frXbFycFUIIvXeKzmABcgHK8=
 github.com/SENERGY-Platform/device-repository v0.3.2 h1:UGGF4Nu0RRe6yiilihNwPNyK18b30X4zoyAZjusCyDw=
 github.com/SENERGY-Platform/device-repository v0.3.2/go.mod h1:ivupMEo/4WnaL8KBuE4xhIbJufMx31Qb/uh8D8miyqc=
-github.com/SENERGY-Platform/gin-middleware v0.14.1 h1:o2le7do9++e377ixtnFXbobAJP5CSMQXW7d1dUSAwFU=
-github.com/SENERGY-Platform/gin-middleware v0.14.1/go.mod h1:+9dhC08w9tpnjnFC8gYO0+0Po5TKfeUGt+5a1jUVfqI=
+github.com/SENERGY-Platform/gin-middleware v0.14.2 h1:SqCuJIZRmewAI2zxZp4KJV8i7swlDF01PX/1qtFK4Mw=
+github.com/SENERGY-Platform/gin-middleware v0.14.2/go.mod h1:FI8SZIBuCjq6xXm+So/sXZIThRVB0+o0R2uyDFTNy4o=
 github.com/SENERGY-Platform/go-base-http-client v0.1.0 h1:PUiZVEj7/cMSZJ0g5G611tjY9bSh1Eby+tcktrgpiZ0=
 github.com/SENERGY-Platform/go-base-http-client v0.1.0/go.mod h1:NfKW/relIVTkMXhz4OqZlzJXYPQUYEKxwqou8D0B/Kw=
 github.com/SENERGY-Platform/go-env-loader v0.5.3 h1:sNM/psxYBs3DeDCw8P8gWM2hvySijwy9t2DdSGdhF1c=

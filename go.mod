@@ -18,7 +18,7 @@ require (
 	github.com/SENERGY-Platform/api-docs-provider/lib/client v0.0.3
 	github.com/SENERGY-Platform/converter v0.0.12
 	github.com/SENERGY-Platform/device-repository v0.3.2
-	github.com/SENERGY-Platform/gin-middleware v0.14.1
+	github.com/SENERGY-Platform/gin-middleware v0.14.2
 	github.com/SENERGY-Platform/go-service-base/config-hdl v1.2.0
 	github.com/SENERGY-Platform/go-service-base/struct-logger v0.8.0
 	github.com/SENERGY-Platform/models/go v0.0.0-20260710115411-5b8e00d6e038
