@@ -102,17 +102,22 @@ type ShareTargets struct {
 type ShareRequest struct {
 	ShareTargets
 
-	// GraphWriters also get write on the graph, and nothing more on the devices.
+	// GraphWriters also get write on the graph.
 	// An object replaces them and has to be a subset of users and groups; absent
 	// or null keeps the stored ones that are still shared, so a client that does
 	// not know the field cannot take write away.
 	GraphWriters *ShareTargets `json:"graph_writers"`
+
+	// DeviceWriters also get write on every managed device, by the same rules as
+	// GraphWriters.
+	DeviceWriters *ShareTargets `json:"device_writers"`
 }
 
 // shareSet is a share as it is applied and stored.
 type shareSet struct {
 	ShareTargets
-	GraphWriters ShareTargets
+	GraphWriters  ShareTargets
+	DeviceWriters ShareTargets
 }
 
 // SharesResponse is the stored set together with the number of devices it acts
@@ -121,7 +126,9 @@ type SharesResponse struct {
 	ShareTargets
 	// GraphWriters is the part of users and groups that also holds write on the graph.
 	GraphWriters ShareTargets `json:"graph_writers"`
-	Devices      int          `json:"devices" example:"32"`
+	// DeviceWriters is the part of users and groups that also holds write on the managed devices.
+	DeviceWriters ShareTargets `json:"device_writers"`
+	Devices       int          `json:"devices" example:"32"`
 
 	// Graph says whether the graph this environment is mirrored as is shared
 	// along with the devices. False for an environment that has none, which is
@@ -183,14 +190,18 @@ func graphResource(ref string) shareResource {
 	return shareResource{kind: shareKindGraph, topicId: graphsTopic, id: ref}
 }
 
-// sharePlan is what one application changes. grantWrite and revokeWrite act on
-// the graph only and are disjoint: together they set write on every shared
-// entry, so a write nothing records is cleared by the next application.
+// sharePlan is what one application changes. Each grant/revoke pair of write
+// acts on its own kind of resource and is disjoint. On the graph the pair covers
+// every shared entry, so a write nothing records is cleared; on a device
+// revokeDeviceWrite holds only former device writers, so a write moses never
+// granted stays.
 type sharePlan struct {
-	grant       ShareTargets
-	revoke      ShareTargets
-	grantWrite  ShareTargets
-	revokeWrite ShareTargets
+	grant             ShareTargets
+	revoke            ShareTargets
+	grantGraphWrite   ShareTargets
+	revokeGraphWrite  ShareTargets
+	grantDeviceWrite  ShareTargets
+	revokeDeviceWrite ShareTargets
 }
 
 // newlySharedResources is what a save has to hand the stored set to: the devices
@@ -209,7 +220,7 @@ func newlySharedResources(created []managedDevice, graphBefore string, graphAfte
 }
 
 // @Summary The accounts the devices of one environment are shared with
-// @Description The stored set including `graph_writers`, plus the number of managed devices it acts on and whether the graph of this environment is shared along with them. A set stored before `graph_writers` existed serves it as empty lists. Only devices moses created for the assets of this environment count; a device attached by the caller is never shared, because moses does not own it.
+// @Description The stored set including `graph_writers` and `device_writers`, plus the number of managed devices it acts on and whether the graph of this environment is shared along with them. A set stored before either field existed serves it as empty lists. Only devices moses created for the assets of this environment count; a device attached by the caller is never shared, because moses does not own it.
 // @Description
 // @Description After a failed share the set stands at the union of what was stored and what was asked for, which is what the next call needs to withdraw the devices that did go through.
 // @Tags Environment
@@ -236,10 +247,11 @@ func getSharesH(environments repo.Environments, shares repo.Shares, permissions 
 			return
 		}
 		gc.JSON(http.StatusOK, SharesResponse{
-			ShareTargets: targetsOf(stored),
-			GraphWriters: writersOf(stored),
-			Devices:      len(managedDevicesOf(&env)),
-			Graph:        env.ExternalGraphRef != "",
+			ShareTargets:  targetsOf(stored),
+			GraphWriters:  graphWritersOf(stored),
+			DeviceWriters: deviceWritersOf(stored),
+			Devices:       len(managedDevicesOf(&env)),
+			Graph:         env.ExternalGraphRef != "",
 		})
 	}
 }
@@ -247,23 +259,23 @@ func getSharesH(environments repo.Environments, shares repo.Shares, permissions 
 // @Summary Share the devices of one environment with users and groups
 // @Description Replaces the set: everyone named gets `read` and `execute` on every device moses created for this environment and on the graph it is mirrored as, everyone who was in the stored set and is not named any more loses their entry. The environment document itself is not shared — it stays with its owner and the platform administrators.
 // @Description
-// @Description `graph_writers` names the part of `users` and `groups` that also gets `write` on the graph, never on a device. Sent as an object, `{}` included, it replaces the stored graph writers, and an entry not named in `users` or `groups` is refused with `400`. Absent or `null` it keeps the stored graph writers that are still shared, and is never refused. Every call sets `write` on the graph for every account in the stored or the requested set - on for the graph writers, off for the others - so a `write` nothing records does not outlive the next call; accounts outside the set and entries carrying `administrate` are not touched. Graph writers do not count again towards the limit of 100, since they are shared accounts already. The graph is rebuilt from the environment on every save, so an edit by a graph writer lasts until the next save.
+// @Description `graph_writers` names the part of `users` and `groups` that also gets `write` on the graph, `device_writers` the part that also gets `write` on every device moses created for this environment. Both follow the same rules. Sent as an object, `{}` included, the field replaces the stored writers, and an entry not named in `users` or `groups` is refused with `400`. Absent or `null` it keeps the stored writers that are still shared, and is never refused. On the graph every call sets `write` for every account in the stored or the requested set - on for the graph writers, off for the others - so a `write` nothing records does not outlive the next call. On a device every call sets `write` for the device writers and takes it back only from an account that was stored as a device writer and is not any more; a `write` an entry had otherwise stays as it is while it is shared, and goes with the entry when the share is withdrawn. Accounts outside the set and entries carrying `administrate` are not touched. Writers do not count again towards the limit of 100, since they are shared accounts already. The graph is rebuilt from the environment on every save, so an edit by a graph writer lasts until the next save.
 // @Description
-// @Description A device attached to an asset by the caller is never touched, since moses does not own it. An environment whose graph was never mirrored has none to share and is not treated as an error. An entry carrying `administrate` is never changed or removed, which is what keeps the owner and the administrators out of the set. On a device, `write` an entry already had stays as it is while it is shared, and goes with the entry when the share is withdrawn.
+// @Description A device attached to an asset by the caller is never touched, since moses does not own it. An environment whose graph was never mirrored has none to share and is not treated as an error. An entry carrying `administrate` is never changed or removed, which is what keeps the owner and the administrators out of the set.
 // @Description
 // @Description Applied resource by resource with the caller's own token, so the platform's own rule decides who may be named: a caller without the `admin` role may share with groups they are a member of and with users who share a group with them. Such a refusal comes back per resource, and when every failure of a call is one of them the answer is a `400` with that list; a `502` means at least one failure was not the caller's fault.
 // @Description
 // @Description Before anything is written, the union of the stored and the requested set is recorded; the requested set replaces it once every resource went through. If a resource fails, the union stands — so the next call, with any set, withdraws what the failed one managed to grant. The whole application is bounded at eight seconds: a very large environment can run out of it, reports the resources it did not reach as failures and needs a second call.
 // @Description
-// @Description Assets added to the environment later inherit the stored set when their device is created, so a share does not have to be renewed after an edit.
+// @Description Assets added to the environment later inherit the stored set when their device is created, `write` for the device writers included, so a share does not have to be renewed after an edit.
 // @Tags Environment
 // @Accept json
 // @Produce json
 // @Security Bearer
 // @Param id path string true "environment id"
-// @Param shares body ShareRequest true "the accounts to share with; users are keycloak user ids, groups are group paths with a leading slash, graph_writers a subset of both, or absent to keep the stored ones"
+// @Param shares body ShareRequest true "the accounts to share with; users are keycloak user ids, groups are group paths with a leading slash, graph_writers and device_writers subsets of both, or absent to keep the stored ones"
 // @Success 200 {object} SharesResponse
-// @Failure 400 {object} ShareFailures "either the request itself is refused - unreadable or too large body, an empty user id, a group that is not a path, an entry beyond 256 characters, a graph writer sent that is not shared with, or a set that would carry more than 100 accounts - and then the answer is a plain message, or every resource refused the caller and then it is the list"
+// @Failure 400 {object} ShareFailures "either the request itself is refused - unreadable or too large body, an empty user id, a group that is not a path, an entry beyond 256 characters, a graph or device writer sent that is not shared with, or a set that would carry more than 100 accounts - and then the answer is a plain message, or every resource refused the caller and then it is the list"
 // @Failure 401 {string} string "the token carries no subject"
 // @Failure 404 {string} string "no such environment, or no access to it"
 // @Failure 409 {string} string "another share of this environment was stored in between; read the set again and repeat"
@@ -288,7 +300,7 @@ func putSharesH(environments repo.Environments, shares repo.Shares, permissions 
 			gc.String(http.StatusBadRequest, "unable to read the request body as a share set (limit %d bytes): %s", maxShareBytes, err.Error())
 			return
 		}
-		targets, writers, err := normalizeShares(requested)
+		targets, graphWriters, deviceWriters, err := normalizeShares(requested)
 		if err != nil {
 			gc.String(http.StatusBadRequest, "%s", err.Error())
 			return
@@ -303,16 +315,15 @@ func putSharesH(environments repo.Environments, shares repo.Shares, permissions 
 		if !ok {
 			return
 		}
-		desired := shareSet{ShareTargets: targets}
-		if writers != nil {
-			desired.GraphWriters = *writers
-		} else {
-			//kept writers that are no longer shared go with their share, never a 400
-			desired.GraphWriters = intersectTargets(writersOf(stored), targets)
+		desired := shareSet{
+			ShareTargets:  targets,
+			GraphWriters:  keptOr(graphWriters, graphWritersOf(stored), targets),
+			DeviceWriters: keptOr(deviceWriters, deviceWritersOf(stored), targets),
 		}
 		union := unionOf(targetsOf(stored), desired.ShareTargets)
-		//both sides are subsets of their targets, so this one is of the union
-		writerUnion := unionOf(writersOf(stored), desired.GraphWriters)
+		//both sides are subsets of their targets, so these are of the union
+		graphWriterUnion := unionOf(graphWritersOf(stored), desired.GraphWriters)
+		deviceWriterUnion := unionOf(deviceWritersOf(stored), desired.DeviceWriters)
 		//a set that only shrinks is never refused over the limit: what is over it
 		//can only be leftovers of failed attempts, and this is how they go away
 		if count := len(union.Users) + len(union.Groups); count > maxShares && !sameTargets(union, targetsOf(stored)) {
@@ -331,7 +342,7 @@ func putSharesH(environments repo.Environments, shares repo.Shares, permissions 
 		//of everybody who may end up with rights below, and nothing is granted
 		//before it is written. A second share arriving at the same time loses the
 		//swap here, before it touched a single resource.
-		pending := setOf(id, union, writerUnion)
+		pending := setOf(id, union, graphWriterUnion, deviceWriterUnion)
 		pending.Version = stored.Version
 		version, err := shares.Save(ctx, pending)
 		if err != nil {
@@ -345,10 +356,12 @@ func putSharesH(environments repo.Environments, shares repo.Shares, permissions 
 
 		resources := shareResourcesOf(&env)
 		failures := applyShares(ctx, permissions, token, resources, sharePlan{
-			grant:       desired.ShareTargets,
-			revoke:      withoutTargets(union, desired.ShareTargets),
-			grantWrite:  desired.GraphWriters,
-			revokeWrite: withoutTargets(union, desired.GraphWriters),
+			grant:             desired.ShareTargets,
+			revoke:            withoutTargets(union, desired.ShareTargets),
+			grantGraphWrite:   desired.GraphWriters,
+			revokeGraphWrite:  withoutTargets(union, desired.GraphWriters),
+			grantDeviceWrite:  desired.DeviceWriters,
+			revokeDeviceWrite: withoutTargets(deviceWritersOf(stored), desired.DeviceWriters),
 		})
 		if len(failures) > 0 {
 			util.Logger.Error("unable to apply a share to every resource of an environment",
@@ -358,7 +371,7 @@ func putSharesH(environments repo.Environments, shares repo.Shares, permissions 
 			return
 		}
 
-		final := setOf(id, desired.ShareTargets, desired.GraphWriters)
+		final := setOf(id, desired.ShareTargets, desired.GraphWriters, desired.DeviceWriters)
 		final.Version = version
 		if _, err = shares.Save(ctx, final); err != nil {
 			if writeShareConflict(gc, id, err) {
@@ -369,10 +382,11 @@ func putSharesH(environments repo.Environments, shares repo.Shares, permissions 
 			return
 		}
 		gc.JSON(http.StatusOK, SharesResponse{
-			ShareTargets: desired.ShareTargets,
-			GraphWriters: desired.GraphWriters,
-			Devices:      len(managedDevicesOf(&env)),
-			Graph:        env.ExternalGraphRef != "",
+			ShareTargets:  desired.ShareTargets,
+			GraphWriters:  desired.GraphWriters,
+			DeviceWriters: desired.DeviceWriters,
+			Devices:       len(managedDevicesOf(&env)),
+			Graph:         env.ExternalGraphRef != "",
 		})
 	}
 }
@@ -427,9 +441,23 @@ func targetsOf(stored repo.ShareSet) ShareTargets {
 	return nonNilTargets(ShareTargets{Users: stored.Users, Groups: stored.Groups})
 }
 
-// writersOf reads a set stored before the field existed as one without writers.
-func writersOf(stored repo.ShareSet) ShareTargets {
+// graphWritersOf and deviceWritersOf read a set stored before the field existed
+// as one without writers.
+func graphWritersOf(stored repo.ShareSet) ShareTargets {
 	return nonNilTargets(ShareTargets{Users: stored.GraphWriters.Users, Groups: stored.GraphWriters.Groups})
+}
+
+func deviceWritersOf(stored repo.ShareSet) ShareTargets {
+	return nonNilTargets(ShareTargets{Users: stored.DeviceWriters.Users, Groups: stored.DeviceWriters.Groups})
+}
+
+// keptOr is the writers a request sent, or, where it sent none, the stored ones
+// that are still shared: a kept writer that left the share goes with it, never a 400.
+func keptOr(sent *ShareTargets, stored ShareTargets, targets ShareTargets) ShareTargets {
+	if sent != nil {
+		return *sent
+	}
+	return intersectTargets(stored, targets)
 }
 
 // intersectTargets keeps the entries of from that keep names as well.
@@ -450,39 +478,47 @@ func nonNilTargets(result ShareTargets) ShareTargets {
 	return result
 }
 
-func setOf(environmentId string, targets ShareTargets, writers ShareTargets) repo.ShareSet {
+func setOf(environmentId string, targets ShareTargets, graphWriters ShareTargets, deviceWriters ShareTargets) repo.ShareSet {
 	return repo.ShareSet{EnvironmentId: environmentId, Users: targets.Users, Groups: targets.Groups,
-		GraphWriters: repo.Principals{Users: writers.Users, Groups: writers.Groups}}
+		GraphWriters:  repo.Principals{Users: graphWriters.Users, Groups: graphWriters.Groups},
+		DeviceWriters: repo.Principals{Users: deviceWriters.Users, Groups: deviceWriters.Groups}}
 }
 
 // normalizeShares turns the request into the set that is applied and stored:
 // trimmed, deduplicated and checked. Every problem is reported at once, so a
 // caller does not need a second round trip per bad entry.
 //
-// Graph writers sent as an object are checked by the same rules and have to be a
-// subset of the shared accounts, so they never add to the count the limit is
-// about. Absent or null they come back nil, which means "keep the stored ones".
-func normalizeShares(in ShareRequest) (ShareTargets, *ShareTargets, error) {
+// Graph and device writers sent as an object are checked by the same rules and
+// have to be a subset of the shared accounts, so they never add to the count the
+// limit is about. Absent or null they come back nil, which means "keep the
+// stored ones".
+func normalizeShares(in ShareRequest) (ShareTargets, *ShareTargets, *ShareTargets, error) {
 	targets, problems := normalizeTargets(in.ShareTargets, "")
 	if len(targets.Users)+len(targets.Groups) > maxShares {
 		problems = append(problems, fmt.Sprintf("a share set holds at most %d users and groups together, got %d", maxShares, len(targets.Users)+len(targets.Groups)))
 	}
-	var writers *ShareTargets
-	if in.GraphWriters != nil {
-		normalized, writerProblems := normalizeTargets(*in.GraphWriters, "graph_writers: ")
-		problems = append(problems, writerProblems...)
-		for _, user := range missing(normalized.Users, targets.Users) {
-			problems = append(problems, fmt.Sprintf("graph_writers names the user %q, who is not in users; a graph writer has to be shared with as well", user))
-		}
-		for _, group := range missing(normalized.Groups, targets.Groups) {
-			problems = append(problems, fmt.Sprintf("graph_writers names the group %q, which is not in groups; a graph writer has to be shared with as well", group))
-		}
-		writers = &normalized
-	}
+	graphWriters, graphProblems := normalizeWriters(in.GraphWriters, targets, "graph_writers", "graph writer")
+	deviceWriters, deviceProblems := normalizeWriters(in.DeviceWriters, targets, "device_writers", "device writer")
+	problems = append(append(problems, graphProblems...), deviceProblems...)
 	if len(problems) > 0 {
-		return ShareTargets{}, nil, errors.New(strings.Join(problems, "; "))
+		return ShareTargets{}, nil, nil, errors.New(strings.Join(problems, "; "))
 	}
-	return targets, writers, nil
+	return targets, graphWriters, deviceWriters, nil
+}
+
+// normalizeWriters checks one writer field against the normalized share.
+func normalizeWriters(in *ShareTargets, targets ShareTargets, field string, noun string) (*ShareTargets, []string) {
+	if in == nil {
+		return nil, nil
+	}
+	normalized, problems := normalizeTargets(*in, field+": ")
+	for _, user := range missing(normalized.Users, targets.Users) {
+		problems = append(problems, fmt.Sprintf("%s names the user %q, who is not in users; a %s has to be shared with as well", field, user, noun))
+	}
+	for _, group := range missing(normalized.Groups, targets.Groups) {
+		problems = append(problems, fmt.Sprintf("%s names the group %q, which is not in groups; a %s has to be shared with as well", field, group, noun))
+	}
+	return &normalized, problems
 }
 
 // normalizeTargets checks one pair of lists. A group is a keycloak group path and
@@ -668,12 +704,14 @@ func applyResourceShares(ctx context.Context, permissions Permissions, token sc_
 	rights := resource.ResourcePermissions
 	rights.UserPermissions = grant(rights.UserPermissions, plan.grant.Users)
 	rights.GroupPermissions = grant(rights.GroupPermissions, plan.grant.Groups)
+	writers, others := plan.grantDeviceWrite, plan.revokeDeviceWrite
 	if target.kind == shareKindGraph {
-		rights.UserPermissions = grantWrite(rights.UserPermissions, plan.grantWrite.Users)
-		rights.GroupPermissions = grantWrite(rights.GroupPermissions, plan.grantWrite.Groups)
-		rights.UserPermissions = revokeWrite(rights.UserPermissions, plan.revokeWrite.Users)
-		rights.GroupPermissions = revokeWrite(rights.GroupPermissions, plan.revokeWrite.Groups)
+		writers, others = plan.grantGraphWrite, plan.revokeGraphWrite
 	}
+	rights.UserPermissions = grantWrite(rights.UserPermissions, writers.Users)
+	rights.GroupPermissions = grantWrite(rights.GroupPermissions, writers.Groups)
+	rights.UserPermissions = revokeWrite(rights.UserPermissions, others.Users)
+	rights.GroupPermissions = revokeWrite(rights.GroupPermissions, others.Groups)
 	rights.UserPermissions = revoke(rights.UserPermissions, plan.revoke.Users)
 	rights.GroupPermissions = revoke(rights.GroupPermissions, plan.revoke.Groups)
 	if _, err, code = permissions.SetPermission(ctx, token.Jwt(), target.topicId, target.id, rights); err != nil {
@@ -682,8 +720,8 @@ func applyResourceShares(ctx context.Context, permissions Permissions, token sc_
 	return code, nil
 }
 
-// grant adds read and execute and leaves write and administrate as they are: a
-// share must not narrow what an entry already carries.
+// grant adds read and execute and leaves the rest of an entry as it is; write is
+// set afterwards by the writers of the resource's kind.
 func grant(entries map[string]permModel.PermissionsMap, principals []string) map[string]permModel.PermissionsMap {
 	if len(principals) == 0 {
 		return entries
@@ -700,8 +738,8 @@ func grant(entries map[string]permModel.PermissionsMap, principals []string) map
 	return entries
 }
 
-// grantWrite adds write for the graph writers. It is only ever given principals
-// that grant already gave read and execute.
+// grantWrite adds write for the writers. It is only ever given principals that
+// grant already gave read and execute.
 func grantWrite(entries map[string]permModel.PermissionsMap, principals []string) map[string]permModel.PermissionsMap {
 	if len(principals) == 0 {
 		return entries
@@ -717,8 +755,8 @@ func grantWrite(entries map[string]permModel.PermissionsMap, principals []string
 	return entries
 }
 
-// revokeWrite takes write from a shared entry that is no graph writer and leaves
-// the rest of the entry. An entry carrying administrate is left alone as in revoke, and a
+// revokeWrite takes write from a shared entry that is no writer and leaves the
+// rest of the entry. An entry carrying administrate is left alone as in revoke, and a
 // missing entry stays missing rather than becoming an empty one.
 func revokeWrite(entries map[string]permModel.PermissionsMap, principals []string) map[string]permModel.PermissionsMap {
 	for _, principal := range principals {
@@ -764,8 +802,10 @@ func inheritShares(ctx context.Context, shares repo.Shares, permissions Permissi
 		return
 	}
 	for _, failure := range applyShares(ctx, permissions, token, created, sharePlan{
-		grant: targetsOf(stored), grantWrite: writersOf(stored),
-		revokeWrite: withoutTargets(targetsOf(stored), writersOf(stored)),
+		grant:            targetsOf(stored),
+		grantGraphWrite:  graphWritersOf(stored),
+		revokeGraphWrite: withoutTargets(targetsOf(stored), graphWritersOf(stored)),
+		grantDeviceWrite: deviceWritersOf(stored),
 	}) {
 		util.Logger.Warn("unable to give a new resource the share set of its environment",
 			"environment", env.Id, "kind", failure.Kind, "resource", failure.Id, "reason", failure.Error)

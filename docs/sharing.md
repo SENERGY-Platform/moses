@@ -10,8 +10,9 @@ and have to be shown from a second account. **Delimitation:** this shares the
 stays with its owner and the platform administrators. Devices the user attached
 to an asset are not shared either, because moses does not own them. Every
 account named gets `read` and `execute`; the ones named in `graph_writers` also
-get `write` on the graph, never on a device. Nothing else can be chosen per
-account, and role entries are not written.
+get `write` on the graph, the ones named in `device_writers` `write` on the
+devices. Nothing else can be chosen per account, and role entries are not
+written.
 
 ## What it does
 
@@ -21,14 +22,15 @@ account, and role entries are not written.
 {
   "users": ["<keycloak user id>"],
   "groups": ["/demo"],
-  "graph_writers": { "users": ["<keycloak user id>"], "groups": [] }
+  "graph_writers": { "users": ["<keycloak user id>"], "groups": [] },
+  "device_writers": { "users": ["<keycloak user id>"], "groups": [] }
 }
 ```
 
 Everyone named gets `read` and `execute` on every device moses created for this
 environment and on the graph it is mirrored as. Everyone who was in the stored
 set and is not named any more loses their entry. `GET` on the same path serves
-the stored set, `graph_writers` included, together with `devices`, the number of
+the stored set, `graph_writers` and `device_writers` included, together with `devices`, the number of
 devices it acts on, and `graph`, whether a graph is shared with them. Both need the owner or an
 administrator; anybody else gets `404`, as on every single-environment route
 of this api.
@@ -68,6 +70,18 @@ The graph is a projection (`docs/environment-graphs.md`): an edit by a graph
 writer lasts until the next save of the environment, which rewrites the graph.
 The rewrite keeps the rights on it, `write` included.
 
+## Device writers
+
+An application that annotates a shared device, such as a dashboard marking a
+grid connection as an attribute of the device, needs `write` on it.
+`device_writers` names the accounts that get it on every device moses created
+for the environment, by the rules of `graph_writers`: an object replaces,
+absent or `null` keeps the stored ones that are still shared, and every entry
+has to be shared with. Every call sets `write` on every device for the device
+writers, but takes it back only from accounts stored as device writers that
+are not any more: a `write` moses did not grant stays. A set stored before the
+field existed reads as one without device writers.
+
 ## The set lives beside the document
 
 The set is **not** a field of the environment. It is stored per environment id in
@@ -95,9 +109,9 @@ resource**, and repeating it after a read is all that is needed.
 
 | | |
 |---|---|
-| a device moses created for an asset | shared |
+| a device moses created for an asset | shared, `write` for the device writers |
 | a device the user attached to an asset | never touched — moses does not own it and has no `administrate` on it |
-| the graph the environment is mirrored as | shared, as one more resource |
+| the graph the environment is mirrored as | shared, as one more resource, `write` for the graph writers |
 | the environment document | not shared |
 
 ## The graph
@@ -135,17 +149,18 @@ withdrawn. permissions-v2 requires an administrating **user** on every resource
 (a group with `administrate` does not satisfy it), so removing one could leave a
 device nobody can write, and its owner without their own device.
 
-On a device, a `write` an entry already carried stays as it is while the
-account is shared, and goes with the entry when the share is withdrawn. On the
-graph, `write` follows `graph_writers`.
+On a device, `write` is added for the device writers and taken back only from a
+former device writer; a `write` an entry carried otherwise stays as it is while
+the account is shared, and goes with the entry when the share is withdrawn. On
+the graph, `write` follows `graph_writers`.
 
 ## When it fails
 
 The rights are applied resource by resource, and **the union of the stored and
 the requested set is written first**, with the compare-and-swap. The union
-covers `graph_writers` too, so `GET` shows every account that may hold `write`
-after a failed call. A later call without the field keeps them as graph writers;
-one that sends the field decides. Nothing is
+covers `graph_writers` and `device_writers` too, so `GET` shows every account
+that may hold `write` after a failed call. A later call without a field keeps
+them as writers; one that sends the field decides. Nothing is
 granted before that record exists. If a resource fails, the answer carries the
 resources and the reasons:
 
@@ -184,7 +199,8 @@ environment, or a slow permissions-v2, can therefore need more than one call.
 ## New devices inherit
 
 An asset added later gets its platform device when the environment is saved, and
-that device is given the stored set right after the save. A graph that a save
+that device is given the stored set right after the save, `write` for the device
+writers included. A graph that a save
 **creates** — one the environment did not have a ref for — is given it too,
 `write` for the graph writers included; a graph that is only rewritten keeps
 the rights it already has, because the device-repository sets initial rights
@@ -203,7 +219,9 @@ there yet. The next `PUT` on `/shares` repairs it.
 - **A withdrawal drops the whole entry** unless it carries `administrate`, so a
   `write` somebody granted by hand outside moses goes with it. On the graph a
   hand-granted `write` of a shared account that is no graph writer is cleared
-  by every call.
+  by every call. On a device moses cannot tell a hand-granted `write` from its
+  own once the account was a device writer: taking it out of `device_writers`
+  takes the `write`.
 - **The set is not reconciled in the background.** A right removed directly in
   permissions-v2 stays removed, and a set that is stored is not proof that every
   device carries it — only a successful `PUT` is.

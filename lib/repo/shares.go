@@ -34,6 +34,10 @@ type ShareSet struct {
 	// graph. A set stored before the field existed decodes it as empty.
 	GraphWriters Principals `json:"graph_writers" bson:"graph_writers"`
 
+	// DeviceWriters is the part of Users and Groups that also holds write on the
+	// managed devices. A set stored before the field existed decodes it as empty.
+	DeviceWriters Principals `json:"device_writers" bson:"device_writers"`
+
 	// Version is the compare-and-swap counter of this set: Load hands out the
 	// stored one and Save writes only while it still matches, so two shares of
 	// one environment cannot both think they replaced the other's set. Zero

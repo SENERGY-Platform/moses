@@ -143,6 +143,77 @@ func TestASetStoredWithoutGraphWritersReadsAsNone(t *testing.T) {
 	}
 }
 
+func TestDeviceWritersRoundTripWithTheSet(t *testing.T) {
+	store := testStore(t)
+	ctx := testContext(t)
+	shares := store.Shares()
+
+	set := ShareSet{EnvironmentId: "env-1", Users: []string{"demo-user", "other-user"}, Groups: []string{"/demo"},
+		GraphWriters:  Principals{Users: []string{"other-user"}},
+		DeviceWriters: Principals{Users: []string{"demo-user"}, Groups: []string{"/demo"}}}
+	version, err := shares.Save(ctx, set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := shares.Load(ctx, "env-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stored.DeviceWriters; len(got.Users) != 1 || got.Users[0] != "demo-user" || len(got.Groups) != 1 || got.Groups[0] != "/demo" {
+		t.Errorf("the device writers did not survive: %+v", got)
+	}
+	if got := stored.GraphWriters; len(got.Users) != 1 || got.Users[0] != "other-user" {
+		t.Errorf("the graph writers have to stay apart from the device writers, got %+v", got)
+	}
+
+	//a replace without writers takes them away, it does not merge
+	set.DeviceWriters = Principals{}
+	set.Version = version
+	if _, err = shares.Save(ctx, set); err != nil {
+		t.Fatal(err)
+	}
+	if stored, err = shares.Load(ctx, "env-1"); err != nil {
+		t.Fatal(err)
+	}
+	if stored.DeviceWriters.Users == nil || stored.DeviceWriters.Groups == nil ||
+		len(stored.DeviceWriters.Users) != 0 || len(stored.DeviceWriters.Groups) != 0 {
+		t.Errorf("expected empty, non-nil writer lists after the replace, got %+v", stored.DeviceWriters)
+	}
+}
+
+// A set stored before device_writers existed must read as one without device
+// writers that the compare-and-swap still accepts.
+func TestASetStoredWithoutDeviceWritersReadsAsNone(t *testing.T) {
+	store := testStore(t)
+	ctx := testContext(t)
+	shares := store.Shares()
+
+	legacy := bson.M{"environment_id": "env-legacy", "users": []string{"demo-user"}, "groups": []string{},
+		"graph_writers": bson.M{"users": []string{"demo-user"}, "groups": []string{}}, "version": int64(3), "updated_at_unix": int64(1)}
+	if _, err := store.shareCollection().InsertOne(ctx, legacy); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := shares.Load(ctx, "env-legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.DeviceWriters.Users == nil || stored.DeviceWriters.Groups == nil ||
+		len(stored.DeviceWriters.Users) != 0 || len(stored.DeviceWriters.Groups) != 0 {
+		t.Errorf("a set without the field has to read as no device writers, as empty lists, got %+v", stored.DeviceWriters)
+	}
+
+	stored.DeviceWriters = Principals{Users: []string{"demo-user"}, Groups: []string{}}
+	if version, err := shares.Save(ctx, stored); err != nil || version != 4 {
+		t.Fatalf("the legacy set has to be writable at the version it was read at, got %d: %v", version, err)
+	}
+	if stored, err = shares.Load(ctx, "env-legacy"); err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.DeviceWriters.Users) != 1 || stored.DeviceWriters.Users[0] != "demo-user" {
+		t.Errorf("expected the device writer to be stored, got %+v", stored.DeviceWriters)
+	}
+}
+
 // Two shares of one environment arriving together would otherwise each store
 // their own set, and the rights of the loser would stand on the devices with
 // nothing that remembers them.

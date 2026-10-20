@@ -2305,9 +2305,497 @@ func TestAPutClearsAStaleWriteOfAnAccountItDoesNotChange(t *testing.T) {
 		if rights := permissions.graphUserRights(testGraph, "outsider"); !rights.Write {
 			t.Errorf("%s: an account outside the share must not be touched, got %+v", name, rights)
 		}
-		//devices carry no graph write rule, so their writes stay as they are
+		//a device follows device_writers, and this set has none
 		if rights := permissions.userRights("dev-1", "demo-user"); rights.Write {
 			t.Errorf("%s: a device gets no write, got %+v", name, rights)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Device writers
+// ---------------------------------------------------------------------------
+
+// deviceRights seeds an entry on a device, the way an earlier share left it.
+func (this *fakePermissions) deviceRights(deviceId string, user string, rights permModel.PermissionsMap) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	stored := this.rights[permKey(devicesTopic, deviceId)]
+	stored.UserPermissions[user] = rights
+	this.rights[permKey(devicesTopic, deviceId)] = stored
+}
+
+func (this *fakePermissions) deviceGroup(deviceId string, group string, rights permModel.PermissionsMap) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	stored := this.rights[permKey(devicesTopic, deviceId)]
+	if stored.GroupPermissions == nil {
+		stored.GroupPermissions = map[string]permModel.PermissionsMap{}
+	}
+	stored.GroupPermissions[group] = rights
+	this.rights[permKey(devicesTopic, deviceId)] = stored
+}
+
+func (this *fakeShares) setWithDeviceWriters(environmentId string, users []string, groups []string, writers repo.Principals) {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	this.stored[environmentId] = repo.ShareSet{EnvironmentId: environmentId, Users: users, Groups: groups, DeviceWriters: writers, Version: 1}
+}
+
+func (this *fakeShares) deviceWriters(environmentId string) repo.Principals {
+	this.mux.Lock()
+	defer this.mux.Unlock()
+	return this.stored[environmentId].DeviceWriters
+}
+
+var managedTestDevices = []string{"dev-1", "dev-2"}
+
+// Device and graph writers are independent: each decides write on its own kind
+// of resource only.
+func TestADeviceWriterGetsWriteOnEveryManagedDeviceAndNothingMoreOnTheGraph(t *testing.T) {
+	store := storeWithGraphEnvironment()
+	shares := newFakeShares()
+	permissions := graphWriterPermissions()
+	permissions.own("dev-3", "user-a")
+	router := testRouterWithShares(store, shares, nil, permissions)
+
+	resp := do(t, router, "PUT", "/environments/env-1/shares", "user-a", ShareRequest{
+		ShareTargets:  ShareTargets{Users: []string{"demo-user", "other-user"}, Groups: []string{"/demo", "/other"}},
+		GraphWriters:  &ShareTargets{Users: []string{"other-user"}},
+		DeviceWriters: &ShareTargets{Users: []string{"demo-user"}, Groups: []string{"/demo"}},
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	for _, device := range managedTestDevices {
+		if rights := permissions.userRights(device, "demo-user"); !rights.Read || !rights.Execute || !rights.Write || rights.Administrate {
+			t.Errorf("%s: a device writer holds read, execute and write, got %+v", device, rights)
+		}
+		if rights := permissions.groupRights(device, "/demo"); !rights.Read || !rights.Execute || !rights.Write {
+			t.Errorf("%s: a device writing group holds write, got %+v", device, rights)
+		}
+		if rights := permissions.userRights(device, "other-user"); rights.Write || !rights.Read {
+			t.Errorf("%s: a graph writer that is no device writer reads the device only, got %+v", device, rights)
+		}
+		if rights := permissions.groupRights(device, "/other"); rights.Write || !rights.Read {
+			t.Errorf("%s: a shared group that is no device writer reads the device only, got %+v", device, rights)
+		}
+		if rights := permissions.userRights(device, "user-a"); !rights.Administrate || !rights.Write {
+			t.Errorf("%s: the owner must not be narrowed, got %+v", device, rights)
+		}
+	}
+	if rights := permissions.graphUserRights(testGraph, "demo-user"); rights.Write || !rights.Read {
+		t.Errorf("a device writer that is no graph writer reads the graph only, got %+v", rights)
+	}
+	if rights := permissions.graphUserRights(testGraph, "other-user"); !rights.Write {
+		t.Errorf("the graph writer keeps write on the graph, got %+v", rights)
+	}
+	//a device the user attached is not ours to share
+	if permissions.knowsUser("dev-3", "demo-user") || permissions.setsOf("dev-3") != 0 {
+		t.Error("an attached device must not be touched")
+	}
+
+	if got := shares.deviceWriters("env-1"); len(got.Users) != 1 || got.Users[0] != "demo-user" || len(got.Groups) != 1 || got.Groups[0] != "/demo" {
+		t.Errorf("the device writers have to be stored with the set, got %+v", got)
+	}
+	answer := sharesResponseOf(t, resp.Body.Bytes())
+	if len(answer.DeviceWriters.Users) != 1 || answer.DeviceWriters.Users[0] != "demo-user" || len(answer.DeviceWriters.Groups) != 1 {
+		t.Errorf("the answer has to carry the device writers, got %+v", answer)
+	}
+	read := sharesResponseOf(t, do(t, router, "GET", "/environments/env-1/shares", "user-a", nil).Body.Bytes())
+	if len(read.DeviceWriters.Users) != 1 || read.DeviceWriters.Users[0] != "demo-user" || len(read.DeviceWriters.Groups) != 1 {
+		t.Errorf("the read has to serve the stored device writers, got %+v", read)
+	}
+}
+
+// storeWithADeviceWriter is demo-user writing, other-user reading the devices.
+func storeWithADeviceWriter() (*fakeEnvironments, *fakeShares, *fakePermissions) {
+	shares := newFakeShares()
+	shares.setWithDeviceWriters("env-1", []string{"demo-user", "other-user"}, nil, repo.Principals{Users: []string{"demo-user"}})
+	permissions := newFakePermissions("dev-1", "dev-2")
+	for _, device := range managedTestDevices {
+		permissions.deviceRights(device, "demo-user", permModel.PermissionsMap{Read: true, Write: true, Execute: true})
+		permissions.deviceRights(device, "other-user", permModel.PermissionsMap{Read: true, Execute: true})
+	}
+	return storeWithSharedEnvironment(), shares, permissions
+}
+
+func TestADeviceWritersObjectReplacesTheStoredOnes(t *testing.T) {
+	store, shares, permissions := storeWithADeviceWriter()
+	resp := putRaw(t, testRouterWithShares(store, shares, nil, permissions),
+		`{"users":["demo-user","other-user"],"device_writers":{"users":["other-user"]}}`)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if got := shares.deviceWriters("env-1").Users; len(got) != 1 || got[0] != "other-user" {
+		t.Errorf("the sent writers replace the stored ones, got %v", got)
+	}
+	for _, device := range managedTestDevices {
+		if rights := permissions.userRights(device, "demo-user"); rights.Write || !rights.Read || !rights.Execute {
+			t.Errorf("%s: the former writer loses write and keeps read and execute, got %+v", device, rights)
+		}
+		if rights := permissions.userRights(device, "other-user"); !rights.Write || !rights.Read {
+			t.Errorf("%s: the new writer gets write, got %+v", device, rights)
+		}
+	}
+}
+
+func TestAnExplicitEmptyDeviceWritersReplacesThem(t *testing.T) {
+	for name, body := range map[string]string{
+		"empty object": `{"users":["demo-user","other-user"],"device_writers":{}}`,
+		"empty lists":  `{"users":["demo-user","other-user"],"device_writers":{"users":[],"groups":[]}}`,
+	} {
+		store, shares, permissions := storeWithADeviceWriter()
+		resp := putRaw(t, testRouterWithShares(store, shares, nil, permissions), body)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d: %s", name, resp.Code, resp.Body.String())
+		}
+		if got := shares.deviceWriters("env-1"); len(got.Users) != 0 || len(got.Groups) != 0 {
+			t.Errorf("%s: an explicit empty set replaces the writers, got %+v", name, got)
+		}
+		for _, device := range managedTestDevices {
+			if rights := permissions.userRights(device, "demo-user"); rights.Write || !rights.Read {
+				t.Errorf("%s: %s: the former writer loses write and keeps read, got %+v", name, device, rights)
+			}
+		}
+	}
+}
+
+// A client that does not know device_writers must not take write away by saving.
+func TestAnAbsentOrNullDeviceWritersKeepsTheStoredOnes(t *testing.T) {
+	for name, body := range map[string]string{
+		"absent": `{"users":["demo-user","other-user","third-user"]}`,
+		"null":   `{"users":["demo-user","other-user","third-user"],"device_writers":null}`,
+	} {
+		store, shares, permissions := storeWithADeviceWriter()
+		resp := putRaw(t, testRouterWithShares(store, shares, nil, permissions), body)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d: %s", name, resp.Code, resp.Body.String())
+		}
+		if got := shares.deviceWriters("env-1").Users; len(got) != 1 || got[0] != "demo-user" {
+			t.Errorf("%s: the stored writers have to be kept, got %v", name, got)
+		}
+		if answer := sharesResponseOf(t, resp.Body.Bytes()); len(answer.DeviceWriters.Users) != 1 || answer.DeviceWriters.Users[0] != "demo-user" {
+			t.Errorf("%s: the answer has to carry the kept writers, got %+v", name, answer.DeviceWriters)
+		}
+		for _, device := range managedTestDevices {
+			if rights := permissions.userRights(device, "demo-user"); !rights.Write || !rights.Read {
+				t.Errorf("%s: %s: the kept writer has to keep write, got %+v", name, device, rights)
+			}
+			if rights := permissions.userRights(device, "third-user"); rights.Write || !rights.Read {
+				t.Errorf("%s: %s: a newly shared account is no writer, got %+v", name, device, rights)
+			}
+		}
+	}
+}
+
+// A kept writer that is no longer shared goes with its share instead of turning
+// the request into a 400 the client could not have avoided.
+func TestAnAbsentDeviceWritersDropsAWriterThatIsNoLongerShared(t *testing.T) {
+	store, shares, permissions := storeWithADeviceWriter()
+	resp := putRaw(t, testRouterWithShares(store, shares, nil, permissions), `{"users":["other-user"]}`)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if got := shares.deviceWriters("env-1"); len(got.Users) != 0 || len(got.Groups) != 0 {
+		t.Errorf("the writer that left the share must not be kept, got %+v", got)
+	}
+	for _, device := range managedTestDevices {
+		if permissions.knowsUser(device, "demo-user") {
+			t.Errorf("%s: the account that left the share loses its entry", device)
+		}
+	}
+}
+
+func TestADeviceWriterHasToBeSharedWith(t *testing.T) {
+	for name, request := range map[string]ShareRequest{
+		"a user that is not shared with": {
+			ShareTargets:  ShareTargets{Users: []string{"demo-user"}},
+			DeviceWriters: &ShareTargets{Users: []string{"stranger"}},
+		},
+		"a group that is not shared with": {
+			ShareTargets:  ShareTargets{Groups: []string{"/demo"}},
+			DeviceWriters: &ShareTargets{Groups: []string{"/strangers"}},
+		},
+		"a user named only as a group": {
+			ShareTargets:  ShareTargets{Groups: []string{"/demo"}},
+			DeviceWriters: &ShareTargets{Users: []string{"/demo"}},
+		},
+		"a writer without any share": {
+			DeviceWriters: &ShareTargets{Users: []string{"demo-user"}},
+		},
+		"an empty writer id": {
+			ShareTargets:  ShareTargets{Users: []string{"demo-user"}},
+			DeviceWriters: &ShareTargets{Users: []string{" "}},
+		},
+		"a writer group without a path": {
+			ShareTargets:  ShareTargets{Groups: []string{"/demo"}},
+			DeviceWriters: &ShareTargets{Groups: []string{"demo"}},
+		},
+	} {
+		store := storeWithSharedEnvironment()
+		shares := newFakeShares()
+		permissions := newFakePermissions("dev-1", "dev-2")
+		resp := do(t, testRouterWithShares(store, shares, nil, permissions), "PUT", "/environments/env-1/shares", "user-a", request)
+		if resp.Code != http.StatusBadRequest {
+			t.Errorf("%s: expected 400, got %d: %s", name, resp.Code, resp.Body.String())
+			continue
+		}
+		if body := resp.Body.String(); !strings.Contains(body, "device_writers") || strings.Contains(body, "graph_writers") {
+			t.Errorf("%s: the answer has to say it is about device_writers, got %s", name, body)
+		}
+		gets, sets, _ := permissions.calls()
+		if len(gets) != 0 || len(sets) != 0 || shares.has("env-1") {
+			t.Errorf("%s: a refused set must change nothing", name)
+		}
+	}
+}
+
+// Both writer fields are checked in one pass, so one answer names every problem.
+func TestBadGraphAndDeviceWritersAreReportedTogether(t *testing.T) {
+	resp := do(t, testRouterWithShares(storeWithSharedEnvironment(), newFakeShares(), nil, newFakePermissions("dev-1", "dev-2")),
+		"PUT", "/environments/env-1/shares", "user-a", ShareRequest{
+			ShareTargets:  ShareTargets{Users: []string{"demo-user"}},
+			GraphWriters:  &ShareTargets{Users: []string{"graph-stranger"}},
+			DeviceWriters: &ShareTargets{Users: []string{"device-stranger"}},
+		})
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if body := resp.Body.String(); !strings.Contains(body, `"graph-stranger"`) || !strings.Contains(body, `"device-stranger"`) {
+		t.Errorf("expected both writers named, got %s", body)
+	}
+}
+
+func TestADeviceWriterIsNormalizedLikeTheShare(t *testing.T) {
+	store := storeWithSharedEnvironment()
+	shares := newFakeShares()
+	router := testRouterWithShares(store, shares, nil, newFakePermissions("dev-1", "dev-2"))
+
+	resp := do(t, router, "PUT", "/environments/env-1/shares", "user-a", ShareRequest{
+		ShareTargets:  ShareTargets{Users: []string{"demo-user"}},
+		DeviceWriters: &ShareTargets{Users: []string{" demo-user", "demo-user "}},
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if got := shares.deviceWriters("env-1").Users; len(got) != 1 || got[0] != "demo-user" {
+		t.Errorf("expected one trimmed writer, got %v", got)
+	}
+}
+
+func TestDeviceWritersDoNotCountAgainTowardsTheLimit(t *testing.T) {
+	everybody := manyPrincipals(maxShares)
+	router := testRouterWithShares(storeWithGraphEnvironment(), newFakeShares(), nil, graphWriterPermissions())
+	resp := do(t, router, "PUT", "/environments/env-1/shares", "user-a", ShareRequest{
+		ShareTargets:  ShareTargets{Users: everybody},
+		GraphWriters:  &ShareTargets{Users: everybody},
+		DeviceWriters: &ShareTargets{Users: everybody},
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200 at the limit with every account a writer of both, got %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
+// On a device moses takes back only the write it granted: a former device writer
+// loses it, a write it never granted stays whatever the request says.
+func TestAPutTakesBackOnlyTheDeviceWriteItGranted(t *testing.T) {
+	//absent keeps the stored writers that are still shared, so there the former
+	//writer leaves the share; explicit keeps it shared as a reader
+	for name, body := range map[string]string{
+		"absent":   `{"users":["demo-user","new-user"],"groups":["/demo"]}`,
+		"explicit": `{"users":["demo-user","former-writer","new-user"],"groups":["/demo"],"device_writers":{}}`,
+	} {
+		store := storeWithSharedEnvironment()
+		shares := newFakeShares()
+		shares.setWithDeviceWriters("env-1", []string{"demo-user", "former-writer", "admin-user"}, []string{"/demo"},
+			repo.Principals{Users: []string{"former-writer"}})
+		permissions := newFakePermissions("dev-1", "dev-2")
+		for _, device := range managedTestDevices {
+			permissions.deviceRights(device, "demo-user", permModel.PermissionsMap{Read: true, Write: true, Execute: true})
+			permissions.deviceGroup(device, "/demo", permModel.PermissionsMap{Read: true, Write: true, Execute: true})
+			permissions.deviceRights(device, "former-writer", permModel.PermissionsMap{Read: true, Write: true, Execute: true})
+			permissions.deviceRights(device, "new-user", permModel.PermissionsMap{Write: true})
+			permissions.deviceRights(device, "admin-user", permModel.PermissionsMap{Read: true, Write: true, Administrate: true})
+			permissions.deviceRights(device, "outsider", permModel.PermissionsMap{Read: true, Write: true})
+		}
+		router := testRouterWithShares(store, shares, nil, permissions)
+
+		if resp := putRaw(t, router, body); resp.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d: %s", name, resp.Code, resp.Body.String())
+		}
+		for _, device := range managedTestDevices {
+			if rights := permissions.userRights(device, "demo-user"); !rights.Write || !rights.Read || !rights.Execute {
+				t.Errorf("%s: %s: a write moses never granted stays, got %+v", name, device, rights)
+			}
+			if rights := permissions.groupRights(device, "/demo"); !rights.Write || !rights.Read {
+				t.Errorf("%s: %s: a group write moses never granted stays, got %+v", name, device, rights)
+			}
+			if rights := permissions.userRights(device, "new-user"); !rights.Write || !rights.Read || !rights.Execute {
+				t.Errorf("%s: %s: a newly shared account keeps its write and gets read and execute, got %+v", name, device, rights)
+			}
+			if name == "explicit" {
+				if rights := permissions.userRights(device, "former-writer"); rights.Write || !rights.Read || !rights.Execute {
+					t.Errorf("%s: %s: a former device writer loses write and keeps read and execute, got %+v", name, device, rights)
+				}
+			} else if permissions.knowsUser(device, "former-writer") {
+				t.Errorf("%s: %s: a former device writer that left the share loses its entry", name, device)
+			}
+			//the withdrawn administrator keeps its entry, an account outside the share is not ours
+			if rights := permissions.userRights(device, "admin-user"); !rights.Write || !rights.Administrate {
+				t.Errorf("%s: %s: an administrating entry keeps its write, got %+v", name, device, rights)
+			}
+			if rights := permissions.userRights(device, "outsider"); !rights.Write {
+				t.Errorf("%s: %s: an account outside the share must not be touched, got %+v", name, device, rights)
+			}
+			if rights := permissions.userRights(device, "user-a"); !rights.Write || !rights.Administrate {
+				t.Errorf("%s: %s: the owner keeps their device, got %+v", name, device, rights)
+			}
+		}
+	}
+}
+
+// The write of an administrating entry is the owner's or an administrator's own.
+func TestTakingDeviceWriteBackNeverTouchesAnAdministrator(t *testing.T) {
+	store := storeWithSharedEnvironment()
+	shares := newFakeShares()
+	shares.setWithDeviceWriters("env-1", []string{"admin-user"}, []string{"/admins"},
+		repo.Principals{Users: []string{"admin-user"}, Groups: []string{"/admins"}})
+	permissions := newFakePermissions("dev-1", "dev-2")
+	for _, device := range managedTestDevices {
+		permissions.deviceRights(device, "admin-user", permModel.PermissionsMap{Read: true, Write: true, Execute: true, Administrate: true})
+		permissions.deviceGroup(device, "/admins", permModel.PermissionsMap{Read: true, Write: true, Execute: true, Administrate: true})
+	}
+	router := testRouterWithShares(store, shares, nil, permissions)
+
+	if code := do(t, router, "PUT", "/environments/env-1/shares", "user-a", ShareRequest{
+		ShareTargets:  ShareTargets{Users: []string{"admin-user"}, Groups: []string{"/admins"}},
+		DeviceWriters: &ShareTargets{},
+	}).Code; code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	for _, device := range managedTestDevices {
+		if rights := permissions.userRights(device, "admin-user"); !rights.Write || !rights.Administrate {
+			t.Errorf("%s: an administrating entry keeps its write, got %+v", device, rights)
+		}
+		if rights := permissions.groupRights(device, "/admins"); !rights.Write || !rights.Administrate {
+			t.Errorf("%s: an administrating group keeps its write, got %+v", device, rights)
+		}
+	}
+}
+
+func TestWithdrawingADeviceWriterEntirelyDropsTheEntry(t *testing.T) {
+	store, shares, permissions := storeWithADeviceWriter()
+	if code := putRaw(t, testRouterWithShares(store, shares, nil, permissions), `{}`).Code; code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	for _, device := range managedTestDevices {
+		if permissions.knowsUser(device, "demo-user") {
+			t.Errorf("%s: a withdrawn device writer has to lose the whole entry", device)
+		}
+		if rights := permissions.userRights(device, "user-a"); !rights.Administrate {
+			t.Errorf("%s: the owner must not be touched, got %+v", device, rights)
+		}
+	}
+}
+
+// A write granted by a call that failed elsewhere has to be recorded, or the next
+// call would not know to take it back.
+func TestAFailedShareRecordsTheDeviceWritersSoWriteCanBeTakenBack(t *testing.T) {
+	store := storeWithSharedEnvironment()
+	shares := newFakeShares()
+	shares.setWithDeviceWriters("env-1", []string{"other-user"}, nil, repo.Principals{Users: []string{"other-user"}})
+	permissions := newFakePermissions("dev-1", "dev-2")
+	permissions.deviceRights("dev-1", "other-user", permModel.PermissionsMap{Read: true, Write: true, Execute: true})
+	permissions.getErr["dev-2"] = errors.New("permissions-v2 unreachable")
+	router := testRouterWithShares(store, shares, nil, permissions)
+
+	resp := do(t, router, "PUT", "/environments/env-1/shares", "user-a", ShareRequest{
+		ShareTargets:  ShareTargets{Users: []string{"demo-user"}},
+		DeviceWriters: &ShareTargets{Users: []string{"demo-user"}},
+	})
+	if resp.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if !permissions.userRights("dev-1", "demo-user").Write {
+		t.Fatal("expected dev-1 to have gone through")
+	}
+	if got := sortedCopy(shares.deviceWriters("env-1").Users); len(got) != 2 || got[0] != "demo-user" || got[1] != "other-user" {
+		t.Fatalf("the union of the stored and the requested writers has to stand, got %v", got)
+	}
+	read := sharesResponseOf(t, do(t, router, "GET", "/environments/env-1/shares", "user-a", nil).Body.Bytes())
+	if got := sortedCopy(read.DeviceWriters.Users); len(got) != 2 {
+		t.Errorf("the read has to show every account that may hold write, got %v", got)
+	}
+
+	permissions.getErr = map[string]error{}
+	if code := do(t, router, "PUT", "/environments/env-1/shares", "user-a", ShareRequest{
+		ShareTargets:  ShareTargets{Users: []string{"demo-user", "other-user"}},
+		DeviceWriters: &ShareTargets{},
+	}).Code; code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	for _, device := range managedTestDevices {
+		for _, user := range []string{"demo-user", "other-user"} {
+			if rights := permissions.userRights(device, user); rights.Write || !rights.Read {
+				t.Errorf("%s: %s: the write of the failed call has to be taken back, got %+v", device, user, rights)
+			}
+		}
+	}
+}
+
+// A set stored before device_writers existed must read as one without writers,
+// as lists and not null.
+func TestALegacySetServesNoDeviceWriters(t *testing.T) {
+	shares := newFakeShares()
+	shares.set("env-1", []string{"demo-user"}, nil)
+	router := testRouterWithShares(storeWithSharedEnvironment(), shares, nil, newFakePermissions("dev-1", "dev-2"))
+
+	resp := do(t, router, "GET", "/environments/env-1/shares", "user-a", nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if body := resp.Body.String(); !strings.Contains(body, `"device_writers":{"users":[],"groups":[]}`) {
+		t.Errorf("expected empty writer lists, got %s", body)
+	}
+}
+
+// A device a save creates gets the stored set, write for the device writers
+// included; a non-writer gets no write, and one it carries is not taken.
+func TestADeviceCreatedByASaveInheritsTheDeviceWriters(t *testing.T) {
+	store := storeWithSharedEnvironment()
+	shares := newFakeShares()
+	shares.setWithDeviceWriters("env-1", []string{"demo-user", "other-user", "carrying-user"}, []string{"/demo"},
+		repo.Principals{Users: []string{"demo-user"}, Groups: []string{"/demo"}})
+	permissions := newFakePermissions("dev-1", "dev-2", "urn:device:new")
+	permissions.deviceRights("urn:device:new", "carrying-user", permModel.PermissionsMap{Write: true})
+	catalog := &fakeCatalog{}
+	router := testRouterWithShares(store, shares, catalog, permissions)
+
+	sent := sharedEnvironment()
+	sent.Zones[0].Assets = append(sent.Zones[0].Assets, newMachine("asset-4", "Neue Maschine"))
+	if resp := do(t, router, "PUT", "/environments/env-1", "user-a", sent); resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if len(catalog.created) != 1 {
+		t.Fatalf("expected one device for the new asset, got %+v", catalog.created)
+	}
+	if rights := permissions.userRights("urn:device:new", "demo-user"); !rights.Write || !rights.Read || !rights.Execute {
+		t.Errorf("the new device has to give the device writer write, got %+v", rights)
+	}
+	if rights := permissions.groupRights("urn:device:new", "/demo"); !rights.Write || !rights.Read {
+		t.Errorf("the new device has to give the writing group write, got %+v", rights)
+	}
+	if rights := permissions.userRights("urn:device:new", "other-user"); rights.Write || !rights.Read {
+		t.Errorf("a shared account that is no writer reads the new device only, got %+v", rights)
+	}
+	if rights := permissions.userRights("urn:device:new", "carrying-user"); !rights.Write || !rights.Read {
+		t.Errorf("a write moses never granted stays on the new device, got %+v", rights)
+	}
+	if rights := permissions.userRights("urn:device:new", "user-a"); !rights.Administrate || !rights.Write {
+		t.Errorf("the owner keeps the new device, got %+v", rights)
+	}
+	if permissions.setsOf("dev-1") != 0 || permissions.setsOf("dev-2") != 0 {
+		t.Error("a save must only touch the devices it created")
 	}
 }
