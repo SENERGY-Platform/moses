@@ -135,11 +135,11 @@ func (this *validator) checkGroupId(path string, id string) {
 	switch {
 	case strings.Contains(id, "->"):
 		//edge ids are child->parent, so "a->b"->"c" and "a"->"b->c" would collide
-		this.meterFail(path, "must not contain \"->\", which separates the two ends of an edge id in the meter graph")
+		this.meterFail(path, "must not contain \"->\", which is reserved as the separator of an edge id")
 	case id == meterRootId:
-		this.meterFail(path, "must not be %q, the id of the root node of the meter graph", meterRootId)
+		this.meterFail(path, "must not be %q, which is reserved for the root node", meterRootId)
 	case this.deviceRefs[id]:
-		this.meterFail(path, "must not be the external_ref of an asset: the device and the group would be one node of the meter graph")
+		this.meterFail(path, "must not be the external_ref of an asset: a group and a device need distinct ids")
 	default:
 		//claimId, but within the bound of the meter problems
 		if previous, taken := this.ids[id]; taken {
