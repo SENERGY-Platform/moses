@@ -24,19 +24,6 @@ const MaxMeterParents = 100
 // which a meter group id must not take.
 const meterRootId = "root"
 
-// EffectiveMeterParents is what the meter graph reads as the parents of an
-// asset: its meter_parents, else its submetered_by carrying the whole flow,
-// else nothing.
-func (this Asset) EffectiveMeterParents() []MeterParent {
-	if len(this.MeterParents) > 0 {
-		return this.MeterParents
-	}
-	if this.SubmeteredBy != "" {
-		return []MeterParent{{Id: this.SubmeteredBy, Weight: 100}}
-	}
-	return nil
-}
-
 // MeterWeights resolves the weights of one parent list in list order. Explicit
 // weights are taken as given; all omitted is an equal split whose remainder
 // goes one point each to the first parents. ok is false for a list the

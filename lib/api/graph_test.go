@@ -17,15 +17,20 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/SENERGY-Platform/models/go/models"
 	"github.com/SENERGY-Platform/moses/lib/domain"
 	"github.com/SENERGY-Platform/moses/lib/graphs"
+	"github.com/SENERGY-Platform/moses/lib/util"
 )
 
 // ---------------------------------------------------------------------------
@@ -49,14 +54,12 @@ type fakeGraphMirror struct {
 
 	setErr     error
 	setCode    int
+	setPanics  bool
 	deleteErr  error
 	deleteCode int
 
-	// setErrFor and panicFor fail the writes of one kind of graph only (see
-	// graphKindOf), deleteErrFor the delete of one graph id, so a test can show
-	// that the other graph is handled regardless
-	setErrFor    map[string]error
-	panicFor     map[string]bool
+	// deleteErrFor fails the delete of one graph id only, so a test can show
+	// that another graph is handled regardless
 	deleteErrFor map[string]error
 
 	// answerWithoutId stores the graph but answers without its id
@@ -64,29 +67,14 @@ type fakeGraphMirror struct {
 }
 
 func newFakeGraphMirror() *fakeGraphMirror {
-	return &fakeGraphMirror{stored: map[string]models.Graph{},
-		setErrFor: map[string]error{}, panicFor: map[string]bool{}, deleteErrFor: map[string]error{}}
-}
-
-// graphKindOf tells the two mirrors apart by the attribute only the meter
-// graph carries.
-func graphKindOf(graph models.Graph) string {
-	for _, attr := range graph.Attributes {
-		if attr.Key == graphs.GraphAttribute && attr.Value == graphs.MeterGraph {
-			return meterGraphKind
-		}
-	}
-	return locationGraphKind
+	return &fakeGraphMirror{stored: map[string]models.Graph{}, deleteErrFor: map[string]error{}}
 }
 
 func (this *fakeGraphMirror) SetGraph(token string, graph models.Graph) (models.Graph, error, int) {
 	this.tokensSeen = append(this.tokensSeen, token)
 	this.sent = append(this.sent, graph)
-	if this.panicFor[graphKindOf(graph)] {
+	if this.setPanics {
 		panic("graph client bug")
-	}
-	if err := this.setErrFor[graphKindOf(graph)]; err != nil {
-		return models.Graph{}, err, http.StatusInternalServerError
 	}
 	if this.setErr != nil {
 		return models.Graph{}, this.setErr, this.setCode
@@ -115,16 +103,13 @@ func (this *fakeGraphMirror) DeleteGraph(token string, id string) (error, int) {
 	return nil, http.StatusOK
 }
 
-// lastSent is the last graph of one kind that was written.
-func (this *fakeGraphMirror) lastSent(t *testing.T, kind string) models.Graph {
+// lastSent is the last graph that was written.
+func (this *fakeGraphMirror) lastSent(t *testing.T) models.Graph {
 	t.Helper()
-	for i := len(this.sent) - 1; i >= 0; i-- {
-		if graphKindOf(this.sent[i]) == kind {
-			return this.sent[i]
-		}
+	if len(this.sent) == 0 {
+		t.Fatal("no graph was mirrored at all")
 	}
-	t.Fatalf("no %s graph was mirrored at all", kind)
-	return models.Graph{}
+	return this.sent[len(this.sent)-1]
 }
 
 func graphName(graph models.Graph) string {
@@ -139,6 +124,65 @@ func graphName(graph models.Graph) string {
 		}
 	}
 	return ""
+}
+
+// captureLogs collects what the package logger writes during one call. Safe
+// only around handlers that log from the calling goroutine, since util.Logger is
+// a package variable.
+func captureLogs(t *testing.T, during func()) string {
+	t.Helper()
+	buffer := &bytes.Buffer{}
+	previous := util.Logger
+	util.Logger = slog.New(slog.NewTextHandler(buffer, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	defer func() { util.Logger = previous }()
+	during()
+	return buffer.String()
+}
+
+// withBodyField is the JSON of env with one more top level field, for a field
+// the domain type does not decode.
+func withBodyField(t *testing.T, env domain.Environment, key string, value interface{}) map[string]interface{} {
+	t.Helper()
+	raw, err := json.Marshal(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := map[string]interface{}{}
+	if err = json.Unmarshal(raw, &result); err != nil {
+		t.Fatal(err)
+	}
+	result[key] = value
+	return result
+}
+
+// environmentWithMeterParents carries meter_parents and a meter group, which
+// moses validates and stores but no longer mirrors.
+func environmentWithMeterParents() domain.Environment {
+	env := environmentWithTwoAssets()
+	env.Zones[0].Assets[0].Id = "asset-kompressor"
+	env.Zones[0].Zones[0].Assets[0].Id = "asset-zaehler"
+	env.MeterGroups = []domain.MeterGroup{{Id: "group-abgaenge", Name: "Abgänge", Parents: []domain.MeterParent{{Id: "asset-zaehler"}}}}
+	env.Zones[0].Assets[0].MeterParents = []domain.MeterParent{{Id: "group-abgaenge"}}
+	return env
+}
+
+const (
+	ownedGraph      = "urn:infai:ses:graph:owned"
+	leftoverMeters  = "urn:infai:ses:graph:owned-meters"
+	somebodysMeters = "urn:infai:ses:graph:somebody-elses-meters"
+)
+
+// storeWithLeftoverMeterGraph holds an environment saved while moses still
+// wrote a meter graph, and the mirror holds both of its graphs.
+func storeWithLeftoverMeterGraph(t *testing.T, store *fakeEnvironments, mirror *fakeGraphMirror) domain.Environment {
+	t.Helper()
+	stored := storeDirectly(t, store, "env-1", "user-a", minimalEnvironment())
+	stored.ExternalGraphRef = ownedGraph
+	stored.ExternalMeterGraphRef = leftoverMeters
+	store.stored["env-1"] = stored
+	mirror.stored[ownedGraph] = models.Graph{Id: ownedGraph}
+	mirror.stored[leftoverMeters] = models.Graph{Id: leftoverMeters}
+	return stored
 }
 
 // A created environment gets a graph, and the id it got is stored with the
@@ -160,28 +204,62 @@ func TestCreatingAnEnvironmentMirrorsItAsAGraph(t *testing.T) {
 	if created.ExternalGraphRef != "urn:infai:ses:graph:1" {
 		t.Fatalf("expected the assigned graph ref in the answer, got %q", created.ExternalGraphRef)
 	}
-	if created.ExternalMeterGraphRef != "urn:infai:ses:graph:2" {
-		t.Fatalf("expected the assigned meter graph ref in the answer, got %q", created.ExternalMeterGraphRef)
-	}
 	if stored := store.stored[created.Id].ExternalGraphRef; stored != created.ExternalGraphRef {
 		t.Errorf("the ref has to be in the stored document, not only in the answer, got %q", stored)
 	}
-	if stored := store.stored[created.Id].ExternalMeterGraphRef; stored != created.ExternalMeterGraphRef {
-		t.Errorf("the meter graph ref has to be in the stored document, not only in the answer, got %q", stored)
-	}
-	for _, kind := range []string{locationGraphKind, meterGraphKind} {
-		if id := mirror.lastSent(t, kind).Id; id != "" {
-			t.Errorf("a %s graph that does not exist yet is created without an id, got %q", kind, id)
-		}
+	if id := mirror.lastSent(t).Id; id != "" {
+		t.Errorf("a graph that does not exist yet is created without an id, got %q", id)
 	}
 	if graphName(mirror.stored["urn:infai:ses:graph:1"]) != "Metallbau Musterstadt" {
 		t.Errorf("expected the environment name on the mirrored graph, got %+v", mirror.stored)
 	}
-	if graphName(mirror.stored["urn:infai:ses:graph:2"]) != "Metallbau Musterstadt (meters)" {
-		t.Errorf("expected the meter graph under the second ref, got %+v", mirror.stored)
-	}
 	if len(mirror.tokensSeen) == 0 || mirror.tokensSeen[0] != tokenFor("user-a") {
 		t.Errorf("the graph is written with the caller's own token, got %v", mirror.tokensSeen)
+	}
+}
+
+// meter_parents and meter_groups are stored, but a create writes the location
+// graph only and stores no meter graph ref. Through POST and through a PUT to
+// a new id alike.
+func TestACreateWithMeterParentsWritesExactlyOneGraph(t *testing.T) {
+	for _, how := range []string{"POST", "PUT"} {
+		t.Run(how, func(t *testing.T) {
+			mirror := newFakeGraphMirror()
+			catalog := &fakeCatalog{idsByName: namedDeviceIds()}
+			store := newFakeEnvironments()
+			router := testRouterWith(store, catalog, mirror, nil)
+
+			path := "/environments"
+			if how == "PUT" {
+				path += "/env-1"
+			}
+			resp := do(t, router, how, path, "user-a", environmentWithMeterParents())
+			if resp.Code != http.StatusCreated && resp.Code != http.StatusOK {
+				t.Fatalf("expected the create to succeed, got %d: %s", resp.Code, resp.Body.String())
+			}
+			if len(mirror.sent) != 1 || len(mirror.stored) != 1 {
+				t.Fatalf("expected exactly one graph written, got %d writes and %d graphs", len(mirror.sent), len(mirror.stored))
+			}
+			if len(store.stored) != 1 {
+				t.Fatalf("expected one stored environment, got %d", len(store.stored))
+			}
+			for _, stored := range store.stored {
+				if stored.ExternalGraphRef == "" || stored.ExternalMeterGraphRef != "" {
+					t.Errorf("expected only the location graph ref stored, got %q and %q", stored.ExternalGraphRef, stored.ExternalMeterGraphRef)
+				}
+				if len(stored.MeterGroups) != 1 || len(assetNamed(t, stored, "Kompressor 1").MeterParents) != 1 {
+					t.Errorf("meter_parents and meter_groups have to be stored as sent, got %+v", stored.MeterGroups)
+				}
+			}
+			for _, node := range mirror.lastSent(t).Nodes {
+				if node.Id == "group-abgaenge" {
+					t.Error("a meter group must not appear in the location graph")
+				}
+			}
+			if strings.Contains(resp.Body.String(), "external_meter_graph_ref") {
+				t.Errorf("the answer must not carry a meter graph ref, got %s", resp.Body.String())
+			}
+		})
 	}
 }
 
@@ -193,42 +271,75 @@ func TestUpdatingAnEnvironmentWritesTheStoredGraphNotTheSentOne(t *testing.T) {
 	router := testRouterWith(store, nil, mirror, nil)
 
 	stored := storeDirectly(t, store, "env-1", "user-a", minimalEnvironment())
-	stored.ExternalGraphRef = "urn:infai:ses:graph:owned"
-	stored.ExternalMeterGraphRef = "urn:infai:ses:graph:owned-meters"
+	stored.ExternalGraphRef = ownedGraph
 	store.stored["env-1"] = stored
 
-	//the client echoes different refs, whether from a stale copy or by hand
+	//the client echoes a different ref, whether from a stale copy or by hand
 	sending := copyEnvironment(t, stored)
 	sending.ExternalGraphRef = "urn:infai:ses:graph:somebody-else"
-	sending.ExternalMeterGraphRef = "urn:infai:ses:graph:somebody-elses-meters"
 	sending.Name = "Metallbau Musterstadt, neu"
 	answer := putEnvironment(t, router, "env-1", "user-a", sending)
 
-	if answer.ExternalGraphRef != "urn:infai:ses:graph:owned" {
+	if answer.ExternalGraphRef != ownedGraph {
 		t.Errorf("expected the stored ref to survive, got %q", answer.ExternalGraphRef)
 	}
-	if answer.ExternalMeterGraphRef != "urn:infai:ses:graph:owned-meters" {
-		t.Errorf("expected the stored meter graph ref to survive, got %q", answer.ExternalMeterGraphRef)
-	}
-	if id := mirror.lastSent(t, locationGraphKind).Id; id != "urn:infai:ses:graph:owned" {
+	if id := mirror.lastSent(t).Id; id != ownedGraph {
 		t.Fatalf("expected the update to address the stored graph, it addressed %q", id)
 	}
-	if id := mirror.lastSent(t, meterGraphKind).Id; id != "urn:infai:ses:graph:owned-meters" {
-		t.Fatalf("expected the update to address the stored meter graph, it addressed %q", id)
+	if _, touched := mirror.stored["urn:infai:ses:graph:somebody-else"]; touched {
+		t.Error("the graph named by the client must not be written")
 	}
-	for _, foreign := range []string{"urn:infai:ses:graph:somebody-else", "urn:infai:ses:graph:somebody-elses-meters"} {
-		if _, touched := mirror.stored[foreign]; touched {
-			t.Errorf("the graph %s named by the client must not be written", foreign)
-		}
-	}
-	if graphName(mirror.stored["urn:infai:ses:graph:owned"]) != "Metallbau Musterstadt, neu" {
+	if graphName(mirror.stored[ownedGraph]) != "Metallbau Musterstadt, neu" {
 		t.Error("the mirror was not brought up to date with the new document")
 	}
-	if graphName(mirror.stored["urn:infai:ses:graph:owned-meters"]) != "Metallbau Musterstadt, neu (meters)" {
-		t.Error("the meter graph was not brought up to date with the new document")
-	}
-	if len(mirror.stored) != 2 {
+	if len(mirror.stored) != 1 {
 		t.Errorf("an update must not create graphs, got %d", len(mirror.stored))
+	}
+}
+
+// A meter graph ref in the body is never taken: a save deletes the meter graph
+// the stored document names, so honouring a sent one would delete somebody
+// else's graph.
+func TestAMeterGraphRefInTheBodyIsIgnored(t *testing.T) {
+	cases := map[string]func(t *testing.T, store *fakeEnvironments) (method string, path string){
+		"create": func(t *testing.T, store *fakeEnvironments) (string, string) {
+			return "POST", "/environments"
+		},
+		"put to a new id": func(t *testing.T, store *fakeEnvironments) (string, string) {
+			return "PUT", "/environments/env-2"
+		},
+		"update of a document without one": func(t *testing.T, store *fakeEnvironments) (string, string) {
+			stored := storeDirectly(t, store, "env-1", "user-a", minimalEnvironment())
+			stored.ExternalGraphRef = ownedGraph
+			store.stored["env-1"] = stored
+			return "PUT", "/environments/env-1"
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			mirror := newFakeGraphMirror()
+			mirror.stored[somebodysMeters] = models.Graph{Id: somebodysMeters}
+			store := newFakeEnvironments()
+			router := testRouterWith(store, nil, mirror, nil)
+			method, path := setup(t, store)
+
+			resp := do(t, router, method, path, "user-a",
+				withBodyField(t, minimalEnvironment(), "external_meter_graph_ref", somebodysMeters))
+			if resp.Code != http.StatusCreated && resp.Code != http.StatusOK {
+				t.Fatalf("expected the save to succeed, got %d: %s", resp.Code, resp.Body.String())
+			}
+			if len(mirror.deleted) != 0 {
+				t.Errorf("a ref from the body must not be deleted, deleted %v", mirror.deleted)
+			}
+			if _, alive := mirror.stored[somebodysMeters]; !alive {
+				t.Error("the graph named in the body is gone")
+			}
+			for id, stored := range store.stored {
+				if stored.ExternalMeterGraphRef != "" {
+					t.Errorf("%s: a ref from the body must not be stored, got %q", id, stored.ExternalMeterGraphRef)
+				}
+			}
+		})
 	}
 }
 
@@ -240,11 +351,10 @@ func TestACopyUnderANewIdGetsItsOwnGraphAndLeavesTheOriginalAlone(t *testing.T) 
 	router := testRouterWith(store, nil, mirror, nil)
 
 	original := putEnvironment(t, router, "env-1", "user-a", minimalEnvironment())
-	if original.ExternalGraphRef == "" || original.ExternalMeterGraphRef == "" {
+	if original.ExternalGraphRef == "" {
 		t.Fatal("setup: the original was not mirrored")
 	}
 	originalGraph := mirror.stored[original.ExternalGraphRef]
-	originalMeterGraph := mirror.stored[original.ExternalMeterGraphRef]
 
 	//the export of the original, put under a fresh id, unedited
 	copied := copyEnvironment(t, original)
@@ -263,31 +373,157 @@ func TestACopyUnderANewIdGetsItsOwnGraphAndLeavesTheOriginalAlone(t *testing.T) 
 	if got := graphName(mirror.stored[answer.ExternalGraphRef]); got != "Metallbau Zweitwerk" {
 		t.Errorf("expected the copy's own graph to carry its name, got %q", got)
 	}
-	if answer.ExternalMeterGraphRef == "" || answer.ExternalMeterGraphRef == original.ExternalMeterGraphRef ||
-		answer.ExternalMeterGraphRef == answer.ExternalGraphRef {
-		t.Fatalf("the copy needs a meter graph of its own, got %q next to the original's %q",
-			answer.ExternalMeterGraphRef, original.ExternalMeterGraphRef)
-	}
-	if got := graphName(mirror.stored[original.ExternalMeterGraphRef]); got != graphName(originalMeterGraph) {
-		t.Errorf("the meter graph of the original was overwritten, its name is now %q", got)
-	}
-	if got := graphName(mirror.stored[answer.ExternalMeterGraphRef]); got != "Metallbau Zweitwerk (meters)" {
-		t.Errorf("expected the copy's own meter graph to carry its name, got %q", got)
-	}
 
-	//and deleting the copy leaves the original's graphs standing
+	//and deleting the copy leaves the original's graph standing
 	if resp := do(t, router, "DELETE", "/environments/env-2", "user-a", nil); resp.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d: %s", resp.Code, resp.Body.String())
 	}
 	if _, alive := mirror.stored[original.ExternalGraphRef]; !alive {
 		t.Error("deleting the copy deleted the graph of the original")
 	}
-	if _, alive := mirror.stored[original.ExternalMeterGraphRef]; !alive {
-		t.Error("deleting the copy deleted the meter graph of the original")
+}
+
+// A save of a document that still names a meter graph deletes that graph and
+// stores the document without the ref. The location graph is rewritten as
+// always, and the meter graph is never written again.
+func TestASaveDeletesALeftoverMeterGraph(t *testing.T) {
+	mirror := newFakeGraphMirror()
+	store := newFakeEnvironments()
+	router := testRouterWith(store, nil, mirror, nil)
+	stored := storeWithLeftoverMeterGraph(t, store, mirror)
+
+	sending := copyEnvironment(t, stored)
+	sending.Name = "Metallbau Musterstadt, neu"
+	putEnvironment(t, router, "env-1", "user-a", sending)
+
+	if len(mirror.deleted) != 1 || mirror.deleted[0] != leftoverMeters {
+		t.Fatalf("expected exactly the meter graph to be deleted, got %v", mirror.deleted)
+	}
+	if _, alive := mirror.stored[leftoverMeters]; alive {
+		t.Error("the meter graph outlived the save")
+	}
+	if ref := store.stored["env-1"].ExternalMeterGraphRef; ref != "" {
+		t.Errorf("the deleted meter graph's ref has to be gone from the stored document, got %q", ref)
+	}
+	if store.stored["env-1"].ExternalGraphRef != ownedGraph || graphName(mirror.stored[ownedGraph]) != "Metallbau Musterstadt, neu" {
+		t.Error("the location graph has to be rewritten under its stored ref")
+	}
+	for _, graph := range mirror.sent {
+		if graph.Id == leftoverMeters {
+			t.Error("the meter graph must not be written again")
+		}
 	}
 }
 
-// Deleting an environment deletes both mirrors: a graph nobody can reach from an
+// A meter graph that cannot be deleted keeps its ref, so the next save tries
+// again; the request itself succeeds and the failure is a warning naming the
+// environment and the graph.
+func TestAFailedDeleteOfALeftoverMeterGraphKeepsItsRef(t *testing.T) {
+	mirror := newFakeGraphMirror()
+	store := newFakeEnvironments()
+	router := testRouterWith(store, nil, mirror, nil)
+	stored := storeWithLeftoverMeterGraph(t, store, mirror)
+	mirror.deleteErrFor[leftoverMeters] = errors.New("device-repository is down")
+
+	sending := copyEnvironment(t, stored)
+	var resp *httptest.ResponseRecorder
+	logs := captureLogs(t, func() {
+		resp = do(t, router, "PUT", "/environments/env-1", "user-a", sending)
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("a failed delete must not fail the save, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if ref := store.stored["env-1"].ExternalMeterGraphRef; ref != leftoverMeters {
+		t.Fatalf("a failed delete has to keep the ref, got %q", ref)
+	}
+	if !strings.Contains(logs, "level=WARN") || !strings.Contains(logs, "environment=env-1") || !strings.Contains(logs, "graph="+leftoverMeters) {
+		t.Errorf("expected a warning naming the environment and the graph, got %s", logs)
+	}
+
+	//and the next save that can delete it does
+	delete(mirror.deleteErrFor, leftoverMeters)
+	putEnvironment(t, router, "env-1", "user-a", copyEnvironment(t, stored))
+	if ref := store.stored["env-1"].ExternalMeterGraphRef; ref != "" {
+		t.Errorf("the retry has to clear the ref, got %q", ref)
+	}
+	if _, alive := mirror.stored[leftoverMeters]; alive {
+		t.Error("the retry has to delete the meter graph")
+	}
+}
+
+// A meter graph that is already gone is what the save wanted, so a 404 clears
+// the ref like a delete that worked.
+func TestALeftoverMeterGraphThatIsAlreadyGoneClearsTheRef(t *testing.T) {
+	mirror := newFakeGraphMirror()
+	store := newFakeEnvironments()
+	router := testRouterWith(store, nil, mirror, nil)
+	stored := storeWithLeftoverMeterGraph(t, store, mirror)
+	mirror.deleteErr, mirror.deleteCode = errors.New("unexpected statuscode 404: not found"), http.StatusNotFound
+
+	putEnvironment(t, router, "env-1", "user-a", copyEnvironment(t, stored))
+
+	if ref := store.stored["env-1"].ExternalMeterGraphRef; ref != "" {
+		t.Errorf("a meter graph that is already gone leaves no ref, got %q", ref)
+	}
+}
+
+// A save refused for a stale version has no side effects, and the delete of a
+// leftover meter graph is one.
+func TestARefusedSaveLeavesTheLeftoverMeterGraphAlone(t *testing.T) {
+	mirror := newFakeGraphMirror()
+	store := newFakeEnvironments()
+	router := testRouterWith(store, nil, mirror, nil)
+	stored := storeWithLeftoverMeterGraph(t, store, mirror)
+	stored.Version = 3
+	store.stored["env-1"] = stored
+
+	sending := copyEnvironment(t, stored)
+	sending.Version = 2
+	if resp := do(t, router, "PUT", "/environments/env-1", "user-a", sending); resp.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if len(mirror.deleted) != 0 {
+		t.Errorf("a refused save must not delete a graph, deleted %v", mirror.deleted)
+	}
+	if ref := store.stored["env-1"].ExternalMeterGraphRef; ref != leftoverMeters {
+		t.Errorf("a refused save must not touch the stored ref, got %q", ref)
+	}
+}
+
+// Without a device-repository behind it moses cannot delete the meter graph,
+// so the ref stays for a deployment that has one.
+func TestWithoutAMirrorALeftoverMeterGraphRefIsKept(t *testing.T) {
+	store := newFakeEnvironments()
+	router := testRouterWith(store, nil, nil, nil)
+	stored := storeWithLeftoverMeterGraph(t, store, newFakeGraphMirror())
+
+	putEnvironment(t, router, "env-1", "user-a", copyEnvironment(t, stored))
+
+	if ref := store.stored["env-1"].ExternalMeterGraphRef; ref != leftoverMeters {
+		t.Errorf("expected the ref kept, got %q", ref)
+	}
+}
+
+// The export is what PUT accepts, and a meter graph ref is not part of it.
+func TestTheExportCarriesNoMeterGraphRef(t *testing.T) {
+	mirror := newFakeGraphMirror()
+	store := newFakeEnvironments()
+	router := testRouterWith(store, nil, mirror, nil)
+	storeWithLeftoverMeterGraph(t, store, mirror)
+
+	resp := do(t, router, "GET", "/environments/env-1", "user-a", nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if strings.Contains(resp.Body.String(), "external_meter_graph_ref") || strings.Contains(resp.Body.String(), leftoverMeters) {
+		t.Errorf("the export must not carry the meter graph ref, got %s", resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), `"external_graph_ref":"`+ownedGraph+`"`) {
+		t.Errorf("the export still carries the location graph ref, got %s", resp.Body.String())
+	}
+}
+
+// Deleting an environment deletes its mirror: a graph nobody can reach from an
 // environment is a location that no longer exists.
 func TestDeletingAnEnvironmentDeletesItsGraph(t *testing.T) {
 	mirror := newFakeGraphMirror()
@@ -299,11 +535,29 @@ func TestDeletingAnEnvironmentDeletesItsGraph(t *testing.T) {
 	if resp := do(t, router, "DELETE", "/environments/env-1", "user-a", nil); resp.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d: %s", resp.Code, resp.Body.String())
 	}
-	if len(mirror.deleted) != 2 || mirror.deleted[0] != created.ExternalGraphRef || mirror.deleted[1] != created.ExternalMeterGraphRef {
-		t.Fatalf("expected exactly the two graphs of this environment to be deleted, got %v", mirror.deleted)
+	if len(mirror.deleted) != 1 || mirror.deleted[0] != created.ExternalGraphRef {
+		t.Fatalf("expected exactly the graph of this environment to be deleted, got %v", mirror.deleted)
 	}
 	if len(mirror.stored) != 0 {
 		t.Errorf("the graph outlived its environment: %+v", mirror.stored)
+	}
+}
+
+// A meter graph a document still names goes with the environment as well.
+func TestDeletingAnEnvironmentDeletesALeftoverMeterGraph(t *testing.T) {
+	mirror := newFakeGraphMirror()
+	store := newFakeEnvironments()
+	router := testRouterWith(store, nil, mirror, nil)
+	storeWithLeftoverMeterGraph(t, store, mirror)
+
+	if resp := do(t, router, "DELETE", "/environments/env-1", "user-a", nil); resp.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", resp.Code, resp.Body.String())
+	}
+	if len(mirror.deleted) != 2 || mirror.deleted[0] != ownedGraph || mirror.deleted[1] != leftoverMeters {
+		t.Fatalf("expected the location graph and the meter graph to be deleted, got %v", mirror.deleted)
+	}
+	if len(mirror.stored) != 0 {
+		t.Errorf("a graph outlived its environment: %+v", mirror.stored)
 	}
 }
 
@@ -311,79 +565,45 @@ func TestDeletingAnEnvironmentDeletesItsGraph(t *testing.T) {
 // simulation because a reader is unreachable would be the wrong trade, so a
 // failure is a warning and nothing else.
 func TestAFailingMirrorDoesNotFailTheRequest(t *testing.T) {
-	mirror := newFakeGraphMirror()
-	mirror.setErr, mirror.setCode = errors.New("device-repository is down"), http.StatusInternalServerError
-	store := newFakeEnvironments()
-	router := testRouterWith(store, nil, mirror, nil)
+	for _, how := range []string{"error", "panic"} {
+		t.Run(how, func(t *testing.T) {
+			mirror := newFakeGraphMirror()
+			if how == "panic" {
+				mirror.setPanics = true
+			} else {
+				mirror.setErr, mirror.setCode = errors.New("device-repository is down"), http.StatusInternalServerError
+			}
+			store := newFakeEnvironments()
+			router := testRouterWith(store, nil, mirror, nil)
 
-	resp := do(t, router, "POST", "/environments", "user-a", minimalEnvironment())
-	if resp.Code != http.StatusCreated {
-		t.Fatalf("a failing mirror must not fail the save, got %d: %s", resp.Code, resp.Body.String())
-	}
-	created := domain.Environment{}
-	if err := json.Unmarshal(resp.Body.Bytes(), &created); err != nil {
-		t.Fatal(err)
-	}
-	if created.ExternalGraphRef != "" || created.ExternalMeterGraphRef != "" {
-		t.Errorf("no graph was created, so there is no ref to store, got %q and %q", created.ExternalGraphRef, created.ExternalMeterGraphRef)
-	}
-	if _, stored := store.stored[created.Id]; !stored {
-		t.Fatal("the environment itself has to be stored")
-	}
+			resp := do(t, router, "POST", "/environments", "user-a", minimalEnvironment())
+			if resp.Code != http.StatusCreated {
+				t.Fatalf("a failing mirror must not fail the save, got %d: %s", resp.Code, resp.Body.String())
+			}
+			created := domain.Environment{}
+			if err := json.Unmarshal(resp.Body.Bytes(), &created); err != nil {
+				t.Fatal(err)
+			}
+			if created.ExternalGraphRef != "" {
+				t.Errorf("no graph was created, so there is no ref to store, got %q", created.ExternalGraphRef)
+			}
+			if _, stored := store.stored[created.Id]; !stored {
+				t.Fatal("the environment itself has to be stored")
+			}
 
-	//and the next save picks the mirroring up again, under a fresh graph
-	mirror.setErr = nil
-	answer := putEnvironment(t, router, created.Id, "user-a", created)
-	if answer.ExternalGraphRef == "" || answer.ExternalMeterGraphRef == "" {
-		t.Error("expected the retry to mirror the environment")
-	}
-}
-
-// The two mirrors are written independently: a failure of one is a warning of
-// its own and leaves the other written, its ref stored and the save successful.
-func TestAFailingGraphLeavesTheOtherGraphWritten(t *testing.T) {
-	for _, failing := range []string{locationGraphKind, meterGraphKind} {
-		for _, how := range []string{"error", "panic"} {
-			t.Run(failing+" "+how, func(t *testing.T) {
-				mirror := newFakeGraphMirror()
-				if how == "panic" {
-					mirror.panicFor[failing] = true
-				} else {
-					mirror.setErrFor[failing] = errors.New("device-repository refused it")
-				}
-				store := newFakeEnvironments()
-				router := testRouterWith(store, nil, mirror, nil)
-
-				resp := do(t, router, "POST", "/environments", "user-a", minimalEnvironment())
-				if resp.Code != http.StatusCreated {
-					t.Fatalf("a failing %s graph must not fail the save, got %d: %s", failing, resp.Code, resp.Body.String())
-				}
-				created := domain.Environment{}
-				if err := json.Unmarshal(resp.Body.Bytes(), &created); err != nil {
-					t.Fatal(err)
-				}
-				stored := store.stored[created.Id]
-				failed, written := stored.ExternalGraphRef, stored.ExternalMeterGraphRef
-				if failing == meterGraphKind {
-					failed, written = written, failed
-				}
-				if failed != "" {
-					t.Errorf("the failing graph was never created, so it has no ref, got %q", failed)
-				}
-				if written == "" || len(mirror.stored) != 1 {
-					t.Fatalf("the other graph has to be written and its ref stored, ref %q, graphs %d", written, len(mirror.stored))
-				}
-				if _, ok := mirror.stored[written]; !ok {
-					t.Errorf("the stored ref %q names no written graph", written)
-				}
-			})
-		}
+			//and the next save picks the mirroring up again, under a fresh graph
+			mirror.setErr, mirror.setPanics = nil, false
+			answer := putEnvironment(t, router, created.Id, "user-a", created)
+			if answer.ExternalGraphRef == "" {
+				t.Error("expected the retry to mirror the environment")
+			}
+		})
 	}
 }
 
 // An answer without an id must not blank a ref that worked: the graph would be
 // orphaned and a second one created on the next save.
-func TestAnAnswerWithoutAnIdKeepsBothRefs(t *testing.T) {
+func TestAnAnswerWithoutAnIdKeepsTheRef(t *testing.T) {
 	mirror := newFakeGraphMirror()
 	store := newFakeEnvironments()
 	router := testRouterWith(store, nil, mirror, nil)
@@ -392,28 +612,25 @@ func TestAnAnswerWithoutAnIdKeepsBothRefs(t *testing.T) {
 	mirror.answerWithoutId = true
 	answer := putEnvironment(t, router, "env-1", "user-a", created)
 
-	if answer.ExternalGraphRef != created.ExternalGraphRef || answer.ExternalMeterGraphRef != created.ExternalMeterGraphRef {
-		t.Errorf("expected both refs kept, got %q and %q", answer.ExternalGraphRef, answer.ExternalMeterGraphRef)
+	if answer.ExternalGraphRef != created.ExternalGraphRef {
+		t.Errorf("expected the ref kept, got %q", answer.ExternalGraphRef)
 	}
 }
 
-// An update whose write of one graph fails keeps that graph's stored ref, so the
-// next save rewrites the same graph instead of creating a second one.
+// An update whose graph write fails keeps the stored ref, so the next save
+// rewrites the same graph instead of creating a second one.
 func TestAFailingGraphUpdateKeepsItsRef(t *testing.T) {
 	mirror := newFakeGraphMirror()
 	store := newFakeEnvironments()
 	router := testRouterWith(store, nil, mirror, nil)
 	created := putEnvironment(t, router, "env-1", "user-a", minimalEnvironment())
 
-	mirror.setErrFor[meterGraphKind] = errors.New("device-repository refused it")
+	mirror.setErr, mirror.setCode = errors.New("device-repository refused it"), http.StatusInternalServerError
 	created.Name = "Metallbau Musterstadt, neu"
 	answer := putEnvironment(t, router, "env-1", "user-a", created)
 
-	if answer.ExternalMeterGraphRef != created.ExternalMeterGraphRef || store.stored["env-1"].ExternalMeterGraphRef != created.ExternalMeterGraphRef {
-		t.Errorf("a failed rewrite must keep the meter graph ref, got %q", store.stored["env-1"].ExternalMeterGraphRef)
-	}
-	if graphName(mirror.stored[created.ExternalGraphRef]) != "Metallbau Musterstadt, neu" {
-		t.Error("the location graph has to be rewritten regardless")
+	if answer.ExternalGraphRef != created.ExternalGraphRef || store.stored["env-1"].ExternalGraphRef != created.ExternalGraphRef {
+		t.Errorf("a failed rewrite must keep the graph ref, got %q", store.stored["env-1"].ExternalGraphRef)
 	}
 }
 
@@ -441,17 +658,16 @@ func TestAFailingDeleteOfOneGraphStillDeletesTheOther(t *testing.T) {
 	mirror := newFakeGraphMirror()
 	store := newFakeEnvironments()
 	router := testRouterWith(store, nil, mirror, nil)
-
-	created := putEnvironment(t, router, "env-1", "user-a", minimalEnvironment())
-	mirror.deleteErrFor[created.ExternalGraphRef] = errors.New("device-repository is down")
+	storeWithLeftoverMeterGraph(t, store, mirror)
+	mirror.deleteErrFor[ownedGraph] = errors.New("device-repository is down")
 
 	if resp := do(t, router, "DELETE", "/environments/env-1", "user-a", nil); resp.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d: %s", resp.Code, resp.Body.String())
 	}
-	if _, alive := mirror.stored[created.ExternalMeterGraphRef]; alive {
+	if _, alive := mirror.stored[leftoverMeters]; alive {
 		t.Error("the meter graph has to be deleted although the location graph could not be")
 	}
-	if _, alive := mirror.stored[created.ExternalGraphRef]; !alive {
+	if _, alive := mirror.stored[ownedGraph]; !alive {
 		t.Error("setup: the location graph delete was supposed to fail")
 	}
 }
@@ -470,8 +686,8 @@ func TestAGraphThatIsAlreadyGoneIsNotAFailedDelete(t *testing.T) {
 	if resp := do(t, router, "DELETE", "/environments/env-1", "user-a", nil); resp.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d: %s", resp.Code, resp.Body.String())
 	}
-	if len(mirror.deleted) != 2 || mirror.deleted[0] != created.ExternalGraphRef || mirror.deleted[1] != created.ExternalMeterGraphRef {
-		t.Errorf("expected the delete to have been attempted once per graph, got %v", mirror.deleted)
+	if len(mirror.deleted) != 1 || mirror.deleted[0] != created.ExternalGraphRef {
+		t.Errorf("expected the delete to have been attempted once, got %v", mirror.deleted)
 	}
 }
 
@@ -558,11 +774,11 @@ func TestReconcileGraphRef(t *testing.T) {
 			t.Errorf("expected the sent refs to be dropped, got %q and %q", env.ExternalGraphRef, env.ExternalMeterGraphRef)
 		}
 	})
-	t.Run("an update keeps the stored ref", func(t *testing.T) {
-		previous := domain.Environment{ExternalGraphRef: "urn:infai:ses:graph:owned", ExternalMeterGraphRef: "urn:infai:ses:graph:owned-meters"}
+	t.Run("an update keeps the stored refs", func(t *testing.T) {
+		previous := domain.Environment{ExternalGraphRef: ownedGraph, ExternalMeterGraphRef: leftoverMeters}
 		env := foreign()
 		reconcileGraphRef(&previous, &env)
-		if env.ExternalGraphRef != "urn:infai:ses:graph:owned" || env.ExternalMeterGraphRef != "urn:infai:ses:graph:owned-meters" {
+		if env.ExternalGraphRef != ownedGraph || env.ExternalMeterGraphRef != leftoverMeters {
 			t.Errorf("expected the stored refs, got %q and %q", env.ExternalGraphRef, env.ExternalMeterGraphRef)
 		}
 	})
@@ -574,52 +790,4 @@ func TestReconcileGraphRef(t *testing.T) {
 			t.Errorf("expected empty refs, got %q and %q", env.ExternalGraphRef, env.ExternalMeterGraphRef)
 		}
 	})
-	t.Run("a document stored before the meter graph existed gets one", func(t *testing.T) {
-		previous := domain.Environment{ExternalGraphRef: "urn:infai:ses:graph:owned"}
-		env := foreign()
-		reconcileGraphRef(&previous, &env)
-		if env.ExternalGraphRef != "urn:infai:ses:graph:owned" || env.ExternalMeterGraphRef != "" {
-			t.Errorf("expected the stored ref and no meter graph ref, got %q and %q", env.ExternalGraphRef, env.ExternalMeterGraphRef)
-		}
-	})
-}
-
-// The meter graph is built from the document as it will be stored: a device
-// this save created is already in it, under the parents meter_parents names.
-func TestTheMeterGraphCarriesTheMeterParentsOfTheSave(t *testing.T) {
-	mirror := newFakeGraphMirror()
-	catalog := &fakeCatalog{idsByName: namedDeviceIds()}
-	store := newFakeEnvironments()
-	router := testRouterWith(store, catalog, mirror, nil)
-
-	env := environmentWithTwoAssets()
-	env.Zones[0].Assets[0].Id = "asset-kompressor"
-	env.Zones[0].Zones[0].Assets[0].Id = "asset-zaehler"
-	env.MeterGroups = []domain.MeterGroup{{Id: "group-abgaenge", Name: "Abgänge", Parents: []domain.MeterParent{{Id: "asset-zaehler"}}}}
-	env.Zones[0].Assets[0].MeterParents = []domain.MeterParent{{Id: "group-abgaenge"}}
-	created := putEnvironment(t, router, "env-1", "user-a", env)
-
-	graph := mirror.stored[created.ExternalMeterGraphRef]
-	want := map[string]string{
-		"urn:device:kompressor": "group-abgaenge",
-		"group-abgaenge":        "urn:device:zaehler",
-		"urn:device:zaehler":    graphs.RootNodeId,
-	}
-	if len(graph.Edges) != len(want) {
-		t.Fatalf("expected %d edges, got %+v", len(want), graph.Edges)
-	}
-	for _, edge := range graph.Edges {
-		if want[edge.FromNodeId] != edge.ToNodeId || edge.Weight != 100 {
-			t.Errorf("unexpected edge %+v", edge)
-		}
-	}
-	if err := graph.Valid(); err != nil {
-		t.Errorf("the repository would refuse the meter graph: %v", err)
-	}
-	//the location graph knows nothing of it
-	for _, node := range mirror.stored[created.ExternalGraphRef].Nodes {
-		if node.Id == "group-abgaenge" {
-			t.Error("a meter group must not appear in the location graph")
-		}
-	}
 }

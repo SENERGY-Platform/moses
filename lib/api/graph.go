@@ -28,18 +28,20 @@ import (
 	sc_jwt "github.com/SENERGY-Platform/service-commons/pkg/jwt"
 )
 
-// reconcileGraphRef decides which graphs the document about to be stored owns,
-// the location graph and the meter graph alike. Same rule and same reason as
-// reconcileManagedFlags: the client sends the whole document back, so the refs
-// it carries are worth nothing.
+// reconcileGraphRef decides which graph the document about to be stored owns.
+// Same rule and same reason as reconcileManagedFlags: the client sends the whole
+// document back, so the ref it carries is worth nothing.
 //
-//   - An update of a stored document keeps the stored refs. A client that sends
-//     different ones is trying to make this environment write into graphs it
-//     does not own.
-//   - Anything else starts without refs and gets fresh graphs. The case this
-//     is for is the export copied to a new id: its refs still point at the graphs
-//     of the original, and honouring them would have the copy overwrite the
-//     original's graphs on save and delete them on delete.
+//   - An update of a stored document keeps the stored ref. A client that sends a
+//     different one is trying to make this environment write into a graph it does
+//     not own.
+//   - Anything else starts without a ref and gets a fresh graph. The case this
+//     is for is the export copied to a new id: its ref still points at the graph
+//     of the original, and honouring it would have the copy overwrite the
+//     original's graph on save and delete it on delete.
+//
+// The meter graph ref follows the same rule, so only a stored one survives for
+// dropMeterGraph to clean up.
 //
 // previous is nil exactly when nothing is stored under this id - a create, or a
 // put to an id that is new here.
@@ -63,10 +65,9 @@ type GraphMirror interface {
 	DeleteGraph(token string, id string) (error, int)
 }
 
-// mirrorGraph writes the environment to the device-repository as its two
-// graphs, the location graph and the meter graph, and records the id each got
-// under. Called with the document as it will be stored, after provisioning, so
-// the device references the graphs need are set.
+// mirrorGraph writes the environment to the device-repository as a graph and
+// records the id it got under. Called with the document as it will be stored,
+// after provisioning, so the device references the graph needs are set.
 //
 // It runs BEFORE the write, unlike the device cleanup, and the difference is
 // deliberate. The id of a graph that does not exist yet can only come from the
@@ -78,61 +79,64 @@ type GraphMirror interface {
 // and then leaks a graph nothing references. The first is the cheaper failure,
 // and the same one the delete path already accepts.
 //
-// Best effort throughout, and per graph: a repository that is down leaves a
-// stale or missing graph and a warning, the other graph is still written, and
-// the save succeeds. The mirror exists for other applications to read; refusing
-// to store a simulation because a reader is unavailable would be the wrong trade.
+// Best effort throughout: a repository that is down leaves a stale or missing
+// graph and a warning, a panic included, and the save succeeds. The mirror
+// exists for other applications to read; refusing to store a simulation because
+// a reader is unavailable would be the wrong trade.
 //
-// The graphs are rebuilt in full every time, so they are mirrors and not
-// documents: a node moved or renamed by hand in a graph editor does not survive
-// the next save of the environment.
+// The graph is rebuilt in full every time, so it is a mirror and not a document:
+// a node moved or renamed by hand in a graph editor does not survive the next
+// save of the environment.
 func mirrorGraph(mirror GraphMirror, token sc_jwt.Token, env *domain.Environment) {
 	if mirror == nil {
 		return
 	}
-	env.ExternalGraphRef = mirrorOneGraph(mirror, token, env.Id, locationGraphKind, env.ExternalGraphRef,
-		func() models.Graph { return graphs.Build(*env) })
-	env.ExternalMeterGraphRef = mirrorOneGraph(mirror, token, env.Id, meterGraphKind, env.ExternalMeterGraphRef,
-		func() models.Graph { return graphs.BuildMeterGraph(*env) })
+	ref := env.ExternalGraphRef
+	defer func() {
+		if panicked := recover(); panicked != nil {
+			util.Logger.Error("panic while mirroring an environment as a graph",
+				"environment", env.Id, "graph", ref, "panic", fmt.Sprint(panicked))
+			env.ExternalGraphRef = ref
+		}
+	}()
+	graph := graphs.Build(*env)
+	result, err, code := mirror.SetGraph(token.Jwt(), graph)
+	if err != nil {
+		util.Logger.Warn("unable to mirror an environment as a graph", attributes.ErrorKey, err,
+			"environment", env.Id, "graph", graph.Id, "status", code)
+		return
+	}
+	// the repository assigns the id of a new graph; on an update it echoes the
+	// one that was sent. An empty answer is not allowed to blank a ref that
+	// worked - that would orphan the graph and create a second one next time.
+	if result.Id != "" {
+		env.ExternalGraphRef = result.Id
+	}
 }
 
-// locationGraphKind and meterGraphKind name the two mirrors in the log.
+// locationGraphKind and meterGraphKind name the graphs in the log.
 const (
 	locationGraphKind = "location"
 	meterGraphKind    = "meter"
 )
 
-// mirrorOneGraph builds and writes one graph and returns the ref to store. A
-// failure, a panic included, keeps ref as it was and is a warning, so it never
-// reaches the other graph or the request.
-func mirrorOneGraph(mirror GraphMirror, token sc_jwt.Token, environmentId string, kind string, ref string, build func() models.Graph) (result string) {
-	result = ref
-	defer func() {
-		if panicked := recover(); panicked != nil {
-			util.Logger.Error("panic while mirroring an environment as a graph",
-				"environment", environmentId, "kind", kind, "graph", ref, "panic", fmt.Sprint(panicked))
-			result = ref
-		}
-	}()
-	graph := build()
-	written, err, code := mirror.SetGraph(token.Jwt(), graph)
-	if err != nil {
-		util.Logger.Warn("unable to mirror an environment as a graph", attributes.ErrorKey, err,
-			"environment", environmentId, "kind", kind, "graph", graph.Id, "status", code)
-		return ref
+// dropMeterGraph deletes a meter graph that an earlier version wrote and the
+// stored document still names. It runs before the write, so the document is
+// stored without the ref; a failed delete keeps the ref for the next save and
+// never fails the request.
+func dropMeterGraph(mirror GraphMirror, token sc_jwt.Token, env *domain.Environment) {
+	if mirror == nil || env.ExternalMeterGraphRef == "" {
+		return
 	}
-	// the repository assigns the id of a new graph; on an update it echoes the
-	// one that was sent. An empty answer is not allowed to blank a ref that
-	// worked - that would orphan the graph and create a second one next time.
-	if written.Id != "" {
-		return written.Id
+	if deleteOneGraph(mirror, token, env.Id, meterGraphKind, env.ExternalMeterGraphRef) {
+		env.ExternalMeterGraphRef = ""
 	}
-	return ref
 }
 
-// deleteGraph removes both mirrors of a deleted environment. After the delete of
-// the document, for the same reason deleteDevices runs there: a failed delete
-// leaves the environment, and it keeps its graphs.
+// deleteGraph removes the mirror of a deleted environment, and a meter graph it
+// still names. After the delete of the document, for the same reason
+// deleteDevices runs there: a failed delete leaves the environment, and it keeps
+// its graph.
 //
 // Best effort as well, and per graph. What a failure leaves behind is a graph
 // without an environment, which is recoverable by hand - the opposite, a delete
@@ -146,18 +150,21 @@ func deleteGraph(mirror GraphMirror, token sc_jwt.Token, env *domain.Environment
 	deleteOneGraph(mirror, token, env.Id, meterGraphKind, env.ExternalMeterGraphRef)
 }
 
-func deleteOneGraph(mirror GraphMirror, token sc_jwt.Token, environmentId string, kind string, ref string) {
+// deleteOneGraph reports whether the graph is gone afterwards; an empty ref
+// names none and is gone already.
+func deleteOneGraph(mirror GraphMirror, token sc_jwt.Token, environmentId string, kind string, ref string) bool {
 	if ref == "" {
-		return
+		return true
 	}
 	//a graph that is already gone is what the caller wanted. The repository
 	//answers a delete of an unknown graph with a success of its own, so this
 	//covers the graph somebody removed by hand and a retry after a partial
 	//cleanup
 	if err, code := mirror.DeleteGraph(token.Jwt(), ref); err != nil && code != http.StatusNotFound {
-		util.Logger.Warn("unable to delete the graph of a removed environment", attributes.ErrorKey, err,
+		util.Logger.Warn("unable to delete a graph of an environment", attributes.ErrorKey, err,
 			"environment", environmentId, "kind", kind, "graph", ref, "status", code)
-		return
+		return false
 	}
-	util.Logger.Info("deleted the graph of a removed environment", "environment", environmentId, "kind", kind, "graph", ref)
+	util.Logger.Info("deleted a graph of an environment", "environment", environmentId, "kind", kind, "graph", ref)
+	return true
 }

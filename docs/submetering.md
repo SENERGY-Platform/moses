@@ -5,7 +5,7 @@
 **Applies when** an asset's `submetered_by` is set, or a channel's source kind
 is `aggregate` - the two halves of the same feature: the tree, and the sum over
 it - or when an asset's `meter_parents` or the environment's `meter_groups` are
-set, which place devices in the meter graph.
+set, which are stored and validated but not mirrored into a graph.
 
 **Delimitation:** the neighbouring case is a `formula` source that sums
 specific channels by naming them explicitly
@@ -60,8 +60,8 @@ question, answered below, not a validation error.
 
 ## Meter parents and meter groups
 
-`Asset.MeterParents` places an asset's device in the meter graph
-(`docs/environment-graphs.md`) under one or more parents. Each entry names an
+`Asset.MeterParents` names one or more parents of an asset's quantity. Moses
+validates, stores and exports it, and builds no graph from it. Each entry names an
 asset or a meter group by `id`, may carry a `weight` in percent, and sets
 `conversion` where the medium changes on that edge (gas to heat or
 electricity, heat to water). `Environment.MeterGroups` are quantities known only
@@ -70,7 +70,7 @@ battery and CHP. A group has an `id`, a `name` and `parents` of the same shape;
 an asset becomes a member by naming the group in its `meter_parents`.
 
 Where `meter_parents` is empty, `submetered_by` with weight 100 stands in; where
-both are set, `meter_parents` decides the meter graph and `submetered_by` still
+both are set, `meter_parents` is the meter relation and `submetered_by` still
 decides the location graph and the aggregate. The aggregate source never reads
 `meter_parents`.
 
@@ -92,8 +92,7 @@ decides the location graph and the aggregate. The aggregate source never reads
 - **a group without an id, a name or a parent**, and a group id that is already
   used anywhere in the document, at `meter_groups[i]…`; ids are not assigned to
   groups, since a group is only reachable by its id. A group id must also not
-  contain `->`, which would make two edge ids of the meter graph collide, nor be
-  `root` or an asset's `external_ref`, which are node ids there already. Groups
+  contain `->`, nor be `root` or an asset's `external_ref`. Groups
   count towards the same limit of 10000 nodes as zones, assets and channels,
 - **a cycle** over the effective meter parents of the assets and the parents of
   the groups, reported at the edge that closes it, naming that edge's two ends.

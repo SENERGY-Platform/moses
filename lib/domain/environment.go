@@ -94,10 +94,10 @@ type Environment struct {
 	// reconcileGraphRef in lib/api.
 	ExternalGraphRef string `json:"external_graph_ref" bson:"external_graph_ref"`
 
-	// ExternalMeterGraphRef is the id of the second graph this environment is
-	// mirrored as, the meter graph built from meter_parents and meter_groups.
-	// Decided and enforced by the server exactly like ExternalGraphRef.
-	ExternalMeterGraphRef string `json:"external_meter_graph_ref" bson:"external_meter_graph_ref"`
+	// ExternalMeterGraphRef names a meter graph an earlier version mirrored this
+	// environment as, kept only until the next save or delete removes that
+	// graph. Stored, never read from or served over the api.
+	ExternalMeterGraphRef string `json:"-" bson:"external_meter_graph_ref"`
 
 	// Every stochastic source derives from Seed, so the same environment and
 	// clock produce the same values.
@@ -129,15 +129,15 @@ type Environment struct {
 	MeterGroups []MeterGroup `json:"meter_groups,omitempty" bson:"meter_groups,omitempty"`
 }
 
-// MeterGroup is a node of the meter graph that no single device measures.
+// MeterGroup is a quantity that no single device measures.
 type MeterGroup struct {
 	Id      string        `json:"id" bson:"id"`
 	Name    string        `json:"name" bson:"name"`
 	Parents []MeterParent `json:"parents" bson:"parents"`
 }
 
-// MeterParent is one edge of the meter graph: the quantity of the child is
-// contained in, or supplied by, the asset or meter group named by Id.
+// MeterParent says that the quantity of the child is contained in, or supplied
+// by, the asset or meter group named by Id.
 type MeterParent struct {
 	Id string `json:"id" bson:"id"`
 
@@ -205,9 +205,9 @@ type Asset struct {
 	// value, so a bad value only misrepresents this simulation's own meter tree.
 	SubmeteredBy string `json:"submetered_by,omitempty" bson:"submetered_by,omitempty"`
 
-	// MeterParents places this asset's device in the meter graph, under one or
-	// more weighted parents. Empty means submetered_by with the whole flow,
-	// see EffectiveMeterParents; the aggregate source never reads it.
+	// MeterParents names one or more weighted parents of this asset's quantity.
+	// Empty means submetered_by with the whole flow; the aggregate source never
+	// reads it.
 	MeterParents []MeterParent `json:"meter_parents,omitempty" bson:"meter_parents,omitempty"`
 
 	InitialStates map[string]interface{} `json:"initial_states" bson:"initial_states"`

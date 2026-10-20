@@ -445,16 +445,3 @@ func TestMeterWeights(t *testing.T) {
 		t.Error("101 parents cannot all carry a weight of at least 1")
 	}
 }
-
-func TestEffectiveMeterParents(t *testing.T) {
-	if got := (Asset{}).EffectiveMeterParents(); got != nil {
-		t.Errorf("an asset stating nothing has no parents, got %v", got)
-	}
-	if got := (Asset{SubmeteredBy: "a"}).EffectiveMeterParents(); !reflect.DeepEqual(got, []MeterParent{{Id: "a", Weight: 100}}) {
-		t.Errorf("expected submetered_by with the whole flow, got %v", got)
-	}
-	explicit := []MeterParent{{Id: "b"}}
-	if got := (Asset{SubmeteredBy: "a", MeterParents: explicit}).EffectiveMeterParents(); !reflect.DeepEqual(got, explicit) {
-		t.Errorf("expected meter_parents to win, got %v", got)
-	}
-}

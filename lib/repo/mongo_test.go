@@ -385,6 +385,36 @@ func TestMongoPutTwiceStoresOneDocument(t *testing.T) {
 	}
 }
 
+// The meter graph ref is hidden from the api but has to survive the store, and
+// so has its removal, or a save could never clean up the graph it names.
+func TestMongoPutAndGetPreserveTheMeterGraphRefAndItsRemoval(t *testing.T) {
+	store := testStore(t)
+	ctx := testContext(t)
+	env := testEnvironment("env-1", "Metallbau", "owner-1")
+	env.ExternalMeterGraphRef = "urn:infai:ses:graph:meters"
+	if _, err := store.Put(ctx, env); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Get(ctx, "env-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ExternalMeterGraphRef != "urn:infai:ses:graph:meters" {
+		t.Fatalf("expected the meter graph ref stored, got %q", got.ExternalMeterGraphRef)
+	}
+
+	got.ExternalMeterGraphRef = ""
+	if _, err = store.PutIfVersion(ctx, got, got.Version); err != nil {
+		t.Fatal(err)
+	}
+	if got, err = store.Get(ctx, "env-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got.ExternalMeterGraphRef != "" {
+		t.Errorf("expected the cleared ref stored as empty, got %q", got.ExternalMeterGraphRef)
+	}
+}
+
 func TestMongoPutReplacesTheDocumentInsteadOfMergingIt(t *testing.T) {
 	store := testStore(t)
 	ctx := testContext(t)
