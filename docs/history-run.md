@@ -342,6 +342,10 @@ in the same call.
   day of the window, so a second run that starts later than the first and only
   overlaps its tail is not caught.
 - **A failed reading is counted and named, not retried.**
+- **Day, month and year queries see the window only once timescale refreshes
+  it**, as for the backfill (`docs/backfill.md`, Known gaps): the `_ld`
+  aggregate takes up to a day, or never picks up the window when the stored
+  aggregate rule predates the open `start_offset`.
 - **A reading an injected fault suppresses is counted as silent, never as
   failed**: nothing was attempted, so nothing could be refused
   (`docs/injected-faults.md`).

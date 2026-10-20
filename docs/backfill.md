@@ -310,6 +310,19 @@ finishes the window it was given.
   row twice. The `409` prevents it concurrently, not sequentially.
 - **A failed reading is counted and reported, not retried.** The job continues;
   the channel's status carries the count and the last message.
+- **Day, month and year queries see the window only once timescale refreshes
+  it.** A query with `groupTime` of a day or more and `groupType` `last` or
+  `difference-last` is answered from the coarsest continuous aggregate whose
+  bucket fits, which on the platform is the daily `<table>_ld` that
+  timescale-rule-manager creates per device table, and that aggregate picks up a
+  backfilled row only when its refresh policy covers the row's bucket. With an
+  open `start_offset`, as the rule template in rancher-2-defs sets it, that is
+  the next daily run. A rule stored with an older template keeps its policy, since
+  the rule manager copies a template into the rule only when the rule is created
+  or updated; with the earlier window of 4 days, anything older is never
+  materialized. MOSES has no database access, so in that case the aggregates of
+  the affected tables need `CALL refresh_continuous_aggregate('"<table>_ld"',
+  NULL, NULL)` from someone who has.
 - **Whether a channel is backfillable is decided when the job runs**, not when
   the window is validated, because it needs a device type read per asset. A
   request is therefore accepted before it is known that every channel of the
