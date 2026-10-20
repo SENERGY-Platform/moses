@@ -25,15 +25,19 @@ import (
 // The replacement join and JSON.stringify must stay linear: they collect parts and
 // join them once natively. Each case is timed inside the script, around the one
 // call, with a generous bound far above the linear cost and far below the
-// quadratic one.
+// quadratic one. The best of three runs counts, so a loaded machine does not
+// fail a linear call.
+const bestOfThree = `function best(f) { var b = Infinity; for (var r = 0; r < 3; r++) { var t = Date.now(); f(); var d = Date.now() - t; if (d < b) b = d; } return b; }
+`
+
 func TestReplacedBuiltinsStayLinear(t *testing.T) {
 	cases := map[string]string{
 		"join of 1e6 short strings": `var a = []; for (var i = 0; i < 1000000; i++) a.push('ab');
-			var t = Date.now(); a.join(); Date.now() - t`,
+			best(function () { a.join(); })`,
 		"String of 1e5 numbers": `var a = []; for (var i = 0; i < 100000; i++) a.push(i);
-			var t = Date.now(); String(a); Date.now() - t`,
+			best(function () { String(a); })`,
 		"stringify of about 1 MB": `var o = []; for (var i = 0; i < 40000; i++) o.push({k: 'value' + i, n: i});
-			var t = Date.now(); var s = JSON.stringify(o); if (s.length < 1000000) throw new Error('too small ' + s.length); Date.now() - t`,
+			best(function () { var s = JSON.stringify(o); if (s.length < 1000000) throw new Error('too small ' + s.length); })`,
 	}
 	for name, code := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -41,7 +45,7 @@ func TestReplacedBuiltinsStayLinear(t *testing.T) {
 			if err := hardenVM(vm); err != nil {
 				t.Fatal(err)
 			}
-			v, err := vm.RunString(code)
+			v, err := vm.RunString(bestOfThree + code)
 			if err != nil {
 				t.Fatal(err)
 			}
