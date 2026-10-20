@@ -106,10 +106,31 @@ func (this *permissionsClient) do(ctx context.Context, method string, token stri
 		//the message of the refusal is what a caller needs: permissions-v2
 		//answers a group somebody may not share with by explaining exactly that
 		reason, _ := io.ReadAll(io.LimitReader(response.Body, maxPermissionsErrorBytes))
-		return fmt.Errorf("permissions-v2 answered %v: %v", response.StatusCode, strings.TrimSpace(string(reason))), response.StatusCode
+		err = fmt.Errorf("permissions-v2 answered %v: %v", response.StatusCode, strings.TrimSpace(string(reason)))
+		if isUnknownResource(response.StatusCode, reason) {
+			err = unknownResourceError{err}
+		}
+		return err, response.StatusCode
 	}
 	if err = json.NewDecoder(response.Body).Decode(result); err != nil {
 		return fmt.Errorf("unable to read the answer of permissions-v2: %w", err), response.StatusCode
 	}
 	return nil, response.StatusCode
+}
+
+// isUnknownResource tells the 404 permissions-v2 gives for a resource it stores
+// no rights for from its 404 for an unknown topic and from one a proxy gives:
+// only the first carries exactly the message of its model.ErrNotFound.
+func isUnknownResource(status int, body []byte) bool {
+	return status == http.StatusNotFound && strings.TrimSpace(string(body)) == permModel.ErrNotFound.Error()
+}
+
+// unknownResourceError keeps the message of the answer and adds
+// api.ErrUnknownResource for errors.Is.
+type unknownResourceError struct {
+	error
+}
+
+func (this unknownResourceError) Is(target error) bool {
+	return target == api.ErrUnknownResource
 }

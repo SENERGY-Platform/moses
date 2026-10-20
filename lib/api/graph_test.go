@@ -64,10 +64,19 @@ type fakeGraphMirror struct {
 
 	// answerWithoutId stores the graph but answers without its id
 	answerWithoutId bool
+
+	// gone holds graphs somebody deleted: a write to one is refused with 403,
+	// as the repository refuses a graph whose rights went with it
+	gone map[string]bool
+	// createErr fails a create only, with 500
+	createErr error
+	// onCreate runs for every graph created, as the repository gives its owner
+	// initial rights
+	onCreate func(id string, owner string)
 }
 
 func newFakeGraphMirror() *fakeGraphMirror {
-	return &fakeGraphMirror{stored: map[string]models.Graph{}, deleteErrFor: map[string]error{}}
+	return &fakeGraphMirror{stored: map[string]models.Graph{}, deleteErrFor: map[string]error{}, gone: map[string]bool{}}
 }
 
 func (this *fakeGraphMirror) SetGraph(token string, graph models.Graph) (models.Graph, error, int) {
@@ -79,9 +88,18 @@ func (this *fakeGraphMirror) SetGraph(token string, graph models.Graph) (models.
 	if this.setErr != nil {
 		return models.Graph{}, this.setErr, this.setCode
 	}
+	if this.gone[graph.Id] {
+		return models.Graph{}, errors.New("access denied"), http.StatusForbidden
+	}
 	if graph.Id == "" {
+		if this.createErr != nil {
+			return models.Graph{}, this.createErr, http.StatusInternalServerError
+		}
 		this.created++
 		graph.Id = fmt.Sprintf("urn:infai:ses:graph:%d", this.created)
+		if this.onCreate != nil {
+			this.onCreate(graph.Id, graph.Owner)
+		}
 	}
 	this.stored[graph.Id] = graph
 	if this.answerWithoutId {

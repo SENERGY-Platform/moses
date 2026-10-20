@@ -97,6 +97,16 @@ back from the create and is stored in the same write, instead of needing a
 second one. `lib/test/graph_test.go` pins this against the real service, because
 nothing in the client's signatures says it.
 
+## A deleted graph is created again
+
+A graph admin (`docs/sharing.md`) may delete the graph. The next save then
+creates a new graph, stores its ref with the document and gives it the stored
+share set. The repository answers a write to a deleted graph with `403`, which
+is also what a refused caller gets, so moses creates a new graph only when
+permissions-v2 then answers its rights read with `404` and the message
+`not found`: the device-repository removes the rights of a graph on delete. Any
+other answer, or none, is a `WARN` and keeps the ref.
+
 ## A meter graph left by an earlier version
 
 An earlier version also mirrored each environment as a meter graph, named by
@@ -125,11 +135,10 @@ so the retry creates a second graph and the first is orphaned.
 
 ## Known gaps
 
-- **A stored ref that points at a graph somebody deleted by hand is not
-  healed.** The put then fails (the permissions went with the graph) and every
-  save of that environment warns. Recovering would mean creating a new graph on
-  a `403`, which would also create a second graph whenever a `403` was
-  transient — so the case is left visible in the log rather than guessed at.
+- **A graph whose rights never reached permissions-v2 is taken for deleted.**
+  The device-repository writes the initial rights after the graph and retries
+  a failed write in the background; a save in between creates a second graph
+  and orphans the first.
 - **A create whose document write fails orphans the graph it just created.**
   The ref only exists in that request, so the retry mints another one. Bounded
   by how often the store fails, and the alternative — writing the document

@@ -38,6 +38,12 @@ type ShareSet struct {
 	// managed devices. A set stored before the field existed decodes it as empty.
 	DeviceWriters Principals `json:"device_writers" bson:"device_writers"`
 
+	// GraphAdmins is the part of Users and Groups that also holds write and
+	// administrate on the graph. It is also the record of every administrate
+	// moses granted, so only these are ever taken back. A set stored before the
+	// field existed decodes it as empty.
+	GraphAdmins Principals `json:"graph_admins" bson:"graph_admins"`
+
 	// Version is the compare-and-swap counter of this set: Load hands out the
 	// stored one and Save writes only while it still matches, so two shares of
 	// one environment cannot both think they replaced the other's set. Zero

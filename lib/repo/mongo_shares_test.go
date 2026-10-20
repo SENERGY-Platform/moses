@@ -214,6 +214,77 @@ func TestASetStoredWithoutDeviceWritersReadsAsNone(t *testing.T) {
 	}
 }
 
+func TestGraphAdminsRoundTripWithTheSet(t *testing.T) {
+	store := testStore(t)
+	ctx := testContext(t)
+	shares := store.Shares()
+
+	set := ShareSet{EnvironmentId: "env-1", Users: []string{"demo-user", "other-user"}, Groups: []string{"/demo"},
+		GraphWriters: Principals{Users: []string{"other-user"}},
+		GraphAdmins:  Principals{Users: []string{"demo-user"}, Groups: []string{"/demo"}}}
+	version, err := shares.Save(ctx, set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := shares.Load(ctx, "env-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stored.GraphAdmins; len(got.Users) != 1 || got.Users[0] != "demo-user" || len(got.Groups) != 1 || got.Groups[0] != "/demo" {
+		t.Errorf("the graph admins did not survive: %+v", got)
+	}
+	if got := stored.GraphWriters; len(got.Users) != 1 || got.Users[0] != "other-user" {
+		t.Errorf("the graph writers have to stay apart from the graph admins, got %+v", got)
+	}
+
+	//a replace without admins takes them away, it does not merge
+	set.GraphAdmins = Principals{}
+	set.Version = version
+	if _, err = shares.Save(ctx, set); err != nil {
+		t.Fatal(err)
+	}
+	if stored, err = shares.Load(ctx, "env-1"); err != nil {
+		t.Fatal(err)
+	}
+	if stored.GraphAdmins.Users == nil || stored.GraphAdmins.Groups == nil ||
+		len(stored.GraphAdmins.Users) != 0 || len(stored.GraphAdmins.Groups) != 0 {
+		t.Errorf("expected empty, non-nil admin lists after the replace, got %+v", stored.GraphAdmins)
+	}
+}
+
+// A set stored before graph_admins existed must read as one without graph admins
+// that the compare-and-swap still accepts.
+func TestASetStoredWithoutGraphAdminsReadsAsNone(t *testing.T) {
+	store := testStore(t)
+	ctx := testContext(t)
+	shares := store.Shares()
+
+	legacy := bson.M{"environment_id": "env-legacy", "users": []string{"demo-user"}, "groups": []string{},
+		"device_writers": bson.M{"users": []string{"demo-user"}, "groups": []string{}}, "version": int64(3), "updated_at_unix": int64(1)}
+	if _, err := store.shareCollection().InsertOne(ctx, legacy); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := shares.Load(ctx, "env-legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.GraphAdmins.Users == nil || stored.GraphAdmins.Groups == nil ||
+		len(stored.GraphAdmins.Users) != 0 || len(stored.GraphAdmins.Groups) != 0 {
+		t.Errorf("a set without the field has to read as no graph admins, as empty lists, got %+v", stored.GraphAdmins)
+	}
+
+	stored.GraphAdmins = Principals{Users: []string{"demo-user"}, Groups: []string{}}
+	if version, err := shares.Save(ctx, stored); err != nil || version != 4 {
+		t.Fatalf("the legacy set has to be writable at the version it was read at, got %d: %v", version, err)
+	}
+	if stored, err = shares.Load(ctx, "env-legacy"); err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.GraphAdmins.Users) != 1 || stored.GraphAdmins.Users[0] != "demo-user" {
+		t.Errorf("expected the graph admin to be stored, got %+v", stored.GraphAdmins)
+	}
+}
+
 // Two shares of one environment arriving together would otherwise each store
 // their own set, and the rights of the loser would stand on the devices with
 // nothing that remembers them.

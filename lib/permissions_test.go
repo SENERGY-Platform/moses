@@ -20,6 +20,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -27,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SENERGY-Platform/moses/lib/api"
 	permModel "github.com/SENERGY-Platform/permissions-v2/pkg/model"
 )
 
@@ -198,5 +201,38 @@ func TestATrailingSlashInTheUrlIsTrimmed(t *testing.T) {
 	client := newPermissionsClient("http://permv2.permissions:8080/")
 	if got := client.resourceUrl("devices", "dev-1"); !strings.HasPrefix(got, "http://permv2.permissions:8080/manage/devices/dev-1?") {
 		t.Errorf("unexpected url: %v", got)
+	}
+}
+
+// A save creates a new graph only on the answer permissions-v2 gives for a
+// resource it stores no rights for; every other refusal, a 404 for an unknown
+// topic or from a proxy included, must not be read as that.
+func TestOnlyTheAnswerForAnUnknownResourceIsRecognized(t *testing.T) {
+	for name, c := range map[string]struct {
+		status  int
+		body    string
+		unknown bool
+	}{
+		"unknown resource":   {http.StatusNotFound, permModel.ErrNotFound.Error(), true},
+		"unknown topic":      {http.StatusNotFound, "unknown topic", false},
+		"a proxy's 404":      {http.StatusNotFound, "<html><body>404 Not Found</body></html>", false},
+		"an empty 404":       {http.StatusNotFound, "", false},
+		"no right to read":   {http.StatusForbidden, "access denied", false},
+		"not found, but 500": {http.StatusInternalServerError, permModel.ErrNotFound.Error(), false},
+	} {
+		client, _ := permissionsServer(t, func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, c.body, c.status)
+		})
+		_, err, code := client.GetResource(context.Background(), "Bearer token", "graphs", "urn:infai:ses:graph:1")
+		if err == nil || code != c.status {
+			t.Fatalf("%s: expected an error with %d, got %v (%d)", name, c.status, err, code)
+		}
+		if got := errors.Is(err, api.ErrUnknownResource); got != c.unknown {
+			t.Errorf("%s: expected unknown=%v, got %v (%v)", name, c.unknown, got, err)
+		}
+		//the message stays what permissions-v2 said, it travels into a 502
+		if !strings.Contains(err.Error(), fmt.Sprint(c.status)) || !strings.Contains(err.Error(), c.body) {
+			t.Errorf("%s: expected status and reason in the message, got %v", name, err)
+		}
 	}
 }

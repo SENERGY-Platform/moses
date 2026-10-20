@@ -17,6 +17,8 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -86,8 +88,9 @@ type GraphMirror interface {
 //
 // The graph is rebuilt in full every time, so it is a mirror and not a document:
 // a node moved or renamed by hand in a graph editor does not survive the next
-// save of the environment.
-func mirrorGraph(mirror GraphMirror, token sc_jwt.Token, env *domain.Environment) {
+// save of the environment. A graph somebody deleted is created anew, see
+// graphIsGone.
+func mirrorGraph(ctx context.Context, mirror GraphMirror, permissions Permissions, token sc_jwt.Token, env *domain.Environment) {
 	if mirror == nil {
 		return
 	}
@@ -101,9 +104,17 @@ func mirrorGraph(mirror GraphMirror, token sc_jwt.Token, env *domain.Environment
 	}()
 	graph := graphs.Build(*env)
 	result, err, code := mirror.SetGraph(token.Jwt(), graph)
+	if err != nil && graphIsGone(ctx, permissions, token, env.Id, ref, code) {
+		graph.Id = ""
+		result, err, code = mirror.SetGraph(token.Jwt(), graph)
+		if err == nil {
+			util.Logger.Info("created a new graph for an environment whose graph was deleted",
+				"environment", env.Id, "deleted_graph", ref, "graph", result.Id)
+		}
+	}
 	if err != nil {
 		util.Logger.Warn("unable to mirror an environment as a graph", attributes.ErrorKey, err,
-			"environment", env.Id, "graph", graph.Id, "status", code)
+			"environment", env.Id, "graph", ref, "status", code)
 		return
 	}
 	// the repository assigns the id of a new graph; on an update it echoes the
@@ -112,6 +123,27 @@ func mirrorGraph(mirror GraphMirror, token sc_jwt.Token, env *domain.Environment
 	if result.Id != "" {
 		env.ExternalGraphRef = result.Id
 	}
+}
+
+// graphIsGone reports whether the stored graph a write was refused for has been
+// deleted. The repository answers a write to a deleted graph with 403, which is
+// also what a refused caller gets, so only permissions-v2 saying it stores no
+// rights for the graph counts: the device-repository removes them on delete.
+// Anything else, a failed check included, is not proof and keeps the ref.
+func graphIsGone(ctx context.Context, permissions Permissions, token sc_jwt.Token, environmentId string, ref string, code int) bool {
+	if ref == "" || code != http.StatusForbidden || permissions == nil {
+		return false
+	}
+	_, err, status := permissions.GetResource(ctx, token.Jwt(), graphsTopic, ref)
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrUnknownResource) {
+		return true
+	}
+	util.Logger.Warn("unable to tell whether the graph of an environment still exists", attributes.ErrorKey, err,
+		"environment", environmentId, "graph", ref, "status", status)
+	return false
 }
 
 // locationGraphKind and meterGraphKind name the graphs in the log.

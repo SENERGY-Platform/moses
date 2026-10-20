@@ -285,7 +285,7 @@ func (this *fakePermissions) GetResource(ctx context.Context, token string, topi
 	if !known {
 		//a device permissions-v2 does not know about yet, which is what a device
 		//created a moment ago looks like
-		return permModel.Resource{}, errors.New("unknown resource " + id), http.StatusNotFound
+		return permModel.Resource{}, fmt.Errorf("%w: %s", ErrUnknownResource, id), http.StatusNotFound
 	}
 	return permModel.Resource{Id: id, TopicId: topicId, ResourcePermissions: copyRights(rights)}, nil, http.StatusOK
 }
