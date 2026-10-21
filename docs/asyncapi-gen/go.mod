@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/SENERGY-Platform/moses v0.0.0-00010101000000-000000000000
-	github.com/SENERGY-Platform/platform-connector-lib v0.0.0-20261016111927-8b8b183a7008
+	github.com/SENERGY-Platform/platform-connector-lib v0.0.0-20261021074538-f4621c89f07c
 	github.com/swaggest/go-asyncapi v0.8.0
 )
 

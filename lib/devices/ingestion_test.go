@@ -60,7 +60,7 @@ import (
 // psql/publisher.go the mirrors below were taken from. See
 // TestTheMirroredIngestionInternalsAreStillTheOnesInTheLib.
 const (
-	libraryVersionThePinsWereReadFrom = "v0.0.0-20261016111927-8b8b183a7008"
+	libraryVersionThePinsWereReadFrom = "v0.0.0-20261021074538-f4621c89f07c"
 	publisherSourceSha256             = "19767eaa06c87b49c385aaaf55dcc9a215b80f067d3300ee389733ab54adc12d"
 )
 

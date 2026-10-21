@@ -275,6 +275,9 @@
                     "completion_strategy": {
                         "type": "string"
                     },
+                    "deployment_id": {
+                        "type": "string"
+                    },
                     "process_definition_id": {
                         "type": "string"
                     },
