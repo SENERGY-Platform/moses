@@ -55,7 +55,7 @@ so nothing disappears from the structure.
 ## Why every edge has the weight 100
 
 Weights apportion a flow: one meter supplying two areas is 70/30. A location
-topology has no such split — every node has exactly one parent and passes on
+topology has no such split — every node has one parent and passes on
 everything it has. The unweighted case is spelled `100`, not `0`, because the
 repository validates the graph before storing it and rejects any edge weight
 outside `1..100`, as well as any node whose outgoing weights sum to something
@@ -64,8 +64,8 @@ other than 0 or 100. "No edge carries anything" is not a graph it accepts;
 
 Sub-metering (`docs/submetering.md`) does not change this: it moves *where* an
 asset's edge attaches - to a device instead of a zone - not what share of the
-flow it carries. Every node still has exactly one parent and still passes on
-everything it has to that one parent; the weight stays 100 either way.
+flow it carries. The one exception is `feeds_into`: a device with it has a
+second parent and both edges carry 50, so the outgoing weights still sum to 100.
 
 ## The mirror is not a document
 

@@ -235,6 +235,7 @@ func TestEveryBuiltGraphIsAcceptedByTheRepositoryModel(t *testing.T) {
 		"zone id root": environmentWithAZoneCalledRoot(),
 		"submetered":   environmentWithSubmetering(),
 		"device cycle": environmentWithADeviceCycle(),
+		"feeds into":   environmentWithAGeneratorFeedingTheMainMeter(),
 	} {
 		graph := Build(env)
 		if err := graph.Valid(); err != nil {
@@ -593,5 +594,131 @@ func TestAZoneWhoseIdIsTakenPassesItsContentToItsParent(t *testing.T) {
 	}
 	if sub.ToNodeId != RootNodeId {
 		t.Errorf("expected the sub zone to attach to the parent of the colliding zone, got %q", sub.ToNodeId)
+	}
+}
+
+// A generator behind a gas meter: its output passes the site's main electricity
+// meter, which books it.
+func environmentWithAGeneratorFeedingTheMainMeter() domain.Environment {
+	return domain.Environment{
+		Id: "env-chp", Name: "Blockheizkraftwerk", Owner: "user-a", Type: domain.IndustrialSite,
+		Zones: []domain.Zone{{
+			Id: "zone-halle", Name: "Halle 1", Type: domain.ZoneHall,
+			Assets: []domain.Asset{{
+				Id: "asset-gas", Name: "Gaszähler", Kind: domain.AssetMeter,
+				ExternalRef: "urn:device:gas",
+			}, {
+				Id: "asset-gen", Name: "Erzeugung", Kind: domain.AssetMeter,
+				ExternalRef: "urn:device:gen", SubmeteredBy: "asset-gas", FeedsInto: "asset-main",
+			}, {
+				Id: "asset-main", Name: "Hauptzähler", Kind: domain.AssetMeter,
+				ExternalRef: "urn:device:main",
+			}},
+		}},
+	}
+}
+
+func edgesOut(graph models.Graph, from string) []models.Edge {
+	var edges []models.Edge
+	for _, edge := range graph.Edges {
+		if edge.FromNodeId == from {
+			edges = append(edges, edge)
+		}
+	}
+	return edges
+}
+
+// The supply side comes first: consumers take the first parent of a node as
+// the meter that supplies it.
+func TestAFeedsIntoEdgeFollowsTheSubmeterEdgeAndSplitsTheWeight(t *testing.T) {
+	graph := Build(environmentWithAGeneratorFeedingTheMainMeter())
+
+	edges := edgesOut(graph, "urn:device:gen")
+	if len(edges) != 2 {
+		t.Fatalf("expected two edges out of the generator, got %+v", edges)
+	}
+	if edges[0].ToNodeId != "urn:device:gas" || edges[1].ToNodeId != "urn:device:main" {
+		t.Errorf("expected the submetered_by edge first, then feeds_into, got %q then %q", edges[0].ToNodeId, edges[1].ToNodeId)
+	}
+	if edges[0].Weight != 50 || edges[1].Weight != 50 {
+		t.Errorf("expected 50/50, got %d/%d", edges[0].Weight, edges[1].Weight)
+	}
+	if edges[1].Id != "urn:device:gen->urn:device:main" {
+		t.Errorf("expected the edge id derived child->parent, got %q", edges[1].Id)
+	}
+	if err := graph.Valid(); err != nil {
+		t.Errorf("the repository would refuse this graph: %v", err)
+	}
+	if graph.ContainsLoop() {
+		t.Error("the extra edge must not make a loop")
+	}
+	for _, other := range []string{"urn:device:gas", "urn:device:main"} {
+		if edge, _ := edgeFrom(graph, other); edge.Weight != 100 {
+			t.Errorf("a device without the extra edge keeps the whole flow, %q has %d", other, edge.Weight)
+		}
+	}
+}
+
+func TestAFeedsIntoWithoutSubmeteringKeepsTheZoneEdgeFirst(t *testing.T) {
+	env := environmentWithAGeneratorFeedingTheMainMeter()
+	env.Zones[0].Assets[1].SubmeteredBy = ""
+
+	edges := edgesOut(Build(env), "urn:device:gen")
+	if len(edges) != 2 {
+		t.Fatalf("expected two edges, got %+v", edges)
+	}
+	if edges[0].ToNodeId != "zone-halle" || edges[1].ToNodeId != "urn:device:main" {
+		t.Errorf("expected the zone edge first, then feeds_into, got %q then %q", edges[0].ToNodeId, edges[1].ToNodeId)
+	}
+	if edges[0].Weight != 50 || edges[1].Weight != 50 {
+		t.Errorf("expected 50/50, got %d/%d", edges[0].Weight, edges[1].Weight)
+	}
+}
+
+// The main meter hangs under the generator, so an edge from the generator to
+// the main meter would be a loop; only that edge is given up.
+func TestAFeedsIntoEdgeThatWouldCloseALoopIsDropped(t *testing.T) {
+	env := environmentWithAGeneratorFeedingTheMainMeter()
+	env.Zones[0].Assets[2].SubmeteredBy = "asset-gen"
+
+	graph := Build(env)
+
+	if graph.ContainsLoop() {
+		t.Fatalf("the mirror must not contain a loop, got %+v", graph.Edges)
+	}
+	edges := edgesOut(graph, "urn:device:gen")
+	if len(edges) != 1 || edges[0].ToNodeId != "urn:device:gas" || edges[0].Weight != 100 {
+		t.Errorf("expected the first edge alone at 100, got %+v", edges)
+	}
+}
+
+func TestAFeedsIntoTargetWithoutADeviceOrOnTheSameDeviceAddsNoEdge(t *testing.T) {
+	deviceless := environmentWithAGeneratorFeedingTheMainMeter()
+	deviceless.Zones[0].Assets[2].ExternalRef = ""
+
+	shared := environmentWithAGeneratorFeedingTheMainMeter()
+	shared.Zones[0].Assets[2].ExternalRef = "urn:device:gen"
+
+	for name, env := range map[string]domain.Environment{"no device": deviceless, "same device": shared} {
+		edges := edgesOut(Build(env), "urn:device:gen")
+		if len(edges) != 1 || edges[0].Weight != 100 {
+			t.Errorf("%s: expected one edge at 100, got %+v", name, edges)
+		}
+	}
+}
+
+func TestACarrierPairNamingDifferentFeedsIntoTargetsAddsNoEdge(t *testing.T) {
+	env := environmentWithAGeneratorFeedingTheMainMeter()
+	env.Zones[0].Assets = append(env.Zones[0].Assets, domain.Asset{
+		Id: "asset-other", Name: "Anderer", Kind: domain.AssetMeter,
+		ExternalRef: "urn:device:other",
+	}, domain.Asset{
+		Id: "asset-gen-2", Name: "Erzeugung 2", Kind: domain.AssetMeter,
+		ExternalRef: "urn:device:gen", FeedsInto: "asset-other",
+	})
+
+	edges := edgesOut(Build(env), "urn:device:gen")
+	if len(edges) != 1 || edges[0].Weight != 100 {
+		t.Errorf("expected one edge at 100, got %+v", edges)
 	}
 }

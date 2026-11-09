@@ -105,6 +105,7 @@ type validator struct {
 	// report a problem comes from the reference itself.
 	assetSites   map[string]int
 	submeterRefs []submeterRef
+	feedsRefs    []submeterRef
 
 	// deviceRefs holds every external_ref, which a meter group id must not
 	// repeat: both are node ids of the meter graph.
@@ -250,6 +251,17 @@ func Validate(env Environment) error {
 			parents[ref.assetId] = ref
 		}
 	}
+	// feeds_into is only mirrored, never walked, so it needs no cycle pass
+	for _, ref := range v.feedsRefs {
+		targetSite, exists := v.assetSites[ref.target]
+		if !exists {
+			v.fail(ref.path, "the referenced asset %q does not exist in this environment", ref.target)
+			continue
+		}
+		if targetSite != ref.site {
+			v.fail(ref.path, "feeds_into must stay within the same top level zone: a meter tree is modelled per site, so a reference across that boundary is almost always an asset filed under the wrong zone")
+		}
+	}
 	v.checkSubmeterCycles(parents)
 	v.checkMeterGraph(env, parents)
 
@@ -335,6 +347,22 @@ func (this *validator) checkAsset(path string, asset Asset, site int) {
 				path:    path + ".submetered_by",
 				assetId: asset.Id,
 				target:  asset.SubmeteredBy,
+				site:    site,
+			})
+		}
+	}
+
+	if asset.FeedsInto != "" {
+		switch {
+		case asset.Id != "" && asset.FeedsInto == asset.Id:
+			this.fail(path+".feeds_into", "an asset cannot feed into itself")
+		case asset.FeedsInto == asset.SubmeteredBy:
+			this.fail(path+".feeds_into", "feeds_into must differ from submetered_by: the second edge would repeat the first")
+		default:
+			this.feedsRefs = append(this.feedsRefs, submeterRef{
+				path:    path + ".feeds_into",
+				assetId: asset.Id,
+				target:  asset.FeedsInto,
 				site:    site,
 			})
 		}

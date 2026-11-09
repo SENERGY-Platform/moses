@@ -52,7 +52,7 @@ const (
 	//
 	// Weights exist for the apportioning case - one meter supplying two areas,
 	// split 70/30 - which a pure location topology does not have: every node
-	// here has exactly one parent and therefore passes on everything it has.
+	// here has one parent (two with feeds_into, 50 each) and passes on everything it has.
 	// 100 rather than 0 because the repository rejects a graph whose edge weight
 	// is outside 1..100, and requires the outgoing weights of a node to sum to
 	// either 0 (no outgoing edge at all) or 100. An unweighted topology is
@@ -154,6 +154,9 @@ type deviceInfo struct {
 	// already filtered to targets that have a device of their own and are not
 	// this very device.
 	wants []string
+	// feeds holds the resolved device of every feeds_into target, filtered
+	// like wants.
+	feeds []string
 }
 
 // deviceEdges accumulates the devices of the walk, in the order their nodes
@@ -183,6 +186,14 @@ func (this *deviceEdges) want(ref string, target string) {
 	}
 }
 
+// feed records that one carrier of this device feeds into the meter target;
+// dropped like a want when the device has no node.
+func (this *deviceEdges) feed(ref string, target string) {
+	if info, known := this.byRef[ref]; known {
+		info.feeds = append(info.feeds, target)
+	}
+}
+
 // candidate is the device node this one hangs under instead of its zone, or ""
 // when it hangs under its zone after all: either because no carrier asked for
 // anything, or because two carriers of the same device asked for different
@@ -193,8 +204,19 @@ func (this *deviceEdges) want(ref string, target string) {
 // the only one that stays right when the two assets are later split onto
 // devices of their own.
 func (this *deviceInfo) candidate() string {
+	return agreed(this.wants)
+}
+
+// feedTarget is the device the extra feeds_into edge points at, or "" when no
+// carrier asked for one or two carriers disagree, for the same reason as in
+// candidate.
+func (this *deviceInfo) feedTarget() string {
+	return agreed(this.feeds)
+}
+
+func agreed(targets []string) string {
 	target := ""
-	for _, want := range this.wants {
+	for _, want := range targets {
 		if target == "" {
 			target = want
 			continue
@@ -226,6 +248,11 @@ func (this *deviceInfo) candidate() string {
 //   - the edge would close a cycle of device edges (see below).
 //
 // The first three are filtered while collecting, in addZone.
+//
+// A device whose asset has feeds_into gets a second edge to the device of that
+// meter, unless it equals the first parent or would close a loop, in which
+// case just the extra edge is dropped. The two edges then carry 50 each, since
+// the repository requires a node's outgoing weights to sum to 0 or 100.
 func addDeviceEdges(graph *models.Graph, devices *deviceEdges) {
 	parents := map[string]string{}
 	for _, ref := range devices.order {
@@ -255,13 +282,56 @@ func addDeviceEdges(graph *models.Graph, devices *deviceEdges) {
 		}
 	}
 
+	// every device's first edge goes in before any extra one: consumers take the
+	// first parent of a node as its supply side, so the order is load-bearing
+	up := map[string][]string{}
+	for _, edge := range graph.Edges {
+		up[edge.FromNodeId] = append(up[edge.FromNodeId], edge.ToNodeId)
+	}
 	for _, ref := range devices.order {
 		parent := parents[ref]
 		if parent == "" {
 			parent = devices.byRef[ref].zone
 		}
+		parents[ref] = parent
 		graph.Edges = append(graph.Edges, edgeTo(ref, parent))
+		up[ref] = append(up[ref], parent)
 	}
+	for _, ref := range devices.order {
+		target := devices.byRef[ref].feedTarget()
+		if target == "" || target == parents[ref] || reaches(target, ref, up) {
+			continue
+		}
+		for i := range graph.Edges {
+			if graph.Edges[i].FromNodeId == ref {
+				graph.Edges[i].Weight = EdgeWeight / 2
+			}
+		}
+		extra := edgeTo(ref, target)
+		extra.Weight = EdgeWeight / 2
+		graph.Edges = append(graph.Edges, extra)
+		up[ref] = append(up[ref], target)
+	}
+}
+
+// reaches reports whether to can be reached from from by following edges
+// towards the parents.
+func reaches(from string, to string, up map[string][]string) bool {
+	visited := map[string]bool{}
+	stack := []string{from}
+	for len(stack) > 0 {
+		at := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if at == to {
+			return true
+		}
+		if visited[at] {
+			continue
+		}
+		visited[at] = true
+		stack = append(stack, up[at]...)
+	}
+	return false
 }
 
 // leadsBackTo reports whether following the candidate parents from start
@@ -325,11 +395,11 @@ func addZone(graph *models.Graph, taken map[string]bool, zone domain.Zone, paren
 		// device contributes no node, but its submetered_by is a statement
 		// about that device all the same and would otherwise be lost to the
 		// order the assets happen to appear in.
-		if asset.SubmeteredBy == "" {
-			continue
-		}
-		if target := refs[asset.SubmeteredBy]; target != "" && target != asset.ExternalRef {
+		if target := refs[asset.SubmeteredBy]; asset.SubmeteredBy != "" && target != "" && target != asset.ExternalRef {
 			devices.want(asset.ExternalRef, target)
+		}
+		if target := refs[asset.FeedsInto]; asset.FeedsInto != "" && target != "" && target != asset.ExternalRef {
+			devices.feed(asset.ExternalRef, target)
 		}
 	}
 	for _, sub := range zone.Zones {
@@ -341,7 +411,7 @@ func addZone(graph *models.Graph, taken map[string]bool, zone domain.Zone, paren
 // ends rather than generated, so that a graph built twice from one document
 // carries the same edge ids - an edge id that changed on every save would make
 // every mirror look like a change. It is unique because a node has at most one
-// parent, so it appears as the source of at most one edge.
+// edge to any given parent, and a feeds_into edge never repeats the first one.
 func edgeTo(child string, parent string) models.Edge {
 	return models.Edge{
 		Id:         child + "->" + parent,

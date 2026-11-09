@@ -348,6 +348,25 @@ func TestNewGenerationIndexesAggregateInputs(t *testing.T) {
 	}
 }
 
+// feeds_into is read by the graph mirror only: an asset naming the aggregate's
+// asset there is not one of its inputs.
+func TestAnAggregateDoesNotSumAFeedsIntoSource(t *testing.T) {
+	const envId = "env-agg-feeds"
+	env := treeEnvironment(envId,
+		treeAsset{id: "a-total", channels: []domain.Channel{
+			aggregateChannel("ch-total", serviceOf(envId, "total"), 1, energyCharacteristic)}},
+		treeAsset{id: "a-gen", channels: []domain.Channel{
+			measuringChannel("ch-gen", serviceOf(envId, "gen"), energyCharacteristic, 7)}},
+	)
+	env.Zones[0].Assets[1].FeedsInto = "a-total"
+
+	gen := newGeneration(env, nil)
+
+	if got := gen.aggregateInputs["ch-total"]; len(got) != 0 {
+		t.Errorf("expected no inputs for the aggregate, got %v", got)
+	}
+}
+
 // An asset naming itself is refused by validation; a hand written document
 // carrying one must not make the aggregate sum its own last value, which would
 // double the reading on every tick.

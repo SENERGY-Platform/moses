@@ -122,3 +122,55 @@ func TestValidateAllowsASubmeteredAssetWithoutADevice(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestValidateAcceptsAFeedsIntoTargetInTheSameSite(t *testing.T) {
+	env := validEnvironment()
+	env.Zones[0].Assets[0].FeedsInto = "asset-main"
+	env.Zones[0].Assets = append(env.Zones[0].Assets, Asset{
+		Id: "asset-main", Name: "Hauptzähler", Kind: AssetMeter,
+		ExternalTypeId: "urn:infai:ses:device-type:abc",
+	})
+	if err := Validate(env); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateRejectsAnAssetFeedingIntoItself(t *testing.T) {
+	env := validEnvironment()
+	env.Zones[0].Assets[0].FeedsInto = env.Zones[0].Assets[0].Id
+	assertHasPath(t, Validate(env), "zones[0].assets[0].feeds_into")
+}
+
+func TestValidateRejectsAFeedsIntoToAMissingAsset(t *testing.T) {
+	env := validEnvironment()
+	env.Zones[0].Assets[0].FeedsInto = "does-not-exist"
+	err := Validate(env)
+	assertHasPath(t, err, "zones[0].assets[0].feeds_into")
+	if !strings.Contains(err.Error(), "does-not-exist") {
+		t.Fatalf("expected the message to name the missing id, got %v", err)
+	}
+}
+
+func TestValidateRejectsAFeedsIntoAcrossSites(t *testing.T) {
+	env := validEnvironment()
+	env.Zones = append(env.Zones, Zone{
+		Id: "zone-other", Name: "Halle 2", Type: ZoneHall,
+		Assets: []Asset{{
+			Id: "asset-other", Name: "Zähler 2", Kind: AssetMeter,
+			ExternalTypeId: "urn:infai:ses:device-type:abc",
+		}},
+	})
+	env.Zones[0].Assets[0].FeedsInto = "asset-other"
+	assertHasPath(t, Validate(env), "zones[0].assets[0].feeds_into")
+}
+
+func TestValidateRejectsAFeedsIntoEqualToSubmeteredBy(t *testing.T) {
+	env := validEnvironment()
+	env.Zones[0].Assets = append(env.Zones[0].Assets, Asset{
+		Id: "asset-main", Name: "Hauptzähler", Kind: AssetMeter,
+		ExternalTypeId: "urn:infai:ses:device-type:abc",
+	})
+	env.Zones[0].Assets[0].SubmeteredBy = "asset-main"
+	env.Zones[0].Assets[0].FeedsInto = "asset-main"
+	assertHasPath(t, Validate(env), "zones[0].assets[0].feeds_into")
+}

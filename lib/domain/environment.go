@@ -205,6 +205,12 @@ type Asset struct {
 	// value, so a bad value only misrepresents this simulation's own meter tree.
 	SubmeteredBy string `json:"submetered_by,omitempty" bson:"submetered_by,omitempty"`
 
+	// FeedsInto names, by asset id, the meter whose reading also contains what
+	// this asset feeds in, typically the grid connection a generator sits
+	// behind. Only the graph mirror reads it; the aggregates never do, so
+	// nothing is summed twice.
+	FeedsInto string `json:"feeds_into,omitempty" bson:"feeds_into,omitempty"`
+
 	// MeterParents names one or more weighted parents of this asset's quantity.
 	// Empty means submetered_by with the whole flow; the aggregate source never
 	// reads it.

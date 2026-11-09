@@ -27,6 +27,12 @@ Empty is the ordinary case and the default for every document stored before
 this field existed: the asset attaches to its zone, both in validation's site
 check below and in the graph mirror.
 
+`Asset.FeedsInto` names, by asset id, the meter whose reading also contains
+what this asset feeds in, typically the grid connection a generator sits
+behind. Only the graph mirror reads it; the aggregates never do, so nothing is
+summed twice. It is refused when it names the asset itself, a missing asset, an
+asset under another top level zone, or the same asset as `submetered_by`.
+
 ## Validation rules
 
 `lib/domain/validate.go` checks three things about a `submetered_by`
@@ -137,6 +143,15 @@ zone edge:
   rejects any graph containing a loop, exactly one edge per cycle is given up
   - the one leaving the device that appears first in the document, so the
   same document always breaks the same edge.
+
+### `feeds_into`
+
+A device whose asset has `feeds_into` gets a second edge to the device of that
+meter, in the same graph. The edge to the `submetered_by` device (or the zone)
+stays first, because consumers read the first parent as the supply side; the
+two edges carry 50 each. No extra edge is added when the target has no device,
+shares this device, is the first parent, two assets on the device name
+different targets, or the edge would close a loop.
 
 ## The aggregate source
 
