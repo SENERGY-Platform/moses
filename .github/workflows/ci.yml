@@ -19,11 +19,18 @@ on:
       - dev
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   gates:
     name: Gates
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # gitleaks lists the commits of a pull request through the API
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -112,11 +119,11 @@ jobs:
         timeout-minutes: 45
         run: go test -v -timeout 40m ./...
 
-  image:
-    name: PROD Docker Image
+  version:
+    name: PROD version
+    needs: [gates, test]
     # the gate this workflow exists for: no image leaves without the tests and
     # the gates behind it
-    needs: [gates, test]
     # prod.yml also ran on a push of a version tag. That trigger is gone: this
     # job creates the tag itself, so keeping it would run the whole suite a
     # second time on the same tree for every release. A build from a tag is
@@ -129,42 +136,60 @@ jobs:
       (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.tag_version.outputs.new_tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Login to DockerHub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.CR_PAT }}
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
       - name: Bump version and push tag
         id: tag_version
         uses: mathieudutour/github-tag-action@v6.1
         with:
           release_branches: ".*"
           github_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: |
-            smartenergyplatform/moses:prod
-            ghcr.io/senergy-platform/moses:prod
-            smartenergyplatform/moses:${{ steps.tag_version.outputs.new_tag }}
-            ghcr.io/senergy-platform/moses:${{ steps.tag_version.outputs.new_tag }}
-            smartenergyplatform/moses:latest
-            ghcr.io/senergy-platform/moses:latest
 
+  # Builds each platform on a native runner of its own, arm64 without QEMU, and merges
+  # both into one manifest under every tag below.
+  image:
+    name: PROD Docker Image
+    needs: [version]
+    if: >-
+      (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    uses: docker/github-builder/.github/workflows/build.yml@v1
+    permissions:
+      contents: read
+      id-token: write # signs the provenance attestation
+    with:
+      output: image
+      push: true
+      platforms: linux/amd64,linux/arm64
+      # The build context is the Git repository at the pushed commit, which leaves out
+      # .git unless asked to keep it. The Dockerfile reads the commit from it.
+      build-args: |
+        BUILDKIT_CONTEXT_KEEP_GIT_DIR=1
+      meta-images: |
+        smartenergyplatform/moses
+        ghcr.io/senergy-platform/moses
+      meta-tags: |
+        type=raw,value=prod
+        type=raw,value=${{ needs.version.outputs.tag }}
+        type=raw,value=latest
+      meta-flavor: |
+        latest=false
+    secrets:
+      registry-auths: |
+        - registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        - registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.CR_PAT }}
+
+  # Builds each platform on a native runner of its own, arm64 without QEMU, and merges
+  # both into one manifest under the tag below.
   dev-image:
     name: DEV Docker Image
     # dev.yml built this image on every push to dev without any gate in front of
@@ -174,29 +199,30 @@ jobs:
     if: >-
       github.ref == 'refs/heads/dev' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Login to DockerHub
-        uses: docker/login-action@v3
-        with:
+    uses: docker/github-builder/.github/workflows/build.yml@v1
+    permissions:
+      contents: read
+      id-token: write # signs the provenance attestation
+    with:
+      output: image
+      push: true
+      platforms: linux/amd64,linux/arm64
+      # The build context is the Git repository at the pushed commit, which leaves out
+      # .git unless asked to keep it. The Dockerfile reads the commit from it.
+      build-args: |
+        BUILDKIT_CONTEXT_KEEP_GIT_DIR=1
+      meta-images: |
+        smartenergyplatform/moses
+        ghcr.io/senergy-platform/moses
+      meta-tags: |
+        type=raw,value=dev
+      meta-flavor: |
+        latest=false
+    secrets:
+      registry-auths: |
+        - registry: docker.io
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
+        - registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.CR_PAT }}
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: |
-            smartenergyplatform/moses:dev
-            ghcr.io/senergy-platform/moses:dev
