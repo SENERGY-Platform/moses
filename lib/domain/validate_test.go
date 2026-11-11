@@ -240,3 +240,15 @@ func TestValidateRejectsStateKeysMongoCannotStore(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateRejectsAZoneAttributeNamedLikeTheName(t *testing.T) {
+	env := validEnvironment()
+	env.Zones[0].Attributes = map[string]string{"name": "x", "site": "true"}
+	err := Validate(env)
+	assertHasPath(t, err, "zones[0].attributes.name")
+	for _, path := range problemPaths(t, err) {
+		if path == "zones[0].attributes.site" {
+			t.Errorf("a key other than name is accepted, got a problem at %s", path)
+		}
+	}
+}

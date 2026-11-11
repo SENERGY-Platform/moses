@@ -722,3 +722,29 @@ func TestACarrierPairNamingDifferentFeedsIntoTargetsAddsNoEdge(t *testing.T) {
 		t.Errorf("expected one edge at 100, got %+v", edges)
 	}
 }
+
+// A zone's own attributes reach its node beside the name, in key order, and an
+// attribute named like the name does not replace it.
+func TestAZonesAttributesAreCopiedOntoItsNode(t *testing.T) {
+	env := nestedEnvironment()
+	env.Zones[0].Attributes = map[string]string{"site": "true", "a/first": "1", NameAttribute: "Andere"}
+
+	graph := Build(env)
+
+	node, ok := nodeById(graph, "zone-halle")
+	if !ok {
+		t.Fatal("no node for the zone")
+	}
+	want := []models.Attribute{
+		{Key: NameAttribute, Value: "Halle 1"},
+		{Key: "a/first", Value: "1"},
+		{Key: "site", Value: "true"},
+	}
+	if !reflect.DeepEqual(node.Attributes, want) {
+		t.Errorf("expected %+v, got %+v", want, node.Attributes)
+	}
+	sub, _ := nodeById(graph, "zone-nebenraum")
+	if len(sub.Attributes) != 1 {
+		t.Errorf("a zone without attributes carries its name only, got %+v", sub.Attributes)
+	}
+}

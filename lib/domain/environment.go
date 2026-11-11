@@ -169,6 +169,11 @@ type Zone struct {
 	// InitialStates seeds the runtime state at start. Live values are not here.
 	InitialStates map[string]interface{} `json:"initial_states" bson:"initial_states"`
 
+	// Attributes are copied onto the zone's node in the mirrored graph, for a
+	// consumer of the graph that reads a mark the simulation does not. The node's
+	// name is not among them: it is always the zone's name.
+	Attributes map[string]string `json:"attributes,omitempty" bson:"attributes,omitempty"`
+
 	Zones  []Zone  `json:"zones" bson:"zones"`
 	Assets []Asset `json:"assets" bson:"assets"`
 }

@@ -300,6 +300,11 @@ func (this *validator) checkZone(path string, zone Zone, depth int, site int) {
 			this.fail(path+".time_constants."+key, "must not be negative")
 		}
 	}
+	for key := range zone.Attributes {
+		if key == "" || key == "name" {
+			this.fail(path+".attributes."+key, "must be a key other than name")
+		}
+	}
 
 	for i := range zone.Zones {
 		this.checkZone(fmt.Sprintf("%s.zones[%d]", path, i), zone.Zones[i], depth+1, site)

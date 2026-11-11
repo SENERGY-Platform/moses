@@ -943,6 +943,14 @@ definitions:
         items:
           $ref: '#/definitions/domain.Asset'
         type: array
+      attributes:
+        additionalProperties:
+          type: string
+        description: |-
+          Attributes are copied onto the zone's node in the mirrored graph, for a
+          consumer of the graph that reads a mark the simulation does not. The node's
+          name is not among them: it is always the zone's name.
+        type: object
       id:
         type: string
       initial_states:

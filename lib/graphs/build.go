@@ -24,6 +24,8 @@
 package graphs
 
 import (
+	"sort"
+
 	"github.com/SENERGY-Platform/models/go/models"
 	"github.com/SENERGY-Platform/moses/lib/domain"
 )
@@ -370,7 +372,7 @@ func addZone(graph *models.Graph, taken map[string]bool, zone domain.Zone, paren
 	if zone.Id != "" && !taken[zone.Id] {
 		nodeId = zone.Id
 		taken[nodeId] = true
-		graph.Nodes = append(graph.Nodes, models.Node{Id: nodeId, Attributes: named(zone.Name)})
+		graph.Nodes = append(graph.Nodes, models.Node{Id: nodeId, Attributes: zoneAttributes(zone)})
 		graph.Edges = append(graph.Edges, edgeTo(nodeId, parent))
 	}
 	for _, asset := range zone.Assets {
@@ -419,6 +421,23 @@ func edgeTo(child string, parent string) models.Edge {
 		ToNodeId:   parent,
 		Weight:     EdgeWeight,
 	}
+}
+
+// zoneAttributes are the zone's name and its own attributes, in key order so an
+// unchanged document mirrors to an unchanged graph.
+func zoneAttributes(zone domain.Zone) []models.Attribute {
+	attributes := named(zone.Name)
+	keys := make([]string, 0, len(zone.Attributes))
+	for key := range zone.Attributes {
+		if key != NameAttribute {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		attributes = append(attributes, models.Attribute{Key: key, Value: zone.Attributes[key]})
+	}
+	return attributes
 }
 
 func named(name string) []models.Attribute {

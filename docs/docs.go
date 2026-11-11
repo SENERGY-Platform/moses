@@ -2422,6 +2422,13 @@ const docTemplate = `{
                         "$ref": "#/definitions/domain.Asset"
                     }
                 },
+                "attributes": {
+                    "description": "Attributes are copied onto the zone's node in the mirrored graph, for a\nconsumer of the graph that reads a mark the simulation does not. The node's\nname is not among them: it is always the zone's name.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
                 "id": {
                     "type": "string"
                 },
