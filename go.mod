@@ -2,7 +2,7 @@ module github.com/SENERGY-Platform/moses
 
 go 1.26
 
-toolchain go1.26.10
+toolchain go1.26.11
 
 require (
 	github.com/SENERGY-Platform/platform-connector-lib v0.0.0-20261021074538-f4621c89f07c
